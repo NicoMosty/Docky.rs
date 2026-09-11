@@ -1,16 +1,39 @@
 use super::*;
 
 impl CompositorHandler for App {
-    fn scale_factor_changed(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, new_factor: i32) {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        new_factor: i32,
+    ) {
         self.output_scale = new_factor;
         self.request_redraw(qh);
         self.request_menu_redraw(qh);
     }
 
-    fn transform_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: wl_output::Transform) {}
+    fn transform_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: wl_output::Transform,
+    ) {
+    }
 
-    fn frame(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, surface: &wl_surface::WlSurface, _time: u32) {
-        if self.screenshot.as_ref().is_some_and(|s| s.is_selector_surface(surface)) {
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+        if self
+            .screenshot
+            .as_ref()
+            .is_some_and(|s| s.is_selector_surface(surface))
+        {
             self.draw_region_frame();
             return;
         }
@@ -38,19 +61,41 @@ impl CompositorHandler for App {
             }
             return;
         }
-        let is_menu = self.menu.as_ref().map(|m| surface == m.layer.wl_surface()).unwrap_or(false);
+        let is_menu = self
+            .menu
+            .as_ref()
+            .map(|m| surface == m.layer.wl_surface())
+            .unwrap_or(false);
         if is_menu {
             self.tick_menu_frame(qh);
             return;
         }
-        let is_popup = self.popup_mode.as_ref().map(|p| surface == p.layer.wl_surface()).unwrap_or(false);
+        let is_popup = self
+            .popup_mode
+            .as_ref()
+            .map(|p| surface == p.layer.wl_surface())
+            .unwrap_or(false);
         if is_popup {
             self.tick_popup_frame(qh);
         }
     }
 
-    fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
-    fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
+    fn surface_enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+    fn surface_leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
 }
 
 impl OutputHandler for App {
@@ -66,15 +111,36 @@ impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         if layer.wl_surface() == self.layer.wl_surface() {
             self.exit = true;
-        } else if self.menu.as_ref().map(|m| m.layer.wl_surface() == layer.wl_surface()).unwrap_or(false) {
+        } else if self
+            .menu
+            .as_ref()
+            .map(|m| m.layer.wl_surface() == layer.wl_surface())
+            .unwrap_or(false)
+        {
             self.menu = None;
-        } else if self.popup_mode.as_ref().map(|p| p.layer.wl_surface() == layer.wl_surface()).unwrap_or(false) {
+        } else if self
+            .popup_mode
+            .as_ref()
+            .map(|p| p.layer.wl_surface() == layer.wl_surface())
+            .unwrap_or(false)
+        {
             self.popup_mode = None;
         }
     }
 
-    fn configure(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, layer: &LayerSurface, configure: LayerSurfaceConfigure, _serial: u32) {
-        if self.screenshot.as_ref().is_some_and(|s| s.is_selector_layer(layer)) {
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _serial: u32,
+    ) {
+        if self
+            .screenshot
+            .as_ref()
+            .is_some_and(|s| s.is_selector_layer(layer))
+        {
             let (w, h) = configure.new_size;
             self.configure_region(w, h);
             return;
@@ -85,14 +151,27 @@ impl LayerShellHandler for App {
             }
             self.draw(qh);
         } else if layer.wl_surface() == self.reserve_layer.wl_surface() {
-            let (buffer, canvas) = self.pool.create_buffer(1, 1, 4, wl_shm::Format::Argb8888).expect("failed to create reserve buffer");
+            let (buffer, canvas) = self
+                .pool
+                .create_buffer(1, 1, 4, wl_shm::Format::Argb8888)
+                .expect("failed to create reserve buffer");
             canvas.fill(0);
             let surface = self.reserve_layer.wl_surface();
-            buffer.attach_to(surface).expect("failed to attach reserve buffer");
+            buffer
+                .attach_to(surface)
+                .expect("failed to attach reserve buffer");
             surface.commit();
-        } else if self.menu.as_ref().is_some_and(|m| m.layer.wl_surface() == layer.wl_surface() && !m.closing) {
+        } else if self
+            .menu
+            .as_ref()
+            .is_some_and(|m| m.layer.wl_surface() == layer.wl_surface() && !m.closing)
+        {
             self.draw_menu(qh);
-        } else if self.popup_mode.as_ref().is_some_and(|p| p.layer.wl_surface() == layer.wl_surface() && !p.closing) {
+        } else if self
+            .popup_mode
+            .as_ref()
+            .is_some_and(|p| p.layer.wl_surface() == layer.wl_surface() && !p.closing)
+        {
             self.draw_popup_mode(qh);
         }
     }
@@ -105,25 +184,41 @@ impl SeatHandler for App {
 
     fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
 
-    fn new_capability(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat, capability: Capability) {
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
         if capability == Capability::Pointer && self.pointer.is_none() {
             self.pointer = Some(self.seat_state.get_pointer(qh, &seat).expect("get pointer"));
         }
         if capability == Capability::Keyboard && self.keyboard.is_none() {
-            self.keyboard = Some(self.seat_state.get_keyboard(qh, &seat, None).expect("get keyboard"));
+            self.keyboard = Some(
+                self.seat_state
+                    .get_keyboard(qh, &seat, None)
+                    .expect("get keyboard"),
+            );
         }
     }
 
-    fn remove_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat, capability: Capability) {
-        if capability == Capability::Pointer {
-            if let Some(pointer) = self.pointer.take() {
-                pointer.release();
-            }
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer
+            && let Some(pointer) = self.pointer.take()
+        {
+            pointer.release();
         }
-        if capability == Capability::Keyboard {
-            if let Some(keyboard) = self.keyboard.take() {
-                keyboard.release();
-            }
+        if capability == Capability::Keyboard
+            && let Some(keyboard) = self.keyboard.take()
+        {
+            keyboard.release();
         }
     }
 
@@ -131,14 +226,32 @@ impl SeatHandler for App {
 }
 
 impl PointerHandler for App {
-    fn pointer_frame(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, _pointer: &wl_pointer::WlPointer, events: &[PointerEvent]) {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
         for event in events {
-            if self.screenshot.as_ref().is_some_and(|s| s.is_selector_surface(&event.surface)) {
+            if self
+                .screenshot
+                .as_ref()
+                .is_some_and(|s| s.is_selector_surface(&event.surface))
+            {
                 self.handle_region_pointer_event(event, qh);
                 continue;
             }
-            let is_menu = self.menu.as_ref().map(|m| event.surface == *m.layer.wl_surface()).unwrap_or(false);
-            let is_popup = self.popup_mode.as_ref().map(|p| event.surface == *p.layer.wl_surface()).unwrap_or(false);
+            let is_menu = self
+                .menu
+                .as_ref()
+                .map(|m| event.surface == *m.layer.wl_surface())
+                .unwrap_or(false);
+            let is_popup = self
+                .popup_mode
+                .as_ref()
+                .map(|p| event.surface == *p.layer.wl_surface())
+                .unwrap_or(false);
             if is_menu {
                 self.handle_menu_pointer_event(event, qh);
             } else if is_popup {
@@ -163,17 +276,46 @@ impl App {
 }
 
 impl KeyboardHandler for App {
-    fn enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_keyboard::WlKeyboard, _: &wl_surface::WlSurface, _: u32, _: &[u32], _: &[Keysym]) {}
-    fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_keyboard::WlKeyboard, _: &wl_surface::WlSurface, _: u32) {}
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+    }
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+    }
 
-    fn press_key(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: &wl_keyboard::WlKeyboard, _: u32, event: KeyEvent) {
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
         if self.screenshot.as_ref().is_some_and(|s| s.selector.mapped) {
             if event.keysym == Keysym::Escape {
                 self.close_region(None, qh);
             }
             return;
         }
-        self.held_key = matches!(event.keysym, Keysym::Left | Keysym::Right | Keysym::Up | Keysym::Down).then_some((event.keysym, 0, 0.0));
+        self.held_key = matches!(
+            event.keysym,
+            Keysym::Left | Keysym::Right | Keysym::Up | Keysym::Down
+        )
+        .then_some((event.keysym, 0, 0.0));
         if self.clipboard_mode.is_some() {
             self.handle_clipboard_key(event, qh);
         } else if self.app_search_mode.is_some() {
@@ -187,12 +329,27 @@ impl KeyboardHandler for App {
         }
     }
 
-    fn release_key(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_keyboard::WlKeyboard, _: u32, event: KeyEvent) {
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
         if self.held_key.is_some_and(|(k, ..)| k == event.keysym) {
             self.held_key = None;
         }
     }
-    fn update_modifiers(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_keyboard::WlKeyboard, _: u32, modifiers: Modifiers, _: u32) {
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        modifiers: Modifiers,
+        _: u32,
+    ) {
         self.modifiers = modifiers;
     }
 }
@@ -211,7 +368,15 @@ impl ProvidesRegistryState for App {
 }
 
 impl Dispatch<wl_callback::WlCallback, ()> for App {
-    fn event(_: &mut Self, _: &wl_callback::WlCallback, _: wl_callback::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_callback::WlCallback,
+        _: wl_callback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 delegate_compositor!(App);

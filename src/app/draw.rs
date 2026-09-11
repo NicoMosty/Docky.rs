@@ -5,7 +5,12 @@ impl App {
         self.draw_ex(qh, false, false);
     }
 
-    pub(super) fn draw_ex(&mut self, qh: &QueueHandle<Self>, advance_marquee: bool, advance_ws: bool) {
+    pub(super) fn draw_ex(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        advance_marquee: bool,
+        advance_ws: bool,
+    ) {
         if self.notification_mode.is_some() {
             self.draw_notification_mode(qh);
         } else if self.osd_mode.is_some() {
@@ -39,7 +44,12 @@ impl App {
         }
     }
 
-    pub(super) fn draw_icons(&mut self, qh: &QueueHandle<Self>, advance_marquee: bool, advance_ws: bool) {
+    pub(super) fn draw_icons(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        advance_marquee: bool,
+        advance_ws: bool,
+    ) {
         let scale = self.output_scale.max(1) as f32;
         let (base_w, base_h) = self.dock.base_size();
         let width = (base_w as f32 * scale).round() as i32;
@@ -77,7 +87,11 @@ impl App {
         );
         drop(tray_icons);
         bgra_from_rgba(pixmap.data(), canvas);
-        let rate: u64 = if needs_marquee { render::MARQUEE_TICK_MS } else { 0 };
+        let rate: u64 = if needs_marquee {
+            render::MARQUEE_TICK_MS
+        } else {
+            0
+        };
         self.set_marquee_rate(rate);
 
         let surface = self.layer.wl_surface();
@@ -114,18 +128,30 @@ impl App {
             let s = &self.dock.config.settings;
             let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
             self.layer.set_anchor(anchor);
-            self.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+            self.layer
+                .set_margin(margin.0, margin.1, margin.2, margin.3);
             self.layer.set_exclusive_zone(-1);
             let (reserve_anchor, reserve_margin) = single_edge_anchor_margin(s.dock_edge, s.pos_y);
             self.reserve_layer.set_anchor(reserve_anchor);
-            self.reserve_layer.set_margin(reserve_margin.0, reserve_margin.1, reserve_margin.2, reserve_margin.3);
-            self.reserve_layer.set_exclusive_zone(self.dock.thickness() as i32 + s.pos_y);
+            self.reserve_layer.set_margin(
+                reserve_margin.0,
+                reserve_margin.1,
+                reserve_margin.2,
+                reserve_margin.3,
+            );
+            self.reserve_layer
+                .set_exclusive_zone(self.dock.thickness() as i32 + s.pos_y);
             self.reserve_layer.commit();
         }
         self.request_redraw(qh);
     }
     fn widget_placed(&self, kind: crate::config::WidgetKind) -> bool {
-        self.dock.config.settings.widgets.iter().any(|w| w.kind == kind)
+        self.dock
+            .config
+            .settings
+            .widgets
+            .iter()
+            .any(|w| w.kind == kind)
     }
 
     pub(crate) fn refresh_clock(&mut self, qh: &QueueHandle<Self>) {
@@ -160,7 +186,8 @@ impl App {
     }
 
     pub(crate) fn refresh_bluetooth(&mut self, qh: &QueueHandle<Self>) {
-        if !self.dock.icons.is_empty() || !self.widget_placed(crate::config::WidgetKind::Bluetooth) {
+        if !self.dock.icons.is_empty() || !self.widget_placed(crate::config::WidgetKind::Bluetooth)
+        {
             return;
         }
         self.widgets.refresh_bluetooth();
@@ -177,18 +204,35 @@ impl App {
     }
 
     pub(crate) fn refresh_cpu_ram(&mut self, qh: &QueueHandle<Self>) {
-        let active = self
-            .dock
-            .config
-            .settings
-            .widgets
-            .iter()
-            .any(|w| matches!(w.kind, crate::config::WidgetKind::Cpu | crate::config::WidgetKind::Ram));
+        let active = self.dock.config.settings.widgets.iter().any(|w| {
+            matches!(
+                w.kind,
+                crate::config::WidgetKind::Cpu | crate::config::WidgetKind::Ram
+            )
+        });
         if !active {
             return;
         }
         self.widgets.refresh_cpu_ram();
         self.request_redraw(qh);
+    }
+
+    pub(crate) fn refresh_sys(&mut self, qh: &QueueHandle<Self>) {
+        let active = self.dock.config.settings.widgets.iter().any(|w| {
+            matches!(
+                w.kind,
+                crate::config::WidgetKind::Volume
+                    | crate::config::WidgetKind::Network
+                    | crate::config::WidgetKind::KbdLayout
+            )
+        });
+        if !active {
+            return;
+        }
+        if self.widgets.refresh_sys() {
+            self.sync_widget_bar_len();
+            self.relayout_dock(qh);
+        }
     }
 
     pub(crate) fn sync_tray_layout(&mut self, qh: &QueueHandle<Self>) {
@@ -207,7 +251,13 @@ impl App {
         let is_vertical = self.dock.is_vertical();
         let cross_len = self.dock.cross_len();
         let widget_scale = self.dock.config.settings.widget_scale;
-        self.dock.widget_bar_content_len =
-            render::widget_bar_natural_len(&self.dock.config.settings, &self.widgets, tray_count, is_vertical, cross_len, widget_scale);
+        self.dock.widget_bar_content_len = render::widget_bar_natural_len(
+            &self.dock.config.settings,
+            &self.widgets,
+            tray_count,
+            is_vertical,
+            cross_len,
+            widget_scale,
+        );
     }
 }

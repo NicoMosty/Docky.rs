@@ -21,15 +21,25 @@ impl App {
         self.menu = None;
         let wallpapers = wallpaper::scan_wallpapers();
         let is_vertical = self.dock.is_vertical();
-        let dock_along = (if is_vertical { self.dock.base_size().1 } else { self.dock.base_size().0 }) as f32;
+        let dock_along = (if is_vertical {
+            self.dock.base_size().1
+        } else {
+            self.dock.base_size().0
+        }) as f32;
         let along = dock_along.max(WALLPAPER_PANEL_MIN_W);
         let cross = WALLPAPER_PANEL_H;
-        let (panel_w, panel_h) = if is_vertical { (cross, along) } else { (along, cross) };
-        self.layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+        let (panel_w, panel_h) = if is_vertical {
+            (cross, along)
+        } else {
+            (along, cross)
+        };
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         let s = &self.dock.config.settings;
         let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
         self.layer.set_anchor(anchor);
-        self.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+        self.layer
+            .set_margin(margin.0, margin.1, margin.2, margin.3);
         self.layer.set_size(panel_w as u32, panel_h as u32);
 
         let (tw_logical, th_logical) = menu::wallpaper_thumb_size(panel_w, panel_h, is_vertical);
@@ -38,7 +48,8 @@ impl App {
         let thumb_h = (th_logical * scale).round().max(1.0) as u32;
         let thumb_radius = 11.0 * scale;
 
-        let (thumb_request_tx, request_rx) = std::sync::mpsc::channel::<(std::path::PathBuf, u32, u32)>();
+        let (thumb_request_tx, request_rx) =
+            std::sync::mpsc::channel::<(std::path::PathBuf, u32, u32)>();
         let (result_tx, thumb_result_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             while let Ok((path, w, h)) = request_rx.recv() {
@@ -74,9 +85,18 @@ impl App {
         let Some(wp) = self.wallpaper_mode.as_mut() else {
             return;
         };
-        let (tw_logical, th_logical) = menu::wallpaper_thumb_size(wp.panel_w, wp.panel_h, wp.is_vertical);
-        let along_size = if wp.is_vertical { th_logical } else { tw_logical };
-        let viewport_along = if wp.is_vertical { wp.panel_h } else { wp.panel_w };
+        let (tw_logical, th_logical) =
+            menu::wallpaper_thumb_size(wp.panel_w, wp.panel_h, wp.is_vertical);
+        let along_size = if wp.is_vertical {
+            th_logical
+        } else {
+            tw_logical
+        };
+        let viewport_along = if wp.is_vertical {
+            wp.panel_h
+        } else {
+            wp.panel_w
+        };
         let margin = along_size * 2.0;
         let visible_0 = wp.scroll_x - margin;
         let visible_1 = wp.scroll_x + viewport_along + margin;
@@ -89,12 +109,18 @@ impl App {
                 continue;
             }
             wp.thumb_requested.insert(entry.path.clone());
-            let _ = wp.thumb_request_tx.send((entry.path.clone(), wp.thumb_w, wp.thumb_h));
+            let _ = wp
+                .thumb_request_tx
+                .send((entry.path.clone(), wp.thumb_w, wp.thumb_h));
         }
     }
 
     pub(super) fn choose_wallpaper(&mut self, index: usize, qh: &QueueHandle<Self>) {
-        let path = self.wallpaper_mode.as_ref().and_then(|w| w.wallpapers.get(index)).map(|e| e.path.clone());
+        let path = self
+            .wallpaper_mode
+            .as_ref()
+            .and_then(|w| w.wallpapers.get(index))
+            .map(|e| e.path.clone());
         if let Some(path) = &path {
             wallpaper::apply_wallpaper(path.clone());
             self.dock.config.settings.last_wallpaper = path.to_string_lossy().to_string();
@@ -117,14 +143,18 @@ impl App {
     pub(super) fn sync_accent_from_last_wallpaper(&mut self) {
         let mut path = self.dock.config.settings.last_wallpaper.clone();
         if path.is_empty() {
-            path = wallpaper::current_wallpaper_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            path = wallpaper::current_wallpaper_path()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
             self.dock.config.settings.last_wallpaper = path.clone();
         }
         if path.is_empty() {
             return;
         }
         let matugen_scheme = self.dock.config.settings.matugen_scheme.clone();
-        if let Some(scheme) = wallpaper::extract_color_scheme(std::path::Path::new(&path), &matugen_scheme) {
+        if let Some(scheme) =
+            wallpaper::extract_color_scheme(std::path::Path::new(&path), &matugen_scheme)
+        {
             let s = &mut self.dock.config.settings;
             (s.accent_r, s.accent_g, s.accent_b) = scheme.primary;
             (s.accent2_r, s.accent2_g, s.accent2_b) = scheme.secondary;
@@ -151,14 +181,20 @@ impl App {
         let (tw, th) = menu::wallpaper_thumb_size(wp.panel_w, wp.panel_h, wp.is_vertical);
         let along = if wp.is_vertical { th } else { tw };
         let cx = index as f32 * (along + menu::WALLPAPER_GAP);
-        let viewport_along = ((if wp.is_vertical { wp.panel_h } else { wp.panel_w }) - menu::WALLPAPER_BACK_ZONE_W).max(1.0);
+        let viewport_along = ((if wp.is_vertical {
+            wp.panel_h
+        } else {
+            wp.panel_w
+        }) - menu::WALLPAPER_BACK_ZONE_W)
+            .max(1.0);
         let mut target = wp.scroll_target;
         if cx < target {
             target = cx;
         } else if cx + along > target + viewport_along {
             target = cx + along - viewport_along;
         }
-        let max_scroll = menu::wallpaper_max_scroll(wp.wallpapers.len(), wp.panel_w, wp.panel_h, wp.is_vertical);
+        let max_scroll =
+            menu::wallpaper_max_scroll(wp.wallpapers.len(), wp.panel_w, wp.panel_h, wp.is_vertical);
         wp.scroll_target = target.clamp(0.0, max_scroll);
         self.request_redraw(qh);
     }
@@ -246,15 +282,34 @@ impl App {
         };
         let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
         if eased >= 0.999 {
-            menu_render::draw_content(&mut pixmap, &mut self.icon_cache, &mut self.text_cache, &self.thumbnail_cache, &args);
+            menu_render::draw_content(
+                &mut pixmap,
+                &mut self.icon_cache,
+                &mut self.text_cache,
+                &self.thumbnail_cache,
+                &args,
+            );
         } else {
             let mut content = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-            menu_render::draw_content(&mut content, &mut self.icon_cache, &mut self.text_cache, &self.thumbnail_cache, &args);
+            menu_render::draw_content(
+                &mut content,
+                &mut self.icon_cache,
+                &mut self.text_cache,
+                &self.thumbnail_cache,
+                &args,
+            );
             let paint = tiny_skia::PixmapPaint {
                 opacity: anim_opacity(transparency, eased),
                 ..Default::default()
             };
-            pixmap.draw_pixmap(0, 0, content.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+            pixmap.draw_pixmap(
+                0,
+                0,
+                content.as_ref(),
+                &paint,
+                tiny_skia::Transform::identity(),
+                None,
+            );
         }
 
         let stride = width * 4;
@@ -298,7 +353,8 @@ impl App {
 
         if closing && anim <= 0.0 {
             self.wallpaper_mode = None;
-            self.layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            self.layer
+                .set_keyboard_interactivity(KeyboardInteractivity::None);
             let (w, h) = self.dock.base_size();
             self.layer.set_size(w, h);
             self.draw(qh);
@@ -319,12 +375,24 @@ impl App {
         }
         self.draw_wallpaper_mode(qh);
     }
-    pub(super) fn handle_wallpaper_pointer_event(&mut self, event: &PointerEvent, qh: &QueueHandle<Self>) {
+    pub(super) fn handle_wallpaper_pointer_event(
+        &mut self,
+        event: &PointerEvent,
+        qh: &QueueHandle<Self>,
+    ) {
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 let (x, y) = event.position;
                 if let Some(wp) = self.wallpaper_mode.as_mut() {
-                    wp.hovered = menu::wallpaper_hit_test(wp.wallpapers.len(), wp.panel_w, wp.panel_h, wp.is_vertical, wp.scroll_x, x as f32, y as f32);
+                    wp.hovered = menu::wallpaper_hit_test(
+                        wp.wallpapers.len(),
+                        wp.panel_w,
+                        wp.panel_h,
+                        wp.is_vertical,
+                        wp.scroll_x,
+                        x as f32,
+                        y as f32,
+                    );
                 }
                 self.request_redraw(qh);
             }
@@ -336,20 +404,40 @@ impl App {
             }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
                 let (x, y) = event.position;
-                let hit = self
-                    .wallpaper_mode
-                    .as_ref()
-                    .and_then(|wp| menu::wallpaper_hit_test(wp.wallpapers.len(), wp.panel_w, wp.panel_h, wp.is_vertical, wp.scroll_x, x as f32, y as f32));
+                let hit = self.wallpaper_mode.as_ref().and_then(|wp| {
+                    menu::wallpaper_hit_test(
+                        wp.wallpapers.len(),
+                        wp.panel_w,
+                        wp.panel_h,
+                        wp.is_vertical,
+                        wp.scroll_x,
+                        x as f32,
+                        y as f32,
+                    )
+                });
                 match hit {
                     Some(menu::WallpaperHit::Back) => self.close_wallpaper_mode(qh),
                     Some(menu::WallpaperHit::Thumbnail(i)) => self.choose_wallpaper(i, qh),
                     None => {}
                 }
             }
-            PointerEventKind::Axis { horizontal, vertical, .. } => {
-                let delta = if horizontal.absolute != 0.0 { horizontal.absolute } else { vertical.absolute };
+            PointerEventKind::Axis {
+                horizontal,
+                vertical,
+                ..
+            } => {
+                let delta = if horizontal.absolute != 0.0 {
+                    horizontal.absolute
+                } else {
+                    vertical.absolute
+                };
                 if let Some(wp) = self.wallpaper_mode.as_mut() {
-                    let max_scroll = menu::wallpaper_max_scroll(wp.wallpapers.len(), wp.panel_w, wp.panel_h, wp.is_vertical);
+                    let max_scroll = menu::wallpaper_max_scroll(
+                        wp.wallpapers.len(),
+                        wp.panel_w,
+                        wp.panel_h,
+                        wp.is_vertical,
+                    );
                     wp.scroll_target = (wp.scroll_target + delta as f32).clamp(0.0, max_scroll);
                     wp.scroll_x = wp.scroll_target;
                 }

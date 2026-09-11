@@ -66,7 +66,9 @@ fn merge_ini_key(path: &std::path::Path, section: &str, key: &str, value: &str) 
 // ----- gtk ini -----
 pub(super) fn apply_system_gtk_font(family: &str) {
     for gtk_dir in ["gtk-3.0", "gtk-4.0"] {
-        let Some(mut path) = dirs::config_dir() else { continue };
+        let Some(mut path) = dirs::config_dir() else {
+            continue;
+        };
         path.push(gtk_dir);
         if std::fs::create_dir_all(&path).is_err() {
             continue;
@@ -78,7 +80,9 @@ pub(super) fn apply_system_gtk_font(family: &str) {
 
 // ----- qt kdeglobals -----
 pub(super) fn apply_system_qt_font(family: &str) {
-    let Some(mut path) = dirs::config_dir() else { return };
+    let Some(mut path) = dirs::config_dir() else {
+        return;
+    };
     path.push("kdeglobals");
     let tail = read_ini_value(&path, "General", "font")
         .and_then(|v| v.split_once(',').map(|(_, rest)| rest.to_string()))
@@ -107,7 +111,9 @@ fn merge_flat_config_key(path: &std::path::Path, key: &str, value: &str) {
 }
 
 pub(super) fn apply_kitty_font(family: &str) {
-    let Some(mut path) = dirs::config_dir() else { return };
+    let Some(mut path) = dirs::config_dir() else {
+        return;
+    };
     path.push("kitty");
     path.push("kitty.conf");
     if !path.exists() {
@@ -115,7 +121,9 @@ pub(super) fn apply_kitty_font(family: &str) {
     }
     merge_flat_config_key(&path, "font_family", family);
 
-    let Ok(entries) = std::fs::read_dir("/tmp") else { return };
+    let Ok(entries) = std::fs::read_dir("/tmp") else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
@@ -123,6 +131,8 @@ pub(super) fn apply_kitty_font(family: &str) {
             continue;
         }
         let target = format!("unix:{}", entry.path().display());
-        let _ = std::process::Command::new("kitty").args(["@", "--to", &target, "load-config"]).spawn();
+        let _ = std::process::Command::new("kitty")
+            .args(["@", "--to", &target, "load-config"])
+            .spawn();
     }
 }

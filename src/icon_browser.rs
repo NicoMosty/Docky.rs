@@ -32,10 +32,10 @@ fn walk(dir: &Path, out: &mut Vec<String>, seen: &mut HashSet<String>) {
         if !is_icon {
             continue;
         }
-        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-            if seen.insert(stem.to_string()) {
-                out.push(stem.to_string());
-            }
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            && seen.insert(stem.to_string())
+        {
+            out.push(stem.to_string());
         }
     }
 }

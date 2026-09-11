@@ -21,7 +21,8 @@ pub fn wallpaper_content_len(count: usize, panel_w: f32, panel_h: f32, is_vertic
 }
 
 pub fn wallpaper_max_scroll(count: usize, panel_w: f32, panel_h: f32, is_vertical: bool) -> f32 {
-    let viewport_along = ((if is_vertical { panel_h } else { panel_w }) - WALLPAPER_BACK_ZONE_W).max(1.0);
+    let viewport_along =
+        ((if is_vertical { panel_h } else { panel_w }) - WALLPAPER_BACK_ZONE_W).max(1.0);
     (wallpaper_content_len(count, panel_w, panel_h, is_vertical) - viewport_along).max(0.0)
 }
 
@@ -31,7 +32,15 @@ pub enum WallpaperHit {
     Thumbnail(usize),
 }
 
-pub fn wallpaper_hit_test(count: usize, panel_w: f32, panel_h: f32, is_vertical: bool, scroll: f32, x: f32, y: f32) -> Option<WallpaperHit> {
+pub fn wallpaper_hit_test(
+    count: usize,
+    panel_w: f32,
+    panel_h: f32,
+    is_vertical: bool,
+    scroll: f32,
+    x: f32,
+    y: f32,
+) -> Option<WallpaperHit> {
     let (along_pos, cross_pos) = if is_vertical { (y, x) } else { (x, y) };
     if along_pos < WALLPAPER_BACK_ZONE_W {
         return Some(WallpaperHit::Back);

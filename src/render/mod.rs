@@ -19,6 +19,8 @@ mod cpu_ram;
 use cpu_ram::*;
 mod workspaces;
 pub use workspaces::*;
+mod syswidgets;
+use syswidgets::*;
 
 const ICON_OVERSAMPLE: f32 = 1.0;
 const DATE_FONT_FAMILY: &str = "JetBrains Mono";
@@ -36,7 +38,11 @@ struct MarqueeLane {
 
 impl Default for MarqueeLane {
     fn default() -> Self {
-        Self { offset: 0.0, hold_secs: MARQUEE_HOLD_SECS, last_tick: None }
+        Self {
+            offset: 0.0,
+            hold_secs: MARQUEE_HOLD_SECS,
+            last_tick: None,
+        }
     }
 }
 
@@ -64,7 +70,14 @@ fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-fn marquee_step(lane: &mut MarqueeLane, text_w: f32, avail_w: f32, advance: bool, render_scale: f32, smooth_scroll: bool) -> (f32, bool) {
+fn marquee_step(
+    lane: &mut MarqueeLane,
+    text_w: f32,
+    avail_w: f32,
+    advance: bool,
+    render_scale: f32,
+    smooth_scroll: bool,
+) -> (f32, bool) {
     if !smooth_scroll || text_w <= avail_w {
         *lane = MarqueeLane::default();
         return (0.0, false);
@@ -72,7 +85,11 @@ fn marquee_step(lane: &mut MarqueeLane, text_w: f32, avail_w: f32, advance: bool
     if advance {
         let now = Instant::now();
         // ----- long gap clamp -----
-        let dt = lane.last_tick.map(|t| now.duration_since(t).as_secs_f32()).unwrap_or(0.0).min(0.5);
+        let dt = lane
+            .last_tick
+            .map(|t| now.duration_since(t).as_secs_f32())
+            .unwrap_or(0.0)
+            .min(0.5);
         lane.last_tick = Some(now);
         if lane.hold_secs > 0.0 {
             lane.hold_secs -= dt;
@@ -96,7 +113,14 @@ fn tile_text(clip: &mut Pixmap, glyphs: &Pixmap, avail_w: f32, offset: f32) {
         if tx + text_w < 0.0 || tx > avail_w {
             continue;
         }
-        clip.draw_pixmap(0, 0, glyphs.as_ref(), &paint, Transform::from_translate(tx, 0.0), None);
+        clip.draw_pixmap(
+            0,
+            0,
+            glyphs.as_ref(),
+            &paint,
+            Transform::from_translate(tx, 0.0),
+            None,
+        );
     }
 }
 
@@ -165,19 +189,39 @@ pub fn draw(
             width: s.border_width * render_scale,
             ..Default::default()
         };
-        pixmap.stroke_path(&bg_path, &border_paint, &stroke, Transform::identity(), None);
+        pixmap.stroke_path(
+            &bg_path,
+            &border_paint,
+            &stroke,
+            Transform::identity(),
+            None,
+        );
     }
 
     if dock.icons.is_empty() {
-        return draw_widgets(pixmap, dock, icon_cache, text_cache, widgets, tray, marquee, advance_marquee, advance_ws, render_scale);
+        return draw_widgets(
+            pixmap,
+            dock,
+            icon_cache,
+            text_cache,
+            widgets,
+            tray,
+            marquee,
+            advance_marquee,
+            advance_ws,
+            render_scale,
+        );
     }
 
-    let cache_size = (s.icon_size * s.dock_scale * s.magnify_scale * render_scale * ICON_OVERSAMPLE).ceil() as u32;
+    let cache_size = (s.icon_size * s.dock_scale * s.magnify_scale * render_scale * ICON_OVERSAMPLE)
+        .ceil() as u32;
     let dragging = dock.dragging_index;
     let layout = dock.layout();
     let (edx, edy) = dock.elevate_dir();
 
-    let order = (0..dock.icons.len()).filter(|i| Some(*i) != dragging).chain(dragging);
+    let order = (0..dock.icons.len())
+        .filter(|i| Some(*i) != dragging)
+        .chain(dragging);
 
     for i in order {
         let icon = &dock.icons[i];
@@ -187,7 +231,13 @@ pub fn draw(
         let cy = if elevated { cy + edy * 10.0 } else { cy };
 
         let Some(icon_pixmap) = icon_cache.get(&icon.app.icon, cache_size.max(1)) else {
-            draw_placeholder(pixmap, &icon.app.name, cx * render_scale, cy * render_scale, drawn_w * render_scale);
+            draw_placeholder(
+                pixmap,
+                &icon.app.name,
+                cx * render_scale,
+                cy * render_scale,
+                drawn_w * render_scale,
+            );
             continue;
         };
 
@@ -202,10 +252,26 @@ pub fn draw(
             let shadow_r = drawn_w * 0.5;
             let back_x = cx - edx * drawn_w * 0.32;
             let back_y = cy - edy * drawn_w * 0.32;
-            let (sw, sh) = if edx.abs() > 0.5 { (shadow_r, shadow_r * 2.0) } else { (shadow_r * 2.0, shadow_r * 0.5) };
+            let (sw, sh) = if edx.abs() > 0.5 {
+                (shadow_r, shadow_r * 2.0)
+            } else {
+                (shadow_r * 2.0, shadow_r * 0.5)
+            };
             if let Some(rect) = Rect::from_xywh(back_x - sw / 2.0, back_y - sh / 2.0, sw, sh) {
-                let path = rounded_rect_path(rect.x(), rect.y(), rect.width(), rect.height(), sw.min(sh) * 0.4);
-                pixmap.fill_path(&path, &shadow_paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                let path = rounded_rect_path(
+                    rect.x(),
+                    rect.y(),
+                    rect.width(),
+                    rect.height(),
+                    sw.min(sh) * 0.4,
+                );
+                pixmap.fill_path(
+                    &path,
+                    &shadow_paint,
+                    tiny_skia::FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
             }
         }
 
@@ -213,11 +279,17 @@ pub fn draw(
         let transform = Transform::from_translate(cx - drawn_w / 2.0, cy - drawn_w / 2.0)
             .pre_scale(scale, scale);
         let icon_paint = tiny_skia::PixmapPaint::default();
-        pixmap.draw_pixmap(0, 0, icon_pixmap.as_ref().as_ref(), &icon_paint, transform, None);
+        pixmap.draw_pixmap(
+            0,
+            0,
+            icon_pixmap.as_ref().as_ref(),
+            &icon_paint,
+            transform,
+            None,
+        );
     }
     false
 }
-
 
 struct WidgetColors<'a> {
     accent: (u8, u8, u8, u8),
@@ -226,20 +298,38 @@ struct WidgetColors<'a> {
     text_dim_color: &'a str,
 }
 
-
-fn draw_text_rotated(pixmap: &mut Pixmap, text_cache: &mut TextCache, text: &str, cx: f32, cy: f32, size: f32, color: &str, weight: u16) {
+fn draw_text_rotated(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    text: &str,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    color: &str,
+    weight: u16,
+) {
     let Some(glyphs) = text_cache.get(text, size, color, weight) else {
         return;
     };
     let iw = glyphs.width() as f32;
     let ih = glyphs.height() as f32;
     let paint = tiny_skia::PixmapPaint::default();
-    let transform = Transform::from_translate(-iw / 2.0, -ih / 2.0).post_rotate(-90.0).post_translate(cx, cy);
+    let transform = Transform::from_translate(-iw / 2.0, -ih / 2.0)
+        .post_rotate(-90.0)
+        .post_translate(cx, cy);
     pixmap.draw_pixmap(0, 0, glyphs.as_ref().as_ref(), &paint, transform, None);
 }
 
 fn draw_text_rotated_family(
-    pixmap: &mut Pixmap, text_cache: &mut TextCache, text: &str, cx: f32, cy: f32, size: f32, color: &str, weight: u16, family: &'static str,
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    text: &str,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    color: &str,
+    weight: u16,
+    family: &'static str,
 ) {
     let Some(glyphs) = text_cache.get_with_family(text, size, color, weight, family) else {
         return;
@@ -247,18 +337,20 @@ fn draw_text_rotated_family(
     let iw = glyphs.width() as f32;
     let ih = glyphs.height() as f32;
     let paint = tiny_skia::PixmapPaint::default();
-    let transform = Transform::from_translate(-iw / 2.0, -ih / 2.0).post_rotate(-90.0).post_translate(cx, cy);
+    let transform = Transform::from_translate(-iw / 2.0, -ih / 2.0)
+        .post_rotate(-90.0)
+        .post_translate(cx, cy);
     pixmap.draw_pixmap(0, 0, glyphs.as_ref().as_ref(), &paint, transform, None);
 }
-
-
 
 fn text_width_estimate_render(text: &str, size: f32) -> f32 {
     text.chars().count() as f32 * size * 0.64
 }
 
 fn draw_placeholder(pixmap: &mut Pixmap, name: &str, cx: f32, cy: f32, size: f32) {
-    let hash = name.bytes().fold(37u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    let hash = name
+        .bytes()
+        .fold(37u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
     let hue_r = 90 + (hash % 120) as u8;
     let hue_g = 90 + ((hash >> 8) % 120) as u8;
     let hue_b = 90 + ((hash >> 16) % 120) as u8;
@@ -267,5 +359,11 @@ fn draw_placeholder(pixmap: &mut Pixmap, name: &str, cx: f32, cy: f32, size: f32
     paint.set_color_rgba8(hue_r, hue_g, hue_b, 230);
     paint.anti_alias = true;
     let path = rounded_rect_path(cx - size / 2.0, cy - size / 2.0, size, size, size * 0.22);
-    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }

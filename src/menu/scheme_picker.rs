@@ -40,14 +40,25 @@ pub fn scheme_picker_layout(panel_width: f32, start_y: f32) -> SchemePickerLayou
         let row = i / SCHEME_COLS;
         let x = MENU_PADDING + col as f32 * (col_w + SCHEME_COL_GAP);
         let ry = start_y + row as f32 * (SCHEME_ROW_H + SCHEME_ROW_GAP);
-        rects.push(SchemeRect { index: i, x, y: ry, w: col_w, h: SCHEME_ROW_H });
+        rects.push(SchemeRect {
+            index: i,
+            x,
+            y: ry,
+            w: col_w,
+            h: SCHEME_ROW_H,
+        });
     }
     let rows = MATUGEN_SCHEMES.len().div_ceil(SCHEME_COLS);
-    let total_h = start_y + rows as f32 * SCHEME_ROW_H + rows.saturating_sub(1) as f32 * SCHEME_ROW_GAP;
+    let total_h =
+        start_y + rows as f32 * SCHEME_ROW_H + rows.saturating_sub(1) as f32 * SCHEME_ROW_GAP;
     SchemePickerLayout { rects, total_h }
 }
 
 pub fn scheme_picker_hit_test(control_y: f32, panel_width: f32, x: f32, y: f32) -> Option<usize> {
     let layout = scheme_picker_layout(panel_width, control_y);
-    layout.rects.into_iter().find(|r| x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h).map(|r| r.index)
+    layout
+        .rects
+        .into_iter()
+        .find(|r| x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)
+        .map(|r| r.index)
 }

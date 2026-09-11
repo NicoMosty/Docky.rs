@@ -17,7 +17,10 @@ pub fn load() -> Vec<ClipboardEntry> {
     let Ok(file) = File::open(path()) else {
         return Vec::new();
     };
-    if file.metadata().is_ok_and(|metadata| metadata.len() > MAX_FILE_SIZE as u64) {
+    if file
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() > MAX_FILE_SIZE as u64)
+    {
         return Vec::new();
     }
     let mut reader = BufReader::with_capacity(64 * 1024, file);
@@ -49,17 +52,31 @@ pub fn save(entries: &[ClipboardEntry]) {
     let Some(directory) = path.parent() else {
         return;
     };
-    if !directory.exists() && fs::DirBuilder::new().recursive(true).mode(0o700).create(directory).is_err() {
+    if !directory.exists()
+        && fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(directory)
+            .is_err()
+    {
         return;
     }
     let temporary = directory.join("clipboard.tmp");
-    let Ok(file) = fs::OpenOptions::new().create(true).truncate(true).write(true).mode(0o600).open(&temporary) else {
+    let Ok(file) = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&temporary)
+    else {
         return;
     };
     let mut writer = BufWriter::with_capacity(64 * 1024, file);
     let written = writer.write_all(MAGIC).is_ok()
         && write_u32(&mut writer, entries.len() as u32).is_ok()
-        && entries.iter().all(|entry| write_entry(&mut writer, entry.stored()).is_ok());
+        && entries
+            .iter()
+            .all(|entry| write_entry(&mut writer, entry.stored()).is_ok());
     let Ok(file) = writer.into_inner() else {
         return;
     };

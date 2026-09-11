@@ -1,6 +1,8 @@
 use super::*;
 
-use crate::menu_render::{clip_panel_h, ClipArgs, CLIP_HEADER_H, CLIP_PANEL_W, CLIP_ROW_H, CLIP_VISIBLE_ROWS};
+use crate::menu_render::{
+    CLIP_HEADER_H, CLIP_PANEL_W, CLIP_ROW_H, CLIP_VISIBLE_ROWS, ClipArgs, clip_panel_h,
+};
 
 impl App {
     pub(crate) fn toggle_clipboard(&mut self, qh: &QueueHandle<Self>) {
@@ -25,11 +27,13 @@ impl App {
         self.layer.set_layer(Layer::Top);
         let panel_w = CLIP_PANEL_W;
         let panel_h = clip_panel_h();
-        self.layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         let s = &self.dock.config.settings;
         let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
         self.layer.set_anchor(anchor);
-        self.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+        self.layer
+            .set_margin(margin.0, margin.1, margin.2, margin.3);
         self.layer.set_size(panel_w as u32, panel_h as u32);
 
         self.clipboard_mode = Some(ClipboardMode {
@@ -104,11 +108,11 @@ impl App {
                 return;
             }
             Keysym::Down => {
-                if let Some(cm) = self.clipboard_mode.as_mut() {
-                    if !cm.filtered.is_empty() {
-                        cm.selected = (cm.selected + 1).min(cm.filtered.len() - 1);
-                        cm.hovered = None;
-                    }
+                if let Some(cm) = self.clipboard_mode.as_mut()
+                    && !cm.filtered.is_empty()
+                {
+                    cm.selected = (cm.selected + 1).min(cm.filtered.len() - 1);
+                    cm.hovered = None;
                 }
                 self.scroll_clipboard_into_view(qh);
                 return;
@@ -165,25 +169,32 @@ impl App {
     }
 
     fn delete_clipboard_selected(&mut self, qh: &QueueHandle<Self>) {
-        let index = self.clipboard_mode.as_ref().and_then(|cm| cm.filtered.get(cm.selected).copied());
-        if let Some(index) = index {
-            if self.clipboard_history.remove(index) {
-                self.clipboard_history.save();
-            }
+        let index = self
+            .clipboard_mode
+            .as_ref()
+            .and_then(|cm| cm.filtered.get(cm.selected).copied());
+        if let Some(index) = index
+            && self.clipboard_history.remove(index)
+        {
+            self.clipboard_history.save();
         }
         self.refresh_clipboard_filter(qh);
     }
 
-    pub(super) fn handle_clipboard_pointer_event(&mut self, event: &PointerEvent, qh: &QueueHandle<Self>) {
+    pub(super) fn handle_clipboard_pointer_event(
+        &mut self,
+        event: &PointerEvent,
+        qh: &QueueHandle<Self>,
+    ) {
         let (px, py) = event.position;
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 let hit = self.clipboard_row_at(px as f32, py as f32);
-                if let Some(cm) = self.clipboard_mode.as_mut() {
-                    if cm.hovered != hit {
-                        cm.hovered = hit;
-                        self.request_redraw(qh);
-                    }
+                if let Some(cm) = self.clipboard_mode.as_mut()
+                    && cm.hovered != hit
+                {
+                    cm.hovered = hit;
+                    self.request_redraw(qh);
                 }
             }
             PointerEventKind::Leave { .. } => {
@@ -200,12 +211,21 @@ impl App {
                     self.paste_clipboard_selected(qh);
                 }
             }
-            PointerEventKind::Axis { horizontal, vertical, .. } => {
-                let delta = if vertical.absolute != 0.0 { vertical.absolute } else { horizontal.absolute };
+            PointerEventKind::Axis {
+                horizontal,
+                vertical,
+                ..
+            } => {
+                let delta = if vertical.absolute != 0.0 {
+                    vertical.absolute
+                } else {
+                    horizontal.absolute
+                };
                 if let Some(cm) = self.clipboard_mode.as_mut() {
                     let viewport = CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32;
                     let max_scroll = (cm.filtered.len() as f32 * CLIP_ROW_H - viewport).max(0.0);
-                    cm.scroll_target = (cm.scroll_target + delta as f32 * 0.6).clamp(0.0, max_scroll);
+                    cm.scroll_target =
+                        (cm.scroll_target + delta as f32 * 0.6).clamp(0.0, max_scroll);
                 }
                 self.request_redraw(qh);
             }
@@ -248,12 +268,14 @@ impl App {
 
         if closing && anim <= 0.0 {
             self.clipboard_mode = None;
-            self.layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            self.layer
+                .set_keyboard_interactivity(KeyboardInteractivity::None);
             let (w, h) = self.dock.base_size();
             let s = &self.dock.config.settings;
             let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
             self.layer.set_anchor(anchor);
-            self.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+            self.layer
+                .set_margin(margin.0, margin.1, margin.2, margin.3);
             self.layer.set_size(w, h);
             self.draw(qh);
             trim_heap();
@@ -263,7 +285,15 @@ impl App {
         let key_repeating = self.held_key.is_some();
         if let Some((keysym, steps)) = self.poll_held_key() {
             for _ in 0..steps {
-                self.handle_clipboard_key(KeyEvent { time: 0, raw_code: 0, keysym, utf8: None }, qh);
+                self.handle_clipboard_key(
+                    KeyEvent {
+                        time: 0,
+                        raw_code: 0,
+                        keysym,
+                        utf8: None,
+                    },
+                    qh,
+                );
             }
         }
 
@@ -308,7 +338,14 @@ impl App {
             opacity: anim_opacity(transparency, eased),
             ..Default::default()
         };
-        pixmap.draw_pixmap(0, 0, content.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+        pixmap.draw_pixmap(
+            0,
+            0,
+            content.as_ref(),
+            &paint,
+            tiny_skia::Transform::identity(),
+            None,
+        );
 
         let stride = width * 4;
         let (buffer, canvas) = self

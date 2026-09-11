@@ -20,7 +20,14 @@ pub fn font_list_window(item_count: usize, scroll_rows: usize) -> (usize, usize)
     (first, visible)
 }
 
-pub fn font_list_hit_test(item_count: usize, panel_width: f32, start_y: f32, scroll_rows: usize, x: f32, y: f32) -> Option<usize> {
+pub fn font_list_hit_test(
+    item_count: usize,
+    panel_width: f32,
+    start_y: f32,
+    scroll_rows: usize,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
     let (first, visible) = font_list_window(item_count, scroll_rows);
     if x < MENU_PADDING || x > panel_width - MENU_PADDING {
         return None;
@@ -39,5 +46,10 @@ pub fn filter_font_indices(fonts: &[String], query: &str) -> Vec<usize> {
         return (0..fonts.len()).collect();
     }
     let q = query.to_lowercase();
-    fonts.iter().enumerate().filter(|(_, f)| f.to_lowercase().contains(&q)).map(|(i, _)| i).collect()
+    fonts
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.to_lowercase().contains(&q))
+        .map(|(i, _)| i)
+        .collect()
 }

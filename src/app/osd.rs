@@ -2,7 +2,13 @@ use super::*;
 
 impl App {
     pub(crate) fn show_osd(&mut self, kind: menu::OsdKind, qh: &QueueHandle<Self>) {
-        if self.wallpaper_mode.is_some() || self.dock_menu_mode.is_some() || self.app_search_mode.is_some() || self.menu.is_some() || self.notification_mode.is_some() || self.clipboard_mode.is_some() {
+        if self.wallpaper_mode.is_some()
+            || self.dock_menu_mode.is_some()
+            || self.app_search_mode.is_some()
+            || self.menu.is_some()
+            || self.notification_mode.is_some()
+            || self.clipboard_mode.is_some()
+        {
             return;
         }
         let (level, muted) = match kind {
@@ -16,8 +22,13 @@ impl App {
             },
         };
         let length = menu::OSD_NOTIFICATION_BASE_LEN + menu::OSD_GROWTH_W;
-        let cross = menu::OSD_NOTIFICATION_BASE_THICKNESS.max(menu::OSD_MIN_PANEL_H) + menu::OSD_GROWTH_H;
-        let (panel_w, panel_h) = if self.dock.is_vertical() { (cross, length) } else { (length, cross) };
+        let cross =
+            menu::OSD_NOTIFICATION_BASE_THICKNESS.max(menu::OSD_MIN_PANEL_H) + menu::OSD_GROWTH_H;
+        let (panel_w, panel_h) = if self.dock.is_vertical() {
+            (cross, length)
+        } else {
+            (length, cross)
+        };
         let needs_resize = match self.osd_mode.as_ref() {
             None => true,
             Some(m) => m.panel_w != panel_w || m.panel_h != panel_h,
@@ -47,7 +58,8 @@ impl App {
             let s = &self.dock.config.settings;
             let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
             self.layer.set_anchor(anchor);
-            self.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+            self.layer
+                .set_margin(margin.0, margin.1, margin.2, margin.3);
             self.layer.set_size(panel_w as u32, panel_h as u32);
         }
         let _ = self.osd_reset_tx.send(());
@@ -69,7 +81,11 @@ impl App {
             return;
         };
         let linear = m.anim.clamp(0.0, 1.0);
-        let eased = (0.5 - 0.5 * (std::f32::consts::PI * linear).cos()).max(if m.closing { 0.0 } else { 0.04 });
+        let eased = (0.5 - 0.5 * (std::f32::consts::PI * linear).cos()).max(if m.closing {
+            0.0
+        } else {
+            0.04
+        });
 
         let width = (m.panel_w * scale).round() as i32;
         let height = (m.panel_h * scale).round() as i32;
@@ -99,15 +115,39 @@ impl App {
             if m.closing {
                 let (full_w, full_h) = (width as f32, height as f32);
                 let (rw, rh) = (full_w * linear, full_h * linear);
-                let rect = tiny_skia::Rect::from_xywh((full_w - rw) / 2.0, (full_h - rh) / 2.0, rw.max(0.0), rh.max(0.0));
+                let rect = tiny_skia::Rect::from_xywh(
+                    (full_w - rw) / 2.0,
+                    (full_h - rh) / 2.0,
+                    rw.max(0.0),
+                    rh.max(0.0),
+                );
                 if let Some(rect) = rect {
                     let mut mask = tiny_skia::Mask::new(width as u32, height as u32).unwrap();
                     let path = tiny_skia::PathBuilder::from_rect(rect);
-                    mask.fill_path(&path, tiny_skia::FillRule::Winding, true, tiny_skia::Transform::identity());
-                    pixmap.draw_pixmap(0, 0, content.as_ref(), &paint, tiny_skia::Transform::identity(), Some(&mask));
+                    mask.fill_path(
+                        &path,
+                        tiny_skia::FillRule::Winding,
+                        true,
+                        tiny_skia::Transform::identity(),
+                    );
+                    pixmap.draw_pixmap(
+                        0,
+                        0,
+                        content.as_ref(),
+                        &paint,
+                        tiny_skia::Transform::identity(),
+                        Some(&mask),
+                    );
                 }
             } else {
-                pixmap.draw_pixmap(0, 0, content.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+                pixmap.draw_pixmap(
+                    0,
+                    0,
+                    content.as_ref(),
+                    &paint,
+                    tiny_skia::Transform::identity(),
+                    None,
+                );
             }
         }
 

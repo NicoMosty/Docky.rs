@@ -9,11 +9,15 @@ pub struct ThumbnailCache {
 
 impl ThumbnailCache {
     pub fn new() -> Self {
-        Self { cache: HashMap::new() }
+        Self {
+            cache: HashMap::new(),
+        }
     }
 
     pub fn peek(&self, path: &Path, w: u32, h: u32) -> Option<Rc<Pixmap>> {
-        self.cache.get(&(path.to_string_lossy().to_string(), w, h)).and_then(|v| v.clone())
+        self.cache
+            .get(&(path.to_string_lossy().to_string(), w, h))
+            .and_then(|v| v.clone())
     }
 
     pub fn insert(&mut self, path: &Path, w: u32, h: u32, pixmap: Option<Pixmap>) {
@@ -33,9 +37,15 @@ pub fn load(path: &Path, w: u32, h: u32, radius: f32) -> Option<Pixmap> {
     let target_ratio = w as f32 / h as f32;
     let src_ratio = iw as f32 / ih as f32;
     let (cw, ch) = if src_ratio > target_ratio {
-        (((ih as f32 * target_ratio).round() as u32).min(iw).max(1), ih)
+        (
+            ((ih as f32 * target_ratio).round() as u32).min(iw).max(1),
+            ih,
+        )
     } else {
-        (iw, ((iw as f32 / target_ratio).round() as u32).min(ih).max(1))
+        (
+            iw,
+            ((iw as f32 / target_ratio).round() as u32).min(ih).max(1),
+        )
     };
     let cx = (iw - cw) / 2;
     let cy = (ih - ch) / 2;
@@ -55,9 +65,21 @@ pub fn load(path: &Path, w: u32, h: u32, radius: f32) -> Option<Pixmap> {
 
     let rect = rounded_rect_path(w as f32, h as f32, radius);
     let mut mask = tiny_skia::Mask::new(w, h)?;
-    mask.fill_path(&rect, tiny_skia::FillRule::Winding, true, Transform::identity());
+    mask.fill_path(
+        &rect,
+        tiny_skia::FillRule::Winding,
+        true,
+        Transform::identity(),
+    );
     let mut clipped = Pixmap::new(w, h)?;
-    clipped.draw_pixmap(0, 0, pixmap.as_ref(), &tiny_skia::PixmapPaint::default(), Transform::identity(), Some(&mask));
+    clipped.draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        Transform::identity(),
+        Some(&mask),
+    );
     Some(clipped)
 }
 

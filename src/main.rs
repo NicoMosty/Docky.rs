@@ -267,6 +267,9 @@ fn main() -> anyhow::Result<()> {
     let cpu_ram_tick_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     spawn_cpu_ram_ticker(cpu_ram_tick_pending.clone(), conn.clone(), qh.clone());
 
+    let sys_tick_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    spawn_sys_ticker(sys_tick_pending.clone(), conn.clone(), qh.clone());
+
     let osd_timeout_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     spawn_osd_timer(
         osd_reset_rx,
@@ -328,6 +331,9 @@ fn main() -> anyhow::Result<()> {
         if cpu_ram_tick_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
             app.refresh_cpu_ram(&qh);
         }
+        if sys_tick_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            app.refresh_sys(&qh);
+        }
         if tray_tick_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
             app.sync_tray_layout(&qh);
         }
@@ -360,6 +366,19 @@ fn spawn_clock_ticker(
             conn.display().sync(&qh, ());
             let _ = conn.flush();
         }
+    });
+}
+
+fn spawn_sys_ticker(
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    conn: Connection,
+    qh: wayland_client::QueueHandle<App>,
+) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        conn.display().sync(&qh, ());
+        let _ = conn.flush();
     });
 }
 

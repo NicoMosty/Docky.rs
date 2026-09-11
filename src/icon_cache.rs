@@ -52,9 +52,21 @@ fn round_corners(base: &Pixmap, size: u32) -> Option<Rc<Pixmap>> {
     let radius = size as f32 * 0.22;
     let path = rounded_rect_path(size as f32, size as f32, radius);
     let mut mask = tiny_skia::Mask::new(size, size)?;
-    mask.fill_path(&path, tiny_skia::FillRule::Winding, true, Transform::identity());
+    mask.fill_path(
+        &path,
+        tiny_skia::FillRule::Winding,
+        true,
+        Transform::identity(),
+    );
     let mut clipped = Pixmap::new(size, size)?;
-    clipped.draw_pixmap(0, 0, base.as_ref(), &tiny_skia::PixmapPaint::default(), Transform::identity(), Some(&mask));
+    clipped.draw_pixmap(
+        0,
+        0,
+        base.as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        Transform::identity(),
+        Some(&mask),
+    );
     Some(Rc::new(clipped))
 }
 

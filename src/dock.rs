@@ -68,7 +68,10 @@ impl Dock {
     }
 
     pub fn is_vertical(&self) -> bool {
-        matches!(self.config.settings.dock_edge, DockEdge::Left | DockEdge::Right)
+        matches!(
+            self.config.settings.dock_edge,
+            DockEdge::Left | DockEdge::Right
+        )
     }
 
     pub fn cross_len(&self) -> f32 {
@@ -81,7 +84,9 @@ impl Dock {
         let s = &self.config.settings;
         let cross_len = self.cross_len();
         if self.icons.is_empty() {
-            let bar_len = (self.widget_bar_content_len + s.width_padding * s.widget_scale * 2.0).max(WIDGET_BAR_MIN).min(MAX_DOCK_WIDTH);
+            let bar_len = (self.widget_bar_content_len + s.width_padding * s.widget_scale * 2.0)
+                .max(WIDGET_BAR_MIN)
+                .min(MAX_DOCK_WIDTH);
             return if self.is_vertical() {
                 (cross_len.ceil() as u32, bar_len.ceil() as u32)
             } else {
@@ -91,7 +96,9 @@ impl Dock {
         let icon_size = REFERENCE_ICON_SIZE * s.dock_scale;
         let n = self.icons.len() as f32;
         let spacing = REFERENCE_GAP * s.dock_scale;
-        let main_len = (n * icon_size + (n - 1.0).max(0.0) * spacing + s.width_padding * s.dock_scale * 2.0).min(MAX_DOCK_WIDTH);
+        let main_len =
+            (n * icon_size + (n - 1.0).max(0.0) * spacing + s.width_padding * s.dock_scale * 2.0)
+                .min(MAX_DOCK_WIDTH);
         if self.is_vertical() {
             (cross_len.ceil() as u32, main_len.ceil() as u32)
         } else {
@@ -106,7 +113,11 @@ impl Dock {
 
     fn main_axis_len(&self) -> f32 {
         let (w, h) = self.base_size();
-        if self.is_vertical() { h as f32 } else { w as f32 }
+        if self.is_vertical() {
+            h as f32
+        } else {
+            w as f32
+        }
     }
 
     fn rest_centers(&self) -> impl Iterator<Item = f32> + use<> {
@@ -203,7 +214,11 @@ impl Dock {
         let Some(index) = self.dragging_index else {
             return;
         };
-        let cursor_main = if self.is_vertical() { cursor_y } else { cursor_x };
+        let cursor_main = if self.is_vertical() {
+            cursor_y
+        } else {
+            cursor_x
+        };
         self.icons[index].x = cursor_main;
         self.icons[index].target_x = cursor_main;
 
@@ -278,7 +293,11 @@ impl Dock {
             .iter()
             .map(|icon| {
                 let w = icon_size * icon.scale;
-                let cross = if grows_positive { baseline + w / 2.0 } else { baseline - w / 2.0 };
+                let cross = if grows_positive {
+                    baseline + w / 2.0
+                } else {
+                    baseline - w / 2.0
+                };
                 if vertical {
                     (cross, icon.x, w)
                 } else {

@@ -1,7 +1,12 @@
 use super::*;
 
 pub const EDGE_PICKER_H: f32 = 30.0;
-pub const EDGE_OPTIONS: [DockEdge; 4] = [DockEdge::Top, DockEdge::Left, DockEdge::Bottom, DockEdge::Right];
+pub const EDGE_OPTIONS: [DockEdge; 4] = [
+    DockEdge::Top,
+    DockEdge::Left,
+    DockEdge::Bottom,
+    DockEdge::Right,
+];
 
 pub fn edge_label(edge: DockEdge) -> &'static str {
     match edge {

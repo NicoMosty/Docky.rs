@@ -40,6 +40,15 @@ pub struct WorkspaceInfo {
     pub active: bool,
 }
 
+pub struct NetworkInfo {
+    pub label: String,
+    pub online: bool,
+}
+
+pub struct KbLayout {
+    pub short: String,
+}
+
 pub struct WidgetSnapshot {
     pub time: String,
     pub date: String,
@@ -49,6 +58,10 @@ pub struct WidgetSnapshot {
     pub workspaces: Vec<WorkspaceInfo>,
     pub cpu: Option<u8>,
     pub ram: Option<u8>,
+    pub ram_gb: Option<(f32, f32)>,
+    pub volume: Option<(u8, bool)>,
+    pub network: NetworkInfo,
+    pub kblayout: KbLayout,
 }
 
 impl WidgetSnapshot {
@@ -61,13 +74,34 @@ impl WidgetSnapshot {
             bluetooth: read_bluetooth(),
             workspaces: read_workspaces(),
             cpu: read_cpu(),
-            ram: read_ram(),
+            ram: read_ram().map(|(pct, _)| pct),
+            ram_gb: read_ram().map(|(_, gb)| gb),
+            volume: read_volume(),
+            network: read_network(),
+            kblayout: read_kblayout(),
         }
     }
 
     pub fn refresh_cpu_ram(&mut self) {
         self.cpu = read_cpu();
-        self.ram = read_ram();
+        if let Some((pct, gb)) = read_ram() {
+            self.ram = Some(pct);
+            self.ram_gb = Some(gb);
+        }
+    }
+
+    /// true si cambió algo visible (requiere relayout)
+    pub fn refresh_sys(&mut self) -> bool {
+        let volume = read_volume();
+        let network = read_network();
+        let kblayout = read_kblayout();
+        let changed = volume != self.volume
+            || network.label != self.network.label
+            || kblayout.short != self.kblayout.short;
+        self.volume = volume;
+        self.network = network;
+        self.kblayout = kblayout;
+        changed
     }
 
     pub fn refresh_workspaces(&mut self) {
@@ -133,7 +167,7 @@ fn read_cpu() -> Option<u8> {
     pct
 }
 
-fn read_ram() -> Option<u8> {
+fn read_ram() -> Option<(u8, (f32, f32))> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
     let mut total = None;
     let mut avail = None;
@@ -149,7 +183,158 @@ fn read_ram() -> Option<u8> {
     if total == 0 {
         return None;
     }
-    Some((100.0 * (1.0 - avail as f64 / total as f64)).clamp(0.0, 100.0) as u8)
+    let pct = (100.0 * (1.0 - avail as f64 / total as f64)).clamp(0.0, 100.0) as u8;
+    let gb = |kb: u64| kb as f32 / 1024.0 / 1024.0;
+    Some((pct, (gb(total - avail), gb(total))))
+}
+
+fn read_network() -> NetworkInfo {
+    if let Some(info) = wifi_info() {
+        return info;
+    }
+    if let Some(label) = ethernet_ip() {
+        return NetworkInfo { label, online: true };
+    }
+    NetworkInfo { label: "Disconnected".to_string(), online: false }
+}
+
+fn wifi_iface() -> Option<String> {
+    let wireless = std::fs::read_to_string("/proc/net/wireless").ok()?;
+    wireless.lines().nth(2)?.split(':').next().map(|s| s.trim().to_string())
+}
+
+fn wifi_info() -> Option<NetworkInfo> {
+    let iface = wifi_iface()?;
+    let mut cmd = std::process::Command::new("iw");
+    cmd.args(["dev", &iface, "link"]);
+    let out = run_with_timeout(cmd, Duration::from_millis(500))?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    if text.contains("Not connected") {
+        return None;
+    }
+    let ssid = text.lines().find_map(|l| l.trim().strip_prefix("SSID: "))?;
+    let dbm: i32 = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("signal: "))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+    let pct = ((dbm + 100) * 2).clamp(0, 100);
+    let mut label = format!("{ssid} ({pct}%)");
+    if label.chars().count() > 24 {
+        label = format!("{}…", label.chars().take(23).collect::<String>());
+    }
+    Some(NetworkInfo { label, online: true })
+}
+
+fn ethernet_ip() -> Option<String> {
+    let mut cmd = std::process::Command::new("ip");
+    cmd.args(["-o", "-4", "addr", "show", "up", "scope", "global"]);
+    let out = run_with_timeout(cmd, Duration::from_millis(500))?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().next()?;
+    let addr = line.split_whitespace().find_map(|t| {
+        if t.contains('/') && t.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            Some(t)
+        } else {
+            None
+        }
+    })?;
+    Some(addr.to_string())
+}
+
+fn read_kblayout() -> KbLayout {
+    if matches!(
+        crate::compositor::Compositor::detect(),
+        crate::compositor::Compositor::Niri
+    ) {
+        let mut cmd = std::process::Command::new("niri");
+        cmd.args(["msg", "-j", "keyboard-layouts"]);
+        if let Some(out) = run_with_timeout(cmd, Duration::from_millis(500))
+            && out.status.success()
+            && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
+            && let Some(names) = v.get("names").and_then(|n| n.as_array())
+        {
+            let idx = v.get("current_idx").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+            let full = names.get(idx).and_then(|n| n.as_str()).unwrap_or("?");
+            return KbLayout { short: kb_short(full) };
+        }
+    }
+    KbLayout { short: "--".to_string() }
+}
+
+fn kb_short(full: &str) -> String {
+    match full {
+        "Spanish (Latin American)" => "ES".to_string(),
+        s if s.starts_with("English") => "EN".to_string(),
+        s => s.chars().take(6).collect(),
+    }
+}
+
+pub fn kblayout_next() {
+    if matches!(
+        crate::compositor::Compositor::detect(),
+        crate::compositor::Compositor::Niri
+    ) {
+        let _ = std::process::Command::new("niri")
+            .args(["msg", "action", "switch-layout", "next"])
+            .spawn();
+    }
+}
+
+pub fn volume_toggle_mute() {
+    let _ = std::process::Command::new("wpctl")
+        .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+        .spawn();
+}
+
+fn home_script(path: &str) -> Option<std::path::PathBuf> {
+    let p = dirs::home_dir()?.join(path);
+    p.exists().then_some(p)
+}
+
+fn spawn_script(path: std::path::PathBuf) {
+    let _ = std::process::Command::new("sh").arg("-c").arg(format!("{} &", path.display())).spawn();
+}
+
+/// waybar parity clicks
+pub fn open_network_settings() {
+    let _ = std::process::Command::new("nmrs").spawn();
+}
+
+pub fn open_system_monitor() {
+    let _ = std::process::Command::new("alacritty").args(["-e", "btop"]).spawn();
+}
+
+pub fn open_bluetooth_manager(fallback_toggle: bool, powered: bool) {
+    if let Some(p) = home_script(".config/waybar/modules/float-bluetui.sh") {
+        spawn_script(p);
+    } else if fallback_toggle {
+        bluetooth_toggle(powered);
+    }
+}
+
+pub fn open_volume_control() {
+    if std::process::Command::new("pavucontrol").spawn().is_err() {
+        volume_toggle_mute();
+    }
+}
+
+/// true si lanzó el rofi externo, false si debe abrir el menú interno
+pub fn open_power_external() -> bool {
+    if let Some(p) = home_script("Scripts/sh-scripts/rofi/rofi-powermenu.sh") {
+        spawn_script(p);
+        true
+    } else {
+        false
+    }
 }
 
 fn hyprctl_json(args: &[&str]) -> Option<serde_json::Value> {

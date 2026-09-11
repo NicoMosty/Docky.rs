@@ -30,7 +30,11 @@ pub fn scan_wallpapers() -> Vec<WallpaperEntry> {
                 .map(|e| matches!(e.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp"))
                 .unwrap_or(false);
             if is_image {
-                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("wallpaper").to_string();
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("wallpaper")
+                    .to_string();
                 found.push(WallpaperEntry { path, name });
             }
         }
@@ -46,7 +50,15 @@ pub fn suggested_dir() -> String {
     candidate_dirs()
         .into_iter()
         .next()
-        .map(|p| p.to_string_lossy().replacen(&dirs::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_default(), "~", 1))
+        .map(|p| {
+            p.to_string_lossy().replacen(
+                &dirs::home_dir()
+                    .map(|h| h.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                "~",
+                1,
+            )
+        })
         .unwrap_or_else(|| "~/Pictures/Wallpapers".to_string())
 }
 
@@ -62,13 +74,23 @@ pub fn apply_wallpaper(path: PathBuf) {
             std::thread::sleep(std::time::Duration::from_millis(700));
         }
         let _ = std::process::Command::new("awww")
-            .args(["img", &path.to_string_lossy(), "--transition-type", "grow", "--transition-duration", "1.0"])
+            .args([
+                "img",
+                &path.to_string_lossy(),
+                "--transition-type",
+                "grow",
+                "--transition-duration",
+                "1.0",
+            ])
             .status();
     });
 }
 
 pub fn current_wallpaper_path() -> Option<PathBuf> {
-    let output = std::process::Command::new("awww").arg("query").output().ok()?;
+    let output = std::process::Command::new("awww")
+        .arg("query")
+        .output()
+        .ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
     let line = text.lines().next()?;
     let path_str = line.split("image: ").nth(1)?.trim();
@@ -91,14 +113,27 @@ pub struct ColorScheme {
 
 pub fn extract_color_scheme(path: &std::path::Path, scheme: &str) -> Option<ColorScheme> {
     let output = std::process::Command::new("matugen")
-        .args(["--type", scheme, "image", &path.to_string_lossy(), "--source-color-index", "0", "--json", "hex", "--mode", "dark"])
+        .args([
+            "--type",
+            scheme,
+            "image",
+            &path.to_string_lossy(),
+            "--source-color-index",
+            "0",
+            "--json",
+            "hex",
+            "--mode",
+            "dark",
+        ])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-    let role = |name: &str| -> Option<(u8, u8, u8)> { hex_to_rgb(json["colors"][name]["dark"]["color"].as_str()?) };
+    let role = |name: &str| -> Option<(u8, u8, u8)> {
+        hex_to_rgb(json["colors"][name]["dark"]["color"].as_str()?)
+    };
     Some(ColorScheme {
         primary: role("primary")?,
         secondary: role("secondary")?,

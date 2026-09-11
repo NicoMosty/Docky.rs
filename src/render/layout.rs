@@ -28,17 +28,39 @@ pub(super) fn layout_widgets(
     let inset = 14.0 * render_scale;
 
     let members_of = |slot: WidgetSlot| -> Vec<crate::config::WidgetKind> {
-        settings.widgets.iter().filter(|p| p.slot == slot).map(|p| p.kind).collect()
+        settings
+            .widgets
+            .iter()
+            .filter(|p| p.slot == slot)
+            .map(|p| p.kind)
+            .collect()
     };
     let lens_of = |members: &[crate::config::WidgetKind]| -> Vec<f32> {
         members
             .iter()
-            .map(|&kind| widget_natural_len(kind, widgets, tray_count, is_vertical, cross_len, render_scale, settings.media_width_scale).max(1.0))
+            .map(|&kind| {
+                widget_natural_len(
+                    kind,
+                    widgets,
+                    tray_count,
+                    is_vertical,
+                    cross_len,
+                    render_scale,
+                    settings.media_width_scale,
+                )
+                .max(1.0)
+            })
             .collect()
     };
-    let block_len = |lens: &[f32]| -> f32 { lens.iter().sum::<f32>() + gap * (lens.len() as f32 - 1.0).max(0.0) };
+    let block_len = |lens: &[f32]| -> f32 {
+        lens.iter().sum::<f32>() + gap * (lens.len() as f32 - 1.0).max(0.0)
+    };
 
-    let place = |slot: WidgetSlot, members: Vec<crate::config::WidgetKind>, lens: Vec<f32>, block_start: f32| -> Vec<WidgetRect> {
+    let place = |slot: WidgetSlot,
+                 members: Vec<crate::config::WidgetKind>,
+                 lens: Vec<f32>,
+                 block_start: f32|
+     -> Vec<WidgetRect> {
         let mut pos = block_start;
         members
             .into_iter()
@@ -47,9 +69,23 @@ pub(super) fn layout_widgets(
                 let start = pos;
                 pos += len + gap;
                 if is_vertical {
-                    WidgetRect { kind, slot, x: 0.0, y: start, w, h: len }
+                    WidgetRect {
+                        kind,
+                        slot,
+                        x: 0.0,
+                        y: start,
+                        w,
+                        h: len,
+                    }
                 } else {
-                    WidgetRect { kind, slot, x: start, y: 0.0, w: len, h }
+                    WidgetRect {
+                        kind,
+                        slot,
+                        x: start,
+                        y: 0.0,
+                        w: len,
+                        h,
+                    }
                 }
             })
             .collect()
@@ -68,16 +104,32 @@ pub(super) fn layout_widgets(
     let mid_members = members_of(WidgetSlot::Middle);
     let mid_lens = lens_of(&mid_members);
     let mid_len = block_len(&mid_lens);
-    let segment_start = if left_len > 0.0 { left_end + gap } else { inset };
-    let segment_end = if right_len > 0.0 { right_start - gap } else { bar_len - inset };
+    let segment_start = if left_len > 0.0 {
+        left_end + gap
+    } else {
+        inset
+    };
+    let segment_end = if right_len > 0.0 {
+        right_start - gap
+    } else {
+        bar_len - inset
+    };
     let gap_center = segment_start + (segment_end - segment_start - mid_len) / 2.0;
     let true_center = (bar_len - mid_len) / 2.0;
     let blended = gap_center + (true_center - gap_center) * 0.8;
-    let mid_start = blended.clamp(segment_start.min(segment_end - mid_len), segment_end - mid_len);
+    let mid_start = blended.clamp(
+        segment_start.min(segment_end - mid_len),
+        segment_end - mid_len,
+    );
 
     let mut out = place(WidgetSlot::Left, left_members, left_lens, inset);
     out.extend(place(WidgetSlot::Middle, mid_members, mid_lens, mid_start));
-    out.extend(place(WidgetSlot::Right, right_members, right_lens, right_start));
+    out.extend(place(
+        WidgetSlot::Right,
+        right_members,
+        right_lens,
+        right_start,
+    ));
     out
 }
 
@@ -102,7 +154,18 @@ pub fn widget_bar_natural_len(
             .widgets
             .iter()
             .filter(|p| p.slot == slot)
-            .map(|p| widget_natural_len(p.kind, widgets, tray_count, is_vertical, cross_len, render_scale, settings.media_width_scale).max(1.0))
+            .map(|p| {
+                widget_natural_len(
+                    p.kind,
+                    widgets,
+                    tray_count,
+                    is_vertical,
+                    cross_len,
+                    render_scale,
+                    settings.media_width_scale,
+                )
+                .max(1.0)
+            })
             .collect();
         if lens.is_empty() {
             0.0
@@ -111,7 +174,11 @@ pub fn widget_bar_natural_len(
         }
     };
 
-    let zones = [zone_len(WidgetSlot::Left), zone_len(WidgetSlot::Middle), zone_len(WidgetSlot::Right)];
+    let zones = [
+        zone_len(WidgetSlot::Left),
+        zone_len(WidgetSlot::Middle),
+        zone_len(WidgetSlot::Right),
+    ];
     let present: Vec<f32> = zones.into_iter().filter(|&len| len > 0.0).collect();
     present.iter().sum::<f32>() + gap * (present.len() as f32 - 1.0).max(0.0) + inset * 2.0
 }
@@ -139,7 +206,9 @@ pub(super) fn widget_natural_len(
             }
         }
         WidgetKind::Battery => {
-            let Some((pct, _)) = widgets.battery else { return 0.0 };
+            let Some((pct, _)) = widgets.battery else {
+                return 0.0;
+            };
             let label = format!("{pct}%");
             if is_vertical {
                 let label_len = text_width_estimate_render(&label, 8.5 * render_scale);
@@ -161,9 +230,13 @@ pub(super) fn widget_natural_len(
             if label.is_empty() {
                 icon_r * 2.0
             } else if is_vertical {
-                icon_r * 2.0 + 8.0 * render_scale + text_width_estimate_render(&label, 8.0 * render_scale)
+                icon_r * 2.0
+                    + 8.0 * render_scale
+                    + text_width_estimate_render(&label, 8.0 * render_scale)
             } else {
-                icon_r * 2.0 + 10.0 * render_scale + text_width_estimate_render(&label, 9.0 * render_scale)
+                icon_r * 2.0
+                    + 10.0 * render_scale
+                    + text_width_estimate_render(&label, 9.0 * render_scale)
             }
         }
         WidgetKind::Tray => {
@@ -175,19 +248,43 @@ pub(super) fn widget_natural_len(
         }
         WidgetKind::Workspaces => workspaces_geometry(&widgets.workspaces, render_scale),
         WidgetKind::Cpu => percentage_widget_len(widgets.cpu, is_vertical, render_scale),
-        WidgetKind::Ram => percentage_widget_len(widgets.ram, is_vertical, render_scale),
+        WidgetKind::Ram => {
+            let label = match widgets.ram_gb {
+                Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),
+                None => match widgets.ram {
+                    Some(pct) => format!("{pct}%"),
+                    None => return 0.0,
+                },
+            };
+            text_widget_len(&label, is_vertical, render_scale)
+        }
+        WidgetKind::Network => text_widget_len(&widgets.network.label, is_vertical, render_scale),
+        WidgetKind::Volume => {
+            let label = match widgets.volume {
+                Some((_, true)) => "MUTE".to_string(),
+                Some((pct, false)) => format!("{pct}%"),
+                None => return 0.0,
+            };
+            text_widget_len(&label, is_vertical, render_scale)
+        }
+        WidgetKind::KbdLayout => {
+            let w = text_width_estimate_render(&widgets.kblayout.short, 9.0 * render_scale);
+            w + 16.0 * render_scale
+        }
     }
 }
 
-pub(super) fn percentage_widget_len(pct: Option<u8>, is_vertical: bool, render_scale: f32) -> f32 {
-    let Some(pct) = pct else { return 0.0 };
-    let label = format!("{pct}%");
+pub(super) fn text_widget_len(label: &str, is_vertical: bool, render_scale: f32) -> f32 {
     let icon_side = 13.0 * render_scale;
     if is_vertical {
-        icon_side + 6.0 * render_scale + text_width_estimate_render(&label, 8.5 * render_scale)
+        icon_side + 6.0 * render_scale + text_width_estimate_render(label, 8.5 * render_scale)
     } else {
-        icon_side + 8.0 * render_scale + text_width_estimate_render(&label, 9.0 * render_scale)
+        icon_side + 8.0 * render_scale + text_width_estimate_render(label, 9.0 * render_scale)
     }
+}
+pub(super) fn percentage_widget_len(pct: Option<u8>, is_vertical: bool, render_scale: f32) -> f32 {
+    let Some(pct) = pct else { return 0.0 };
+    text_widget_len(&format!("{pct}%"), is_vertical, render_scale)
 }
 pub(super) fn draw_widgets(
     pixmap: &mut Pixmap,
@@ -211,20 +308,44 @@ pub(super) fn draw_widgets(
     let render_scale = render_scale * s.widget_scale;
     let accent = (s.accent_r, s.accent_g, s.accent_b, 255);
     // ----- skip accent blend -----
-    let blend = |base: u8, tint: u8, frac: f32| (base as f32 * (1.0 - frac) + tint as f32 * frac) as u8;
+    let blend =
+        |base: u8, tint: u8, frac: f32| (base as f32 * (1.0 - frac) + tint as f32 * frac) as u8;
     let (text_rgb, text_dim_rgb) = if s.custom_theme {
-        ((s.text_r, s.text_g, s.text_b), (s.text_dim_r, s.text_dim_g, s.text_dim_b))
+        (
+            (s.text_r, s.text_g, s.text_b),
+            (s.text_dim_r, s.text_dim_g, s.text_dim_b),
+        )
     } else {
         (
-            (blend(s.text_r, s.accent_r, 0.45), blend(s.text_g, s.accent_g, 0.45), blend(s.text_b, s.accent_b, 0.45)),
-            (blend(s.text_r, s.accent2_r, 0.65), blend(s.text_g, s.accent2_g, 0.65), blend(s.text_b, s.accent2_b, 0.65)),
+            (
+                blend(s.text_r, s.accent_r, 0.45),
+                blend(s.text_g, s.accent_g, 0.45),
+                blend(s.text_b, s.accent_b, 0.45),
+            ),
+            (
+                blend(s.text_r, s.accent2_r, 0.65),
+                blend(s.text_g, s.accent2_g, 0.65),
+                blend(s.text_b, s.accent2_b, 0.65),
+            ),
         )
     };
     let text_color = format!("#{:02x}{:02x}{:02x}", text_rgb.0, text_rgb.1, text_rgb.2);
-    let text_dim_color = format!("#{:02x}{:02x}{:02x}", text_dim_rgb.0, text_dim_rgb.1, text_dim_rgb.2);
-    let colors = WidgetColors { accent, text_rgb, text_color: &text_color, text_dim_color: &text_dim_color };
+    let text_dim_color = format!(
+        "#{:02x}{:02x}{:02x}",
+        text_dim_rgb.0, text_dim_rgb.1, text_dim_rgb.2
+    );
+    let colors = WidgetColors {
+        accent,
+        text_rgb,
+        text_color: &text_color,
+        text_dim_color: &text_dim_color,
+    };
 
-    let key = widgets.media.as_ref().map(|m| m.title.clone()).unwrap_or_else(|| "Nothing is playing".to_string());
+    let key = widgets
+        .media
+        .as_ref()
+        .map(|m| m.title.clone())
+        .unwrap_or_else(|| "Nothing is playing".to_string());
     if marquee.key != key {
         marquee.key = key;
         marquee.title = MarqueeLane::default();
@@ -235,43 +356,208 @@ pub(super) fn draw_widgets(
     let mut animating = false;
     for r in layout_widgets(s, widgets, tray_count, is_vertical, w, h, render_scale) {
         match r.kind {
-            WidgetKind::Clock => draw_clock_widget(pixmap, text_cache, widgets, r.x, r.y, r.w, r.h, render_scale, &colors, is_vertical),
-            WidgetKind::Battery => draw_battery_widget(pixmap, text_cache, widgets, r.x, r.y, r.w, r.h, render_scale, &colors, is_vertical),
+            WidgetKind::Clock => draw_clock_widget(
+                pixmap,
+                text_cache,
+                widgets,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                &colors,
+                is_vertical,
+            ),
+            WidgetKind::Battery => draw_battery_widget(
+                pixmap,
+                text_cache,
+                widgets,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                &colors,
+                is_vertical,
+            ),
             WidgetKind::Media => {
                 let mirrored = r.slot == crate::config::WidgetSlot::Right;
                 let bar_len = if is_vertical { h } else { w };
                 animating |= draw_media_widget(
-                    pixmap, icon_cache, text_cache, widgets, marquee, advance, r.x, r.y, r.w, r.h, render_scale, &colors, is_vertical, mirrored,
-                    bar_len, s.media_smooth_scroll, s.media_width_scale,
+                    pixmap,
+                    icon_cache,
+                    text_cache,
+                    widgets,
+                    marquee,
+                    advance,
+                    r.x,
+                    r.y,
+                    r.w,
+                    r.h,
+                    render_scale,
+                    &colors,
+                    is_vertical,
+                    mirrored,
+                    bar_len,
+                    s.media_smooth_scroll,
+                    s.media_width_scale,
                 );
             }
-            WidgetKind::PowerMenu => draw_power_widget(pixmap, r.x, r.y, r.w, r.h, render_scale, &colors, is_vertical),
-            WidgetKind::Bluetooth => {
-                draw_bluetooth_widget(pixmap, text_cache, widgets, r.x, r.y, r.w, r.h, render_scale, &colors, is_vertical)
-            }
-            WidgetKind::Tray => draw_tray_widget(pixmap, icon_cache, tray, r.x, r.y, r.w, r.h, render_scale, is_vertical),
+            WidgetKind::PowerMenu => draw_power_widget(
+                pixmap,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                &colors,
+                is_vertical,
+            ),
+            WidgetKind::Bluetooth => draw_bluetooth_widget(
+                pixmap,
+                text_cache,
+                widgets,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                &colors,
+                is_vertical,
+            ),
+            WidgetKind::Tray => draw_tray_widget(
+                pixmap,
+                icon_cache,
+                tray,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                is_vertical,
+            ),
             WidgetKind::Workspaces => {
-                draw_workspaces_widget(pixmap, &widgets.workspaces, marquee, advance_ws, r.x, r.y, r.w, r.h, render_scale, &colors, is_vertical);
+                draw_workspaces_widget(
+                    pixmap,
+                    &widgets.workspaces,
+                    marquee,
+                    advance_ws,
+                    r.x,
+                    r.y,
+                    r.w,
+                    r.h,
+                    render_scale,
+                    &colors,
+                    is_vertical,
+                );
             }
-            WidgetKind::Cpu => draw_cpu_widget(pixmap, text_cache, widgets, r.x, r.y, r.w, r.h, render_scale, &colors, is_vertical),
-            WidgetKind::Ram => draw_ram_widget(pixmap, text_cache, widgets, r.x, r.y, r.w, r.h, render_scale, &colors, is_vertical),
+            WidgetKind::Cpu => draw_cpu_widget(
+                pixmap,
+                text_cache,
+                widgets,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                &colors,
+                is_vertical,
+            ),
+            WidgetKind::Ram => draw_ram_widget(
+                pixmap,
+                text_cache,
+                widgets,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                &colors,
+                is_vertical,
+            ),
+            WidgetKind::Network => draw_network_widget(
+                pixmap,
+                text_cache,
+                widgets,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                &colors,
+                is_vertical,
+            ),
+            WidgetKind::Volume => draw_volume_widget(
+                pixmap,
+                text_cache,
+                widgets,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                &colors,
+                is_vertical,
+            ),
+            WidgetKind::KbdLayout => draw_kblayout_widget(
+                pixmap,
+                text_cache,
+                widgets,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                render_scale,
+                &colors,
+                is_vertical,
+            ),
         }
     }
     animating
 }
 
-pub fn widget_hit_test(dock: &Dock, widgets: &WidgetSnapshot, tray_count: usize, x: f64, y: f64) -> Option<crate::config::WidgetKind> {
+pub fn widget_hit_test(
+    dock: &Dock,
+    widgets: &WidgetSnapshot,
+    tray_count: usize,
+    x: f64,
+    y: f64,
+) -> Option<crate::config::WidgetKind> {
     let (base_w, base_h) = dock.base_size();
     let is_vertical = dock.is_vertical();
-    let rects = layout_widgets(&dock.config.settings, widgets, tray_count, is_vertical, base_w as f32, base_h as f32, 1.0);
+    let rects = layout_widgets(
+        &dock.config.settings,
+        widgets,
+        tray_count,
+        is_vertical,
+        base_w as f32,
+        base_h as f32,
+        1.0,
+    );
     let (xf, yf) = (x as f32, y as f32);
-    rects.into_iter().find(|r| xf >= r.x && xf < r.x + r.w && yf >= r.y && yf < r.y + r.h).map(|r| r.kind)
+    rects
+        .into_iter()
+        .find(|r| xf >= r.x && xf < r.x + r.w && yf >= r.y && yf < r.y + r.h)
+        .map(|r| r.kind)
 }
 
-pub fn widget_center(dock: &Dock, widgets: &WidgetSnapshot, tray_count: usize, kind: crate::config::WidgetKind) -> Option<(f32, f32)> {
+pub fn widget_center(
+    dock: &Dock,
+    widgets: &WidgetSnapshot,
+    tray_count: usize,
+    kind: crate::config::WidgetKind,
+) -> Option<(f32, f32)> {
     let (base_w, base_h) = dock.base_size();
     let is_vertical = dock.is_vertical();
-    let rects = layout_widgets(&dock.config.settings, widgets, tray_count, is_vertical, base_w as f32, base_h as f32, 1.0);
+    let rects = layout_widgets(
+        &dock.config.settings,
+        widgets,
+        tray_count,
+        is_vertical,
+        base_w as f32,
+        base_h as f32,
+        1.0,
+    );
     let r = rects.into_iter().find(|r| r.kind == kind)?;
     Some((r.x + r.w / 2.0, r.y + r.h / 2.0))
 }

@@ -2,32 +2,32 @@ use crate::desktop::DesktopEntry;
 use crate::dock::Dock;
 use crate::icon_cache::IconCache;
 use crate::menu::{
-    ButtonKind, Control, ControlKind, HitTarget, MenuScreen, OsdKind, WallpaperHit, MENU_PADDING, STEP_BTN_SIZE, WALLPAPER_BACK_ZONE_W,
-    WALLPAPER_GAP, WALLPAPER_PADDING,
+    ButtonKind, Control, ControlKind, HitTarget, MENU_PADDING, MenuScreen, OsdKind, STEP_BTN_SIZE,
+    WALLPAPER_BACK_ZONE_W, WALLPAPER_GAP, WALLPAPER_PADDING, WallpaperHit,
 };
 use crate::text::TextCache;
 use crate::thumbnail_cache::ThumbnailCache;
 use crate::wallpaper::WallpaperEntry;
 use tiny_skia::{Paint, Pixmap, Rect, Transform};
 mod app_search;
-mod controls;
-mod dropdowns;
-mod theme_picker;
-mod dock_menu;
-mod wallpaper;
-mod osd;
-mod notification;
 mod clipboard;
+mod controls;
+mod dock_menu;
+mod dropdowns;
+mod notification;
+mod osd;
+mod theme_picker;
+mod wallpaper;
 
 pub use app_search::*;
-use controls::*;
-use dropdowns::*;
-use theme_picker::*;
-pub use dock_menu::*;
-use wallpaper::*;
-pub use osd::*;
-pub use notification::*;
 pub use clipboard::*;
+use controls::*;
+pub use dock_menu::*;
+use dropdowns::*;
+pub use notification::*;
+pub use osd::*;
+use theme_picker::*;
+use wallpaper::*;
 fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> tiny_skia::Path {
     let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
     let mut pb = tiny_skia::PathBuilder::new();
@@ -45,7 +45,14 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> tiny_skia::Path 
 }
 
 // ----- sharp edge -----
-fn flat_side_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32, flat: crate::config::DockEdge) -> tiny_skia::Path {
+fn flat_side_rect_path(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    r: f32,
+    flat: crate::config::DockEdge,
+) -> tiny_skia::Path {
     use crate::config::DockEdge;
     let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
     let mut pb = tiny_skia::PathBuilder::new();
@@ -87,7 +94,15 @@ fn flat_side_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32, flat: crate::conf
     pb.finish().unwrap()
 }
 
-fn fill_rrect(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32, color: (u8, u8, u8, u8)) {
+fn fill_rrect(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    r: f32,
+    color: (u8, u8, u8, u8),
+) {
     if w <= 0.0 || h <= 0.0 {
         return;
     }
@@ -95,7 +110,13 @@ fn fill_rrect(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32, color
     paint.set_color_rgba8(color.0, color.1, color.2, color.3);
     paint.anti_alias = true;
     let path = rounded_rect_path(x, y, w, h, r);
-    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }
 
 fn fill_circle(pixmap: &mut Pixmap, cx: f32, cy: f32, r: f32, color: (u8, u8, u8, u8)) {
@@ -106,14 +127,39 @@ fn centered_text_y(row_height: f32, size: f32) -> f32 {
     (row_height * 0.5 - size * 0.75).max(0.0)
 }
 
-fn draw_text(pixmap: &mut Pixmap, text_cache: &mut TextCache, text: &str, x: f32, y: f32, size: f32, color: &str, weight: u16) {
+fn draw_text(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    text: &str,
+    x: f32,
+    y: f32,
+    size: f32,
+    color: &str,
+    weight: u16,
+) {
     if let Some(glyphs) = text_cache.get(text, size, color, weight) {
         let paint = tiny_skia::PixmapPaint::default();
-        pixmap.draw_pixmap(0, 0, glyphs.as_ref().as_ref(), &paint, Transform::from_translate(x, y), None);
+        pixmap.draw_pixmap(
+            0,
+            0,
+            glyphs.as_ref().as_ref(),
+            &paint,
+            Transform::from_translate(x, y),
+            None,
+        );
     }
 }
 
-fn draw_value_rtl(pixmap: &mut Pixmap, text_cache: &mut TextCache, text: &str, right_x: f32, y: f32, size: f32, color: &str, weight: u16) {
+fn draw_value_rtl(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    text: &str,
+    right_x: f32,
+    y: f32,
+    size: f32,
+    color: &str,
+    weight: u16,
+) {
     let mut x = right_x;
     let mut buf = [0u8; 4];
     for ch in text.chars().rev() {
@@ -121,7 +167,14 @@ fn draw_value_rtl(pixmap: &mut Pixmap, text_cache: &mut TextCache, text: &str, r
         if let Some(glyph) = text_cache.get(s, size, color, weight) {
             x -= glyph.width() as f32;
             let paint = tiny_skia::PixmapPaint::default();
-            pixmap.draw_pixmap(0, 0, glyph.as_ref().as_ref(), &paint, Transform::from_translate(x, y), None);
+            pixmap.draw_pixmap(
+                0,
+                0,
+                glyph.as_ref().as_ref(),
+                &paint,
+                Transform::from_translate(x, y),
+                None,
+            );
         }
     }
 }
@@ -135,16 +188,29 @@ fn accent(settings: &crate::config::DockSettings) -> (u8, u8, u8, u8) {
 }
 
 fn accent_hex(settings: &crate::config::DockSettings) -> String {
-    format!("#{:02x}{:02x}{:02x}", settings.accent_r, settings.accent_g, settings.accent_b)
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        settings.accent_r, settings.accent_g, settings.accent_b
+    )
 }
 
 // ----- matugen secondary -----
 fn track_bg(settings: &crate::config::DockSettings) -> (u8, u8, u8, u8) {
-    (settings.accent2_r, settings.accent2_g, settings.accent2_b, 35)
+    (
+        settings.accent2_r,
+        settings.accent2_g,
+        settings.accent2_b,
+        35,
+    )
 }
 
 fn accent2_soft(settings: &crate::config::DockSettings) -> (u8, u8, u8, u8) {
-    (settings.accent2_r, settings.accent2_g, settings.accent2_b, 40)
+    (
+        settings.accent2_r,
+        settings.accent2_g,
+        settings.accent2_b,
+        40,
+    )
 }
 
 fn blend_u8(base: u8, tint: u8, amount: f32) -> u8 {
@@ -167,11 +233,19 @@ fn text_dim_hex(settings: &crate::config::DockSettings) -> String {
 }
 
 fn on_accent_hex(settings: &crate::config::DockSettings) -> String {
-    format!("#{:02x}{:02x}{:02x}", settings.on_accent_r, settings.on_accent_g, settings.on_accent_b)
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        settings.on_accent_r, settings.on_accent_g, settings.on_accent_b
+    )
 }
 
 fn panel_bg(settings: &crate::config::DockSettings) -> (u8, u8, u8, u8) {
-    (settings.panel_r, settings.panel_g, settings.panel_b, (255.0 * settings.transparency) as u8)
+    (
+        settings.panel_r,
+        settings.panel_g,
+        settings.panel_b,
+        (255.0 * settings.transparency) as u8,
+    )
 }
 pub struct DrawArgs<'a> {
     pub screen: MenuScreen,
@@ -198,7 +272,13 @@ pub struct DrawArgs<'a> {
     pub custom_panel_blend: Option<u8>,
     pub tray_items: &'a [crate::tray::TrayMenuItem],
 }
-pub fn draw_content(pixmap: &mut Pixmap, icon_cache: &mut IconCache, text_cache: &mut TextCache, thumb_cache: &ThumbnailCache, args: &DrawArgs) {
+pub fn draw_content(
+    pixmap: &mut Pixmap,
+    icon_cache: &mut IconCache,
+    text_cache: &mut TextCache,
+    thumb_cache: &ThumbnailCache,
+    args: &DrawArgs,
+) {
     let s = args.render_scale;
     let w = args.panel_width * s;
     let h = args.content_height * s;
@@ -209,12 +289,25 @@ pub fn draw_content(pixmap: &mut Pixmap, icon_cache: &mut IconCache, text_cache:
     let path = if is_wallpaper_picker {
         rounded_rect_path(0.0, 0.0, w, h, settings.corner_radius * s)
     } else {
-        flat_side_rect_path(0.0, 0.0, w, h, settings.corner_radius * s, settings.dock_edge)
+        flat_side_rect_path(
+            0.0,
+            0.0,
+            w,
+            h,
+            settings.corner_radius * s,
+            settings.dock_edge,
+        )
     };
     let mut paint = Paint::default();
     paint.set_color_rgba8(bg.0, bg.1, bg.2, bg.3);
     paint.anti_alias = true;
-    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 
     if is_wallpaper_picker {
         draw_wallpaper_filmstrip(pixmap, thumb_cache, text_cache, args);
@@ -231,7 +324,13 @@ fn truncate_label(name: &str, max_chars: usize) -> String {
         format!("{truncated}\u{2026}")
     }
 }
-fn draw_control_rows(pixmap: &mut Pixmap, icon_cache: &mut IconCache, text_cache: &mut TextCache, controls: &[Control], args: &DrawArgs) {
+fn draw_control_rows(
+    pixmap: &mut Pixmap,
+    icon_cache: &mut IconCache,
+    text_cache: &mut TextCache,
+    controls: &[Control],
+    args: &DrawArgs,
+) {
     let s = args.render_scale;
     let settings = &args.dock.config.settings;
     for control in controls {
@@ -239,11 +338,29 @@ fn draw_control_rows(pixmap: &mut Pixmap, icon_cache: &mut IconCache, text_cache
         match control.kind {
             ControlKind::Section(label) => {
                 let ty = y + centered_text_y(control.height, 9.5) * s;
-                draw_text(pixmap, text_cache, label, MENU_PADDING * s, ty, 9.5 * s, &text_dim_hex(settings), 600);
+                draw_text(
+                    pixmap,
+                    text_cache,
+                    label,
+                    MENU_PADDING * s,
+                    ty,
+                    9.5 * s,
+                    &text_dim_hex(settings),
+                    600,
+                );
             }
             ControlKind::Note(text) => {
                 let ty = y + centered_text_y(control.height, 7.5) * s;
-                draw_text(pixmap, text_cache, text, MENU_PADDING * s, ty, 7.5 * s, &text_dim_hex(settings), 400);
+                draw_text(
+                    pixmap,
+                    text_cache,
+                    text,
+                    MENU_PADDING * s,
+                    ty,
+                    7.5 * s,
+                    &text_dim_hex(settings),
+                    400,
+                );
             }
             ControlKind::IconHeader(index) => {
                 let name = args
@@ -253,34 +370,63 @@ fn draw_control_rows(pixmap: &mut Pixmap, icon_cache: &mut IconCache, text_cache
                     .map(|i| i.app.name.as_str())
                     .unwrap_or("App");
                 let ty = y + centered_text_y(control.height, 10.5) * s;
-                draw_text(pixmap, text_cache, name, MENU_PADDING * s, ty, 10.5 * s, &text_hex(settings), 700);
+                draw_text(
+                    pixmap,
+                    text_cache,
+                    name,
+                    MENU_PADDING * s,
+                    ty,
+                    10.5 * s,
+                    &text_hex(settings),
+                    700,
+                );
             }
             ControlKind::Slider(id) => draw_slider(pixmap, text_cache, control, id, args, y),
             ControlKind::Toggle(id) => draw_toggle(pixmap, text_cache, control, id, args, y),
             ControlKind::Button(kind) => draw_button(pixmap, text_cache, control, kind, args, y),
-            ControlKind::AppEntry(index) => draw_app_entry(pixmap, icon_cache, text_cache, control, index, args, y),
+            ControlKind::AppEntry(index) => {
+                draw_app_entry(pixmap, icon_cache, text_cache, control, index, args, y)
+            }
             ControlKind::SearchBox => draw_search_box(pixmap, text_cache, control, args, y),
-            ControlKind::IconChoice(index) => draw_icon_choice(pixmap, icon_cache, text_cache, control, index, args, y),
+            ControlKind::IconChoice(index) => {
+                draw_icon_choice(pixmap, icon_cache, text_cache, control, index, args, y)
+            }
             ControlKind::EdgePicker => draw_edge_picker(pixmap, text_cache, control, args, y),
             ControlKind::WidgetChips => draw_widget_chips(pixmap, text_cache, control, args, y),
             ControlKind::ThemePicker => draw_theme_picker(pixmap, text_cache, control, args, y),
-            ControlKind::SchemeDropdown => draw_scheme_dropdown(pixmap, text_cache, control, args, y),
+            ControlKind::SchemeDropdown => {
+                draw_scheme_dropdown(pixmap, text_cache, control, args, y)
+            }
             ControlKind::DockFontDropdown => {
                 let is_open = matches!(args.open_dropdown, crate::menu::OpenDropdown::DockFont);
-                let hot = matches!(args.hovered, Some(HitTarget::DockFontDropdownToggle)) || is_open;
-                let display = if is_open && !args.font_query.is_empty() { args.font_query.to_string() } else { args.dock.config.settings.dock_font.clone() };
+                let hot =
+                    matches!(args.hovered, Some(HitTarget::DockFontDropdownToggle)) || is_open;
+                let display = if is_open && !args.font_query.is_empty() {
+                    args.font_query.to_string()
+                } else {
+                    args.dock.config.settings.dock_font.clone()
+                };
                 draw_font_dropdown(pixmap, text_cache, control, args, y, hot, &display);
             }
             ControlKind::SystemFontDropdown => {
                 let is_open = matches!(args.open_dropdown, crate::menu::OpenDropdown::SystemFont);
-                let hot = matches!(args.hovered, Some(HitTarget::SystemFontDropdownToggle)) || is_open;
-                let display = if is_open && !args.font_query.is_empty() { args.font_query.to_string() } else { args.dock.config.settings.system_font.clone() };
+                let hot =
+                    matches!(args.hovered, Some(HitTarget::SystemFontDropdownToggle)) || is_open;
+                let display = if is_open && !args.font_query.is_empty() {
+                    args.font_query.to_string()
+                } else {
+                    args.dock.config.settings.system_font.clone()
+                };
                 draw_font_dropdown(pixmap, text_cache, control, args, y, hot, &display);
             }
             ControlKind::HexField(i) => draw_hex_field(pixmap, text_cache, control, args, y, i),
             ControlKind::NameField => draw_name_field(pixmap, text_cache, control, args, y),
-            ControlKind::PaletteModePicker => draw_palette_mode_picker(pixmap, text_cache, control, args, y),
-            ControlKind::PanelBlendPicker => draw_panel_blend_picker(pixmap, text_cache, control, args, y),
+            ControlKind::PaletteModePicker => {
+                draw_palette_mode_picker(pixmap, text_cache, control, args, y)
+            }
+            ControlKind::PanelBlendPicker => {
+                draw_panel_blend_picker(pixmap, text_cache, control, args, y)
+            }
             ControlKind::TrayItem(i) => draw_tray_item(pixmap, text_cache, control, i, args, y),
             ControlKind::TraySeparator => draw_tray_separator(pixmap, control, args, y),
             ControlKind::AlignPicker => draw_align_picker(pixmap, text_cache, control, args, y),

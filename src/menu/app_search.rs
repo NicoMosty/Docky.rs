@@ -9,7 +9,11 @@ pub const APP_CARD_ROW_H: f32 = 78.0;
 pub const APP_SEARCH_VERTICAL_VISIBLE: f32 = 5.0;
 
 pub fn build_app_search_controls() -> (Vec<Control>, f32) {
-    let controls = vec![Control { kind: ControlKind::SearchBox, y: MENU_PADDING, height: SEARCH_BOX_HEIGHT }];
+    let controls = vec![Control {
+        kind: ControlKind::SearchBox,
+        y: MENU_PADDING,
+        height: SEARCH_BOX_HEIGHT,
+    }];
     let fixed_h = MENU_PADDING + SEARCH_BOX_HEIGHT + ROW_GAP + APP_CARD_ROW_H + MENU_PADDING;
     (controls, fixed_h)
 }
@@ -48,7 +52,15 @@ pub fn app_search_viewport_along(panel_w: f32, panel_h: f32, is_vertical: bool) 
     }
 }
 
-pub fn app_search_strip_hit_test(count: usize, panel_w: f32, panel_h: f32, is_vertical: bool, scroll: f32, x: f32, y: f32) -> Option<usize> {
+pub fn app_search_strip_hit_test(
+    count: usize,
+    panel_w: f32,
+    panel_h: f32,
+    is_vertical: bool,
+    scroll: f32,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
     let row_y = app_search_strip_y();
     let local_along = if is_vertical {
         if x < 0.0 || x > panel_w || y < row_y || y > panel_h {

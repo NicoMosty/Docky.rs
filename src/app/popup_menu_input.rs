@@ -1,7 +1,12 @@
 use super::*;
 
 impl App {
-    pub(super) fn handle_menu_click(&mut self, hit: Option<menu::HitTarget>, x: f32, qh: &QueueHandle<Self>) {
+    pub(super) fn handle_menu_click(
+        &mut self,
+        hit: Option<menu::HitTarget>,
+        x: f32,
+        qh: &QueueHandle<Self>,
+    ) {
         use menu::HitTarget;
         match hit {
             Some(HitTarget::Toggle(id)) => {
@@ -56,7 +61,9 @@ impl App {
         match kind {
             menu::ButtonKind::AddApp => self.switch_menu_screen(menu::MenuScreen::AddApp, qh),
             menu::ButtonKind::Back => {
-                if let Some(menu::MenuScreen::IconPicker(idx)) = self.menu.as_ref().map(|m| m.screen) {
+                if let Some(menu::MenuScreen::IconPicker(idx)) =
+                    self.menu.as_ref().map(|m| m.screen)
+                {
                     self.switch_menu_screen(menu::MenuScreen::IconMenu(idx), qh);
                 } else {
                     self.close_menu(qh);
@@ -64,12 +71,14 @@ impl App {
             }
             menu::ButtonKind::QuitDock => self.exit = true,
             menu::ButtonKind::ChangeIcon => {
-                if let Some(menu::MenuScreen::IconMenu(idx)) = self.menu.as_ref().map(|m| m.screen) {
+                if let Some(menu::MenuScreen::IconMenu(idx)) = self.menu.as_ref().map(|m| m.screen)
+                {
                     self.open_icon_picker(idx, qh);
                 }
             }
             menu::ButtonKind::RemoveApp => {
-                if let Some(menu::MenuScreen::IconMenu(idx)) = self.menu.as_ref().map(|m| m.screen) {
+                if let Some(menu::MenuScreen::IconMenu(idx)) = self.menu.as_ref().map(|m| m.screen)
+                {
                     self.dock.remove_icon(idx);
                     if let Err(err) = self.dock.config.save() {
                         log::warn!("failed to save dock config: {err}");
@@ -101,11 +110,15 @@ impl App {
     }
 
     pub(super) fn add_app_from_entry(&mut self, index: usize, qh: &QueueHandle<Self>) {
-        let entry = self.menu.as_ref().and_then(|m| m.filtered_app_entries.get(index)).map(|e| PinnedApp {
-            name: e.name.clone(),
-            icon: e.icon.clone(),
-            exec: e.exec.clone(),
-        });
+        let entry = self
+            .menu
+            .as_ref()
+            .and_then(|m| m.filtered_app_entries.get(index))
+            .map(|e| PinnedApp {
+                name: e.name.clone(),
+                icon: e.icon.clone(),
+                exec: e.exec.clone(),
+            });
         if let Some(app) = entry {
             self.dock.add_app(app);
             if let Err(err) = self.dock.config.save() {
@@ -133,13 +146,18 @@ impl App {
             menu.hovered = None;
             menu.list_scroll = 0;
             menu.list_selected = 0;
-            menu.layer.set_size(menu::MENU_WIDTH as u32, content_height as u32);
+            menu.layer
+                .set_size(menu::MENU_WIDTH as u32, content_height as u32);
         }
         self.request_menu_redraw(qh);
     }
 
     pub(super) fn choose_icon(&mut self, filtered_index: usize, qh: &QueueHandle<Self>) {
-        let chosen = self.menu.as_ref().and_then(|m| m.filtered_icon_names.get(filtered_index)).cloned();
+        let chosen = self
+            .menu
+            .as_ref()
+            .and_then(|m| m.filtered_icon_names.get(filtered_index))
+            .cloned();
         let target = self.menu.as_ref().and_then(|m| match m.screen {
             menu::MenuScreen::IconPicker(idx) => Some(idx),
             _ => None,
@@ -168,12 +186,14 @@ impl App {
             .filter(|e| query.is_empty() || e.name.to_lowercase().contains(&query))
             .cloned()
             .collect();
-        let (controls, content_height) = menu::build_controls(menu.screen, menu.filtered_app_entries.len(), 0);
+        let (controls, content_height) =
+            menu::build_controls(menu.screen, menu.filtered_app_entries.len(), 0);
         menu.controls = controls;
         menu.content_height = content_height;
         menu.list_scroll = 0;
         menu.list_selected = 0;
-        menu.layer.set_size(menu::MENU_WIDTH as u32, content_height as u32);
+        menu.layer
+            .set_size(menu::MENU_WIDTH as u32, content_height as u32);
         self.request_menu_redraw(qh);
     }
 
@@ -192,19 +212,23 @@ impl App {
             .take(200)
             .cloned()
             .collect();
-        let (controls, content_height) = menu::build_controls(menu.screen, menu.filtered_icon_names.len(), 0);
+        let (controls, content_height) =
+            menu::build_controls(menu.screen, menu.filtered_icon_names.len(), 0);
         menu.controls = controls;
         menu.content_height = content_height;
         menu.list_scroll = 0;
         menu.list_selected = 0;
-        menu.layer.set_size(menu::MENU_WIDTH as u32, content_height as u32);
+        menu.layer
+            .set_size(menu::MENU_WIDTH as u32, content_height as u32);
         self.request_menu_redraw(qh);
     }
 
     pub(super) fn list_len_for_screen(&self, screen: menu::MenuScreen) -> Option<usize> {
         match screen {
             menu::MenuScreen::AddApp => self.menu.as_ref().map(|m| m.filtered_app_entries.len()),
-            menu::MenuScreen::IconPicker(_) => self.menu.as_ref().map(|m| m.filtered_icon_names.len()),
+            menu::MenuScreen::IconPicker(_) => {
+                self.menu.as_ref().map(|m| m.filtered_icon_names.len())
+            }
             _ => None,
         }
     }
@@ -222,7 +246,8 @@ impl App {
         if let Some(menu) = self.menu.as_mut() {
             menu.controls = controls;
             menu.content_height = content_height;
-            menu.layer.set_size(menu::MENU_WIDTH as u32, content_height as u32);
+            menu.layer
+                .set_size(menu::MENU_WIDTH as u32, content_height as u32);
         }
         self.request_menu_redraw(qh);
     }
@@ -258,35 +283,38 @@ impl App {
 
     pub(super) fn handle_search_key(&mut self, event: KeyEvent, qh: &QueueHandle<Self>) {
         let screen = self.menu.as_ref().map(|m| m.screen);
-        if let Some(screen) = screen {
-            if self.list_len_for_screen(screen).is_some() {
-                match event.keysym {
-                    Keysym::Down => {
-                        self.move_menu_list_selection(1, qh);
-                        return;
-                    }
-                    Keysym::Up => {
-                        self.move_menu_list_selection(-1, qh);
-                        return;
-                    }
-                    Keysym::Return => {
-                        let selected = self.menu.as_ref().map(|m| m.list_selected);
-                        if let Some(selected) = selected {
-                            match screen {
-                                menu::MenuScreen::AddApp => self.add_app_from_entry(selected, qh),
-                                menu::MenuScreen::IconPicker(_) => self.choose_icon(selected, qh),
-                                _ => {}
-                            }
-                        }
-                        return;
-                    }
-                    _ => {}
+        if let Some(screen) = screen
+            && self.list_len_for_screen(screen).is_some()
+        {
+            match event.keysym {
+                Keysym::Down => {
+                    self.move_menu_list_selection(1, qh);
+                    return;
                 }
+                Keysym::Up => {
+                    self.move_menu_list_selection(-1, qh);
+                    return;
+                }
+                Keysym::Return => {
+                    let selected = self.menu.as_ref().map(|m| m.list_selected);
+                    if let Some(selected) = selected {
+                        match screen {
+                            menu::MenuScreen::AddApp => self.add_app_from_entry(selected, qh),
+                            menu::MenuScreen::IconPicker(_) => self.choose_icon(selected, qh),
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
+                _ => {}
             }
         }
 
         let screen = self.menu.as_ref().map(|m| m.screen);
-        let has_search_box = matches!(screen, Some(menu::MenuScreen::IconPicker(_)) | Some(menu::MenuScreen::AddApp));
+        let has_search_box = matches!(
+            screen,
+            Some(menu::MenuScreen::IconPicker(_)) | Some(menu::MenuScreen::AddApp)
+        );
         if !has_search_box {
             return;
         }
@@ -311,7 +339,11 @@ impl App {
             _ => {}
         }
     }
-    pub(super) fn handle_menu_pointer_event(&mut self, event: &PointerEvent, qh: &QueueHandle<Self>) {
+    pub(super) fn handle_menu_pointer_event(
+        &mut self,
+        event: &PointerEvent,
+        qh: &QueueHandle<Self>,
+    ) {
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 let (x, y) = event.position;
@@ -329,9 +361,16 @@ impl App {
                         self.on_setting_changed(id, qh, false);
                     }
                 } else if let Some(menu) = self.menu.as_mut() {
-                    menu.hovered = menu::hit_test(&menu.controls, &self.dock.config.settings, menu::MENU_WIDTH, x as f32, y as f32);
+                    menu.hovered = menu::hit_test(
+                        &menu.controls,
+                        &self.dock.config.settings,
+                        menu::MENU_WIDTH,
+                        x as f32,
+                        y as f32,
+                    );
                     match menu.hovered {
-                        Some(menu::HitTarget::AppEntry(i)) | Some(menu::HitTarget::IconChoice(i)) => menu.list_selected = i,
+                        Some(menu::HitTarget::AppEntry(i))
+                        | Some(menu::HitTarget::IconChoice(i)) => menu.list_selected = i,
                         _ => {}
                     }
                 }
@@ -345,14 +384,22 @@ impl App {
             }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
                 let (x, y) = event.position;
-                let hit = self
-                    .menu
-                    .as_ref()
-                    .and_then(|m| menu::hit_test(&m.controls, &self.dock.config.settings, menu::MENU_WIDTH, x as f32, y as f32));
+                let hit = self.menu.as_ref().and_then(|m| {
+                    menu::hit_test(
+                        &m.controls,
+                        &self.dock.config.settings,
+                        menu::MENU_WIDTH,
+                        x as f32,
+                        y as f32,
+                    )
+                });
                 self.handle_menu_click(hit, x as f32, qh);
             }
             PointerEventKind::Release { button, .. } if button == BTN_LEFT => {
-                let active = self.menu.as_ref().and_then(|m| m.dragging_slider.or(m.held_stepper.map(|(id, _, _)| id)));
+                let active = self
+                    .menu
+                    .as_ref()
+                    .and_then(|m| m.dragging_slider.or(m.held_stepper.map(|(id, _, _)| id)));
                 if let Some(menu) = self.menu.as_mut() {
                     menu.dragging_slider = None;
                     menu.held_stepper = None;
@@ -361,11 +408,21 @@ impl App {
                     self.on_setting_changed(id, qh, true);
                 }
             }
-            PointerEventKind::Axis { horizontal, vertical, .. } => {
-                let delta = if vertical.absolute != 0.0 { vertical.absolute } else { horizontal.absolute };
+            PointerEventKind::Axis {
+                horizontal,
+                vertical,
+                ..
+            } => {
+                let delta = if vertical.absolute != 0.0 {
+                    vertical.absolute
+                } else {
+                    horizontal.absolute
+                };
                 let screen = self.menu.as_ref().map(|m| m.screen);
                 let Some(screen) = screen else { return };
-                let Some(count) = self.list_len_for_screen(screen) else { return };
+                let Some(count) = self.list_len_for_screen(screen) else {
+                    return;
+                };
                 let (_, visible) = menu::list_window(count, 0);
                 let max_scroll = count.saturating_sub(visible);
                 let step = if delta > 0.0 { 1isize } else { -1isize };

@@ -7,18 +7,18 @@ use smithay_client_toolkit::{
     compositor::{CompositorState, Region},
     output::OutputState,
     shell::{
-        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell},
         WaylandSurface,
+        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell},
     },
     shm::{
-        slot::{Buffer, SlotPool},
         Shm,
+        slot::{Buffer, SlotPool},
     },
 };
 use wayland_client::{
+    QueueHandle, WEnum,
     globals::{BindError, GlobalList},
     protocol::{wl_output, wl_shm},
-    QueueHandle, WEnum,
 };
 use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1::{Flags, ZwlrScreencopyFrameV1},
@@ -65,17 +65,31 @@ pub struct ScreenshotState {
 }
 
 impl ScreenshotState {
-    pub fn new(globals: &GlobalList, qh: &QueueHandle<App>, compositor: &CompositorState, layer_shell: &LayerShell, output_state: &OutputState) -> Option<Self> {
+    pub fn new(
+        globals: &GlobalList,
+        qh: &QueueHandle<App>,
+        compositor: &CompositorState,
+        layer_shell: &LayerShell,
+        output_state: &OutputState,
+    ) -> Option<Self> {
         let manager: ZwlrScreencopyManagerV1 = bind_manager(globals, qh).ok()?;
         let output = output_state.outputs().next()?;
         let surface = compositor.create_surface(qh);
-        let layer = layer_shell.create_layer_surface(qh, surface, Layer::Overlay, Some("dockyrs-region"), Some(&output));
+        let layer = layer_shell.create_layer_surface(
+            qh,
+            surface,
+            Layer::Overlay,
+            Some("dockyrs-region"),
+            Some(&output),
+        );
         layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
         layer.set_size(0, 0);
         layer.set_exclusive_zone(-1);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         if let Ok(region) = Region::new(compositor) {
-            layer.wl_surface().set_input_region(Some(region.wl_region()));
+            layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
         }
         Some(Self {
             manager,
@@ -91,9 +105,16 @@ impl ScreenshotState {
         }
         let frame = match target {
             CaptureTarget::Full => self.manager.capture_output(0, &self.output, qh, ()),
-            CaptureTarget::Region(selection) => {
-                self.manager.capture_output_region(0, &self.output, selection.x, selection.y, selection.width, selection.height, qh, ())
-            }
+            CaptureTarget::Region(selection) => self.manager.capture_output_region(
+                0,
+                &self.output,
+                selection.x,
+                selection.y,
+                selection.width,
+                selection.height,
+                qh,
+                (),
+            ),
         };
         self.active = Some(Capture {
             frame,
@@ -104,8 +125,15 @@ impl ScreenshotState {
         });
     }
 
-    pub fn set_spec(&mut self, format: WEnum<wl_shm::Format>, width: u32, height: u32, stride: u32) {
-        let WEnum::Value(format @ (wl_shm::Format::Argb8888 | wl_shm::Format::Xrgb8888)) = format else {
+    pub fn set_spec(
+        &mut self,
+        format: WEnum<wl_shm::Format>,
+        width: u32,
+        height: u32,
+        stride: u32,
+    ) {
+        let WEnum::Value(format @ (wl_shm::Format::Argb8888 | wl_shm::Format::Xrgb8888)) = format
+        else {
             return;
         };
         if let Some(capture) = &mut self.active {
@@ -127,13 +155,22 @@ impl ScreenshotState {
             self.active = None;
             return;
         };
-        let Some(length) = spec.stride.checked_mul(spec.height).map(|value| value as usize) else {
+        let Some(length) = spec
+            .stride
+            .checked_mul(spec.height)
+            .map(|value| value as usize)
+        else {
             return;
         };
         let Ok(mut pool) = SlotPool::new(length, shm) else {
             return;
         };
-        let Ok((buffer, _)) = pool.create_buffer(spec.width as i32, spec.height as i32, spec.stride as i32, spec.format) else {
+        let Ok((buffer, _)) = pool.create_buffer(
+            spec.width as i32,
+            spec.height as i32,
+            spec.stride as i32,
+            spec.format,
+        ) else {
             return;
         };
         capture.frame.copy(buffer.wl_buffer());
@@ -143,7 +180,8 @@ impl ScreenshotState {
 
     pub fn set_flags(&mut self, flags: WEnum<Flags>) {
         if let Some(capture) = &mut self.active {
-            capture.inverted = matches!(flags, WEnum::Value(value) if value.contains(Flags::YInvert));
+            capture.inverted =
+                matches!(flags, WEnum::Value(value) if value.contains(Flags::YInvert));
         }
     }
 
@@ -166,11 +204,17 @@ impl ScreenshotState {
         self.active.is_some()
     }
 
-    pub fn is_selector_surface(&self, surface: &wayland_client::protocol::wl_surface::WlSurface) -> bool {
+    pub fn is_selector_surface(
+        &self,
+        surface: &wayland_client::protocol::wl_surface::WlSurface,
+    ) -> bool {
         self.selector.layer.wl_surface() == surface
     }
 
-    pub fn is_selector_layer(&self, layer: &smithay_client_toolkit::shell::wlr_layer::LayerSurface) -> bool {
+    pub fn is_selector_layer(
+        &self,
+        layer: &smithay_client_toolkit::shell::wlr_layer::LayerSurface,
+    ) -> bool {
         &self.selector.layer == layer
     }
 }
@@ -179,6 +223,9 @@ pub fn save(image: &CaptureImage) {
     let _ = storage::save(&image.png);
 }
 
-fn bind_manager(globals: &GlobalList, qh: &QueueHandle<App>) -> Result<ZwlrScreencopyManagerV1, BindError> {
+fn bind_manager(
+    globals: &GlobalList,
+    qh: &QueueHandle<App>,
+) -> Result<ZwlrScreencopyManagerV1, BindError> {
     globals.bind(qh, 1..=3, ())
 }

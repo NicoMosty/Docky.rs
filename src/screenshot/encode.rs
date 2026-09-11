@@ -1,8 +1,9 @@
 use std::io::Cursor;
 
 use image::{
+    ColorType, DynamicImage, ImageEncoder, RgbaImage,
     codecs::png::{CompressionType, FilterType, PngEncoder},
-    imageops, ColorType, DynamicImage, ImageEncoder, RgbaImage,
+    imageops,
 };
 use wayland_client::protocol::wl_shm;
 
@@ -36,7 +37,12 @@ pub fn encode(data: &[u8], spec: FrameSpec, inverted: bool) -> Option<CaptureIma
         .into_raw();
     let mut png = Cursor::new(Vec::new());
     PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Sub)
-        .write_image(image.as_raw(), spec.width, spec.height, ColorType::Rgba8.into())
+        .write_image(
+            image.as_raw(),
+            spec.width,
+            spec.height,
+            ColorType::Rgba8.into(),
+        )
         .ok()?;
     Some(CaptureImage {
         png: png.into_inner(),

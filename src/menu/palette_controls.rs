@@ -3,7 +3,11 @@ use super::*;
 pub const PALETTE_MODE_PICKER_H: f32 = 30.0;
 pub const PALETTE_MODE_LABELS: [&str; 2] = ["Dark", "White"];
 
-pub fn palette_mode_segment_rect(index: usize, control_y: f32, panel_width: f32) -> (f32, f32, f32) {
+pub fn palette_mode_segment_rect(
+    index: usize,
+    control_y: f32,
+    panel_width: f32,
+) -> (f32, f32, f32) {
     let seg_w = (panel_width - MENU_PADDING * 2.0) / PALETTE_MODE_LABELS.len() as f32;
     (MENU_PADDING + seg_w * index as f32, seg_w, control_y)
 }

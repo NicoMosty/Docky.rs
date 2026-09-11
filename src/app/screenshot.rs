@@ -15,10 +15,10 @@ impl App {
             self.close_region(None, qh);
             return;
         }
-        if let Some(screenshot) = &mut self.screenshot {
-            if !screenshot.active() {
-                screenshot.selector.open(&self.shm);
-            }
+        if let Some(screenshot) = &mut self.screenshot
+            && !screenshot.active()
+        {
+            screenshot.selector.open(&self.shm);
         }
     }
 
@@ -29,11 +29,20 @@ impl App {
     }
 
     pub(crate) fn finish_screenshot(&mut self, qh: &QueueHandle<Self>) {
-        let Some(image) = self.screenshot.as_mut().and_then(crate::screenshot::ScreenshotState::finish) else {
+        let Some(image) = self
+            .screenshot
+            .as_mut()
+            .and_then(crate::screenshot::ScreenshotState::finish)
+        else {
             return;
         };
         crate::screenshot::save(&image);
-        let entry = crate::clipboard::ClipboardEntry::from_screenshot(image.png, image.width, image.height, image.thumbnail);
+        let entry = crate::clipboard::ClipboardEntry::from_screenshot(
+            image.png,
+            image.width,
+            image.height,
+            image.thumbnail,
+        );
         self.set_clipboard_entry(&entry, qh);
         self.clipboard_history.add(entry);
         self.clipboard_history.save();
@@ -64,7 +73,10 @@ impl App {
     }
 
     pub(super) fn region_release(&mut self, position: (f64, f64), qh: &QueueHandle<Self>) {
-        let selection = self.screenshot.as_mut().and_then(|screenshot| screenshot.selector.release(position));
+        let selection = self
+            .screenshot
+            .as_mut()
+            .and_then(|screenshot| screenshot.selector.release(position));
         if let Some(selection) = selection {
             self.close_region(Some(selection), qh);
         }
@@ -82,7 +94,11 @@ impl App {
     }
 
     pub(super) fn draw_region_frame(&mut self) {
-        let Some(selector) = self.screenshot.as_mut().map(|screenshot| &mut screenshot.selector) else {
+        let Some(selector) = self
+            .screenshot
+            .as_mut()
+            .map(|screenshot| &mut screenshot.selector)
+        else {
             return;
         };
         selector.frame_pending = false;
@@ -94,18 +110,28 @@ impl App {
         }
     }
 
-    pub(super) fn handle_region_pointer_event(&mut self, event: &PointerEvent, qh: &QueueHandle<Self>) {
+    pub(super) fn handle_region_pointer_event(
+        &mut self,
+        event: &PointerEvent,
+        qh: &QueueHandle<Self>,
+    ) {
         let pos = event.position;
         match event.kind {
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => self.region_press(pos),
             PointerEventKind::Motion { .. } => self.region_motion(pos),
-            PointerEventKind::Release { button, .. } if button == BTN_LEFT => self.region_release(pos, qh),
+            PointerEventKind::Release { button, .. } if button == BTN_LEFT => {
+                self.region_release(pos, qh)
+            }
             _ => {}
         }
     }
 
     fn request_region_frame(&mut self) {
-        let Some(selector) = self.screenshot.as_mut().map(|screenshot| &mut screenshot.selector) else {
+        let Some(selector) = self
+            .screenshot
+            .as_mut()
+            .map(|screenshot| &mut screenshot.selector)
+        else {
             return;
         };
         if selector.frame_pending || !selector.mapped {

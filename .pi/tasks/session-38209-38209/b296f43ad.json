@@ -1,0 +1,18 @@
+{
+  "id": "b296f43ad",
+  "name": "probar dock en Niri",
+  "command": "setsid ./target/debug/dockyrs >/tmp/dockyrs-niri-test.log 2>&1 < /dev/null & sleep 2; ps -o pid,etime,cmd -C dockyrs; echo ---; tail -n 20 /tmp/dockyrs-niri-test.log",
+  "status": "completed",
+  "outputPath": ".pi/tasks/session-38209-38209/b296f43ad.output",
+  "cwd": "/home/nicomosty/Projects/Docky.rs",
+  "startTime": 1789132010443,
+  "endTime": 1789132012461,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 57772,
+  "bytesWritten": 71,
+  "isAgent": false,
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true
+}

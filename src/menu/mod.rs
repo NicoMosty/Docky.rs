@@ -25,7 +25,6 @@ pub use wallpaper_picker::*;
 mod align_picker;
 pub use align_picker::*;
 
-
 pub const MENU_WIDTH: f32 = 230.0;
 pub const MENU_PADDING: f32 = 10.0;
 pub const SECTION_LABEL_HEIGHT: f32 = 16.0;
@@ -99,7 +98,13 @@ impl ButtonKind {
     }
 
     pub fn is_destructive(self) -> bool {
-        matches!(self, ButtonKind::QuitDock | ButtonKind::RemoveApp | ButtonKind::Reboot | ButtonKind::Shutdown)
+        matches!(
+            self,
+            ButtonKind::QuitDock
+                | ButtonKind::RemoveApp
+                | ButtonKind::Reboot
+                | ButtonKind::Shutdown
+        )
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -253,7 +258,13 @@ pub fn dock_menu_tab_hit_test(x: f32, y: f32) -> Option<HitTarget> {
     let index = ((y - MENU_PADDING) / DOCK_MENU_TAB_H) as usize;
     MENU_CATEGORIES.get(index).map(|&c| HitTarget::Tab(c))
 }
-pub fn hit_test(controls: &[Control], settings: &DockSettings, panel_width: f32, x: f32, y: f32) -> Option<HitTarget> {
+pub fn hit_test(
+    controls: &[Control],
+    settings: &DockSettings,
+    panel_width: f32,
+    x: f32,
+    y: f32,
+) -> Option<HitTarget> {
     for c in controls {
         if y < c.y || y > c.y + c.height {
             continue;
@@ -274,22 +285,36 @@ pub fn hit_test(controls: &[Control], settings: &DockSettings, panel_width: f32,
             ControlKind::AppEntry(i) => Some(HitTarget::AppEntry(i)),
             ControlKind::IconChoice(i) => Some(HitTarget::IconChoice(i)),
             ControlKind::SearchBox => Some(HitTarget::SearchBox),
-            ControlKind::EdgePicker => edge_picker_hit_test(c.y, panel_width, x, y).map(HitTarget::Edge),
-            ControlKind::WidgetChips => widget_chip_hit_test(settings, c.y, panel_width, x, y).map(HitTarget::WidgetChip),
-            ControlKind::ThemePicker => theme_picker_hit_test(settings, c.y, panel_width, x, y).map(|hit| match hit {
-                ThemeGridHit::Select(choice) => HitTarget::ThemeOption(choice),
-                ThemeGridHit::Delete(i) => HitTarget::DeleteCustomPalette(i),
-            }),
+            ControlKind::EdgePicker => {
+                edge_picker_hit_test(c.y, panel_width, x, y).map(HitTarget::Edge)
+            }
+            ControlKind::WidgetChips => {
+                widget_chip_hit_test(settings, c.y, panel_width, x, y).map(HitTarget::WidgetChip)
+            }
+            ControlKind::ThemePicker => theme_picker_hit_test(settings, c.y, panel_width, x, y)
+                .map(|hit| match hit {
+                    ThemeGridHit::Select(choice) => HitTarget::ThemeOption(choice),
+                    ThemeGridHit::Delete(i) => HitTarget::DeleteCustomPalette(i),
+                }),
             ControlKind::SchemeDropdown => Some(HitTarget::SchemeDropdownToggle),
             ControlKind::DockFontDropdown => Some(HitTarget::DockFontDropdownToggle),
             ControlKind::SystemFontDropdown => Some(HitTarget::SystemFontDropdownToggle),
             ControlKind::HexField(i) => Some(HitTarget::HexFieldFocus(i)),
             ControlKind::NameField => Some(HitTarget::NameFieldFocus),
-            ControlKind::PaletteModePicker => palette_mode_hit_test(c.y, panel_width, x, y).map(HitTarget::PaletteMode),
-            ControlKind::PanelBlendPicker => panel_blend_hit_test(c.y, panel_width, x, y).map(HitTarget::PanelBlend),
+            ControlKind::PaletteModePicker => {
+                palette_mode_hit_test(c.y, panel_width, x, y).map(HitTarget::PaletteMode)
+            }
+            ControlKind::PanelBlendPicker => {
+                panel_blend_hit_test(c.y, panel_width, x, y).map(HitTarget::PanelBlend)
+            }
             ControlKind::TrayItem(i) => Some(HitTarget::TrayItem(i)),
-            ControlKind::AlignPicker => align_hit_test(c.y, panel_width, x, y).map(HitTarget::Align),
-            ControlKind::Section(_) | ControlKind::Note(_) | ControlKind::IconHeader(_) | ControlKind::TraySeparator => None,
+            ControlKind::AlignPicker => {
+                align_hit_test(c.y, panel_width, x, y).map(HitTarget::Align)
+            }
+            ControlKind::Section(_)
+            | ControlKind::Note(_)
+            | ControlKind::IconHeader(_)
+            | ControlKind::TraySeparator => None,
         };
     }
     None

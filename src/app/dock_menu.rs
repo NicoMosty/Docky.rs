@@ -21,14 +21,17 @@ impl App {
         self.menu = None;
         let category = menu::MenuCategory::Layout;
         let controls = menu::build_category_controls(category, &self.dock.config.settings);
-        let panel_w = menu::DOCK_MENU_LEFT_COL_W + menu::DOCK_MENU_DIVIDER_W + menu::DOCK_MENU_RIGHT_COL_W;
+        let panel_w =
+            menu::DOCK_MENU_LEFT_COL_W + menu::DOCK_MENU_DIVIDER_W + menu::DOCK_MENU_RIGHT_COL_W;
         let panel_h = menu::dock_menu_content_height(category, &self.dock.config.settings);
         let s = &self.dock.config.settings;
         let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
         self.layer.set_anchor(anchor);
-        self.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+        self.layer
+            .set_margin(margin.0, margin.1, margin.2, margin.3);
         self.layer.set_size(panel_w as u32, panel_h as u32);
-        self.layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         self.dock_menu_mode = Some(DockMenuMode {
             category,
             controls,
@@ -68,11 +71,17 @@ impl App {
         self.request_redraw(qh);
     }
 
-    pub(super) fn switch_dock_menu_category(&mut self, category: menu::MenuCategory, qh: &QueueHandle<Self>) {
+    pub(super) fn switch_dock_menu_category(
+        &mut self,
+        category: menu::MenuCategory,
+        qh: &QueueHandle<Self>,
+    ) {
         let panel_w = self.dock_menu_mode.as_ref().map(|dm| dm.panel_w);
         if let Some(dm) = self.dock_menu_mode.as_mut() {
             if category != dm.category {
-                dm.slide_dir = (menu::category_order_index(category) - menu::category_order_index(dm.category)).signum() as f32;
+                dm.slide_dir = (menu::category_order_index(category)
+                    - menu::category_order_index(dm.category))
+                .signum() as f32;
                 dm.slide_anim = 0.0;
                 dm.panel_h = menu::dock_menu_content_height(category, &self.dock.config.settings);
             }
@@ -84,11 +93,14 @@ impl App {
             dm.font_query.clear();
             dm.dropdown_selected = 0;
         }
-        if let (Some(panel_w), Some(panel_h)) = (panel_w, self.dock_menu_mode.as_ref().map(|dm| dm.panel_h)) {
+        if let (Some(panel_w), Some(panel_h)) =
+            (panel_w, self.dock_menu_mode.as_ref().map(|dm| dm.panel_h))
+        {
             let s = &self.dock.config.settings;
             let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
             self.layer.set_anchor(anchor);
-            self.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+            self.layer
+                .set_margin(margin.0, margin.1, margin.2, margin.3);
             self.layer.set_size(panel_w as u32, panel_h as u32);
         }
         self.request_redraw(qh);
@@ -138,15 +150,32 @@ impl App {
         };
         let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
         if eased >= 0.999 {
-            menu_render::draw_dock_menu(&mut pixmap, &mut self.icon_cache, &mut self.text_cache, &args);
+            menu_render::draw_dock_menu(
+                &mut pixmap,
+                &mut self.icon_cache,
+                &mut self.text_cache,
+                &args,
+            );
         } else {
             let mut content = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-            menu_render::draw_dock_menu(&mut content, &mut self.icon_cache, &mut self.text_cache, &args);
+            menu_render::draw_dock_menu(
+                &mut content,
+                &mut self.icon_cache,
+                &mut self.text_cache,
+                &args,
+            );
             let paint = tiny_skia::PixmapPaint {
                 opacity: anim_opacity(transparency, eased),
                 ..Default::default()
             };
-            pixmap.draw_pixmap(0, 0, content.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+            pixmap.draw_pixmap(
+                0,
+                0,
+                content.as_ref(),
+                &paint,
+                tiny_skia::Transform::identity(),
+                None,
+            );
         }
 
         let stride = width * 4;
@@ -178,7 +207,11 @@ impl App {
         } else {
             false
         };
-        let dropdown_target = if dm.open_dropdown != menu::OpenDropdown::None { 1.0 } else { 0.0 };
+        let dropdown_target = if dm.open_dropdown != menu::OpenDropdown::None {
+            1.0
+        } else {
+            0.0
+        };
         let dropdown_animating = if dm.dropdown_anim < dropdown_target {
             dm.dropdown_anim = (dm.dropdown_anim + menu::ANIM_STEP_OPEN).min(dropdown_target);
             true
@@ -200,7 +233,8 @@ impl App {
 
         if closing && anim <= 0.0 {
             self.dock_menu_mode = None;
-            self.layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            self.layer
+                .set_keyboard_interactivity(KeyboardInteractivity::None);
             self.relayout_dock(qh);
             trim_heap();
             return;
@@ -213,7 +247,15 @@ impl App {
         let key_repeating = self.held_key.is_some();
         if let Some((keysym, steps)) = self.poll_held_key() {
             for _ in 0..steps {
-                self.handle_dock_menu_key(KeyEvent { time: 0, raw_code: 0, keysym, utf8: None }, qh);
+                self.handle_dock_menu_key(
+                    KeyEvent {
+                        time: 0,
+                        raw_code: 0,
+                        keysym,
+                        utf8: None,
+                    },
+                    qh,
+                );
             }
         }
 
@@ -224,13 +266,17 @@ impl App {
     }
 
     pub(super) fn tick_dock_menu_held_stepper(&mut self, qh: &QueueHandle<Self>) {
-        let Some((id, dir, frames)) = self.dock_menu_mode.as_ref().and_then(|dm| dm.held_stepper) else {
+        let Some((id, dir, frames)) = self.dock_menu_mode.as_ref().and_then(|dm| dm.held_stepper)
+        else {
             return;
         };
         let (_, _, step) = id.range();
         let speed = menu::stepper_speed(frames);
         let cur = id.get(&self.dock.config.settings);
-        id.set(&mut self.dock.config.settings, cur + dir * step * speed * 0.05);
+        id.set(
+            &mut self.dock.config.settings,
+            cur + dir * step * speed * 0.05,
+        );
         self.on_setting_changed(id, qh, false);
         if let Some(dm) = self.dock_menu_mode.as_mut() {
             dm.held_stepper = Some((id, dir, frames + 1));
@@ -238,7 +284,12 @@ impl App {
         self.request_redraw(qh);
     }
 
-    pub(super) fn start_dock_menu_stepper(&mut self, id: menu::SettingId, dir: f32, qh: &QueueHandle<Self>) {
+    pub(super) fn start_dock_menu_stepper(
+        &mut self,
+        id: menu::SettingId,
+        dir: f32,
+        qh: &QueueHandle<Self>,
+    ) {
         let (_, _, step) = id.range();
         let cur = id.get(&self.dock.config.settings);
         id.set(&mut self.dock.config.settings, cur + dir * step);
@@ -249,7 +300,11 @@ impl App {
         self.request_redraw(qh);
     }
 
-    pub(super) fn handle_dock_menu_button(&mut self, kind: menu::ButtonKind, qh: &QueueHandle<Self>) {
+    pub(super) fn handle_dock_menu_button(
+        &mut self,
+        kind: menu::ButtonKind,
+        qh: &QueueHandle<Self>,
+    ) {
         match kind {
             menu::ButtonKind::AddApp => {
                 self.dock_menu_mode = None;
@@ -260,7 +315,10 @@ impl App {
             menu::ButtonKind::CreatePalette => self.open_custom_palette(qh),
             menu::ButtonKind::SavePalette => self.save_custom_palette(qh),
             menu::ButtonKind::Back => {
-                if matches!(self.dock_menu_mode.as_ref().map(|dm| dm.category), Some(menu::MenuCategory::CustomPalette)) {
+                if matches!(
+                    self.dock_menu_mode.as_ref().map(|dm| dm.category),
+                    Some(menu::MenuCategory::CustomPalette)
+                ) {
                     self.switch_dock_menu_category(menu::MenuCategory::Colors, qh);
                 }
             }
@@ -277,7 +335,8 @@ impl App {
             rgb_to_hex(s.text_r, s.text_g, s.text_b),
             rgb_to_hex(s.text_dim_r, s.text_dim_g, s.text_dim_b),
         ];
-        let panel_luma = 0.299 * s.panel_r as f32 + 0.587 * s.panel_g as f32 + 0.114 * s.panel_b as f32;
+        let panel_luma =
+            0.299 * s.panel_r as f32 + 0.587 * s.panel_g as f32 + 0.114 * s.panel_b as f32;
         let is_light = panel_luma > 140.0;
         self.switch_dock_menu_category(menu::MenuCategory::CustomPalette, qh);
         if let Some(dm) = self.dock_menu_mode.as_mut() {
@@ -292,7 +351,11 @@ impl App {
     }
 
     pub(super) fn reseed_custom_palette_base(&mut self, is_light: bool) {
-        let (panel, text, text_dim) = if is_light { ((245, 245, 248), (30, 30, 34), (100, 100, 108)) } else { ((18, 18, 20), (235, 235, 240), (150, 150, 158)) };
+        let (panel, text, text_dim) = if is_light {
+            ((245, 245, 248), (30, 30, 34), (100, 100, 108))
+        } else {
+            ((18, 18, 20), (235, 235, 240), (150, 150, 158))
+        };
         if let Some(dm) = self.dock_menu_mode.as_mut() {
             dm.custom_hex[2] = rgb_to_hex(panel.0, panel.1, panel.2);
             dm.custom_hex[3] = rgb_to_hex(text.0, text.1, text.2);
@@ -305,11 +368,23 @@ impl App {
         let Some(dm) = self.dock_menu_mode.as_mut() else {
             return;
         };
-        let base = if dm.custom_light { (245u8, 245u8, 248u8) } else { (18u8, 18u8, 20u8) };
-        let accent = menu::parse_hex(&dm.custom_hex[0]).unwrap_or((self.dock.config.settings.accent_r, self.dock.config.settings.accent_g, self.dock.config.settings.accent_b));
+        let base = if dm.custom_light {
+            (245u8, 245u8, 248u8)
+        } else {
+            (18u8, 18u8, 20u8)
+        };
+        let accent = menu::parse_hex(&dm.custom_hex[0]).unwrap_or((
+            self.dock.config.settings.accent_r,
+            self.dock.config.settings.accent_g,
+            self.dock.config.settings.accent_b,
+        ));
         let t = accent_pct as f32 / 100.0;
         let mix = |b: u8, a: u8| (b as f32 * (1.0 - t) + a as f32 * t).round() as u8;
-        let panel = (mix(base.0, accent.0), mix(base.1, accent.1), mix(base.2, accent.2));
+        let panel = (
+            mix(base.0, accent.0),
+            mix(base.1, accent.1),
+            mix(base.2, accent.2),
+        );
         dm.custom_hex[2] = rgb_to_hex(panel.0, panel.1, panel.2);
         dm.custom_panel_blend = Some(accent_pct);
         self.request_redraw(qh);
@@ -338,7 +413,8 @@ impl App {
             let s = &self.dock.config.settings;
             let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
             self.layer.set_anchor(anchor);
-            self.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+            self.layer
+                .set_margin(margin.0, margin.1, margin.2, margin.3);
             self.layer.set_size(panel_w as u32, panel_h as u32);
         }
         self.request_redraw(qh);
@@ -350,7 +426,11 @@ impl App {
         };
         let hex = dm.custom_hex.clone();
         let is_light = dm.custom_light;
-        let name = if dm.custom_name.trim().is_empty() { "My Palette".to_string() } else { dm.custom_name.trim().to_string() };
+        let name = if dm.custom_name.trim().is_empty() {
+            "My Palette".to_string()
+        } else {
+            dm.custom_name.trim().to_string()
+        };
         let cur = &self.dock.config.settings;
         let fallback = [
             (cur.accent_r, cur.accent_g, cur.accent_b),

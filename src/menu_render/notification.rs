@@ -20,7 +20,13 @@ pub fn draw_notification(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: 
     let mut paint = Paint::default();
     paint.set_color_rgba8(bg.0, bg.1, bg.2, bg.3);
     paint.anti_alias = true;
-    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 
     let acc = accent(settings);
 
@@ -55,14 +61,37 @@ pub(crate) fn draw_notification_horizontal(
     let line_h = body_size * 1.4;
     let max_w = (w - text_x - pad).max(0.0);
     let title = truncate_to_width(args.title, title_size, max_w);
-    let lines = wrap_to_width(args.body, body_size, max_w, crate::menu::NOTIFICATION_BODY_MAX_LINES);
+    let lines = wrap_to_width(
+        args.body,
+        body_size,
+        max_w,
+        crate::menu::NOTIFICATION_BODY_MAX_LINES,
+    );
 
     let block_h = title_size * 1.4 + gap + lines.len().max(1) as f32 * line_h;
     let top_y = (h - block_h) / 2.0;
-    draw_text(pixmap, text_cache, &title, text_x, top_y, title_size, &text_hex(settings), 700);
+    draw_text(
+        pixmap,
+        text_cache,
+        &title,
+        text_x,
+        top_y,
+        title_size,
+        &text_hex(settings),
+        700,
+    );
     let mut y = top_y + title_size * 1.4 + gap;
     for line in &lines {
-        draw_text(pixmap, text_cache, line, text_x, y, body_size, &text_dim_hex(settings), 500);
+        draw_text(
+            pixmap,
+            text_cache,
+            line,
+            text_x,
+            y,
+            body_size,
+            &text_dim_hex(settings),
+            500,
+        );
         y += line_h;
     }
 }
@@ -97,11 +126,36 @@ pub(crate) fn draw_notification_vertical(
 
     let title_cy = start_y + title_len / 2.0;
     let body_cy = start_y + title_len + gap + body_len / 2.0;
-    draw_text_rotated(pixmap, text_cache, &title, w / 2.0, title_cy, title_size, &text_hex(settings), 700);
-    draw_text_rotated(pixmap, text_cache, &body, w / 2.0, body_cy, body_size, &text_dim_hex(settings), 500);
+    draw_text_rotated(
+        pixmap,
+        text_cache,
+        &title,
+        w / 2.0,
+        title_cy,
+        title_size,
+        &text_hex(settings),
+        700,
+    );
+    draw_text_rotated(
+        pixmap,
+        text_cache,
+        &body,
+        w / 2.0,
+        body_cy,
+        body_size,
+        &text_dim_hex(settings),
+        500,
+    );
 }
 
-pub(crate) fn draw_bell_icon(pixmap: &mut Pixmap, cx: f32, cy: f32, r: f32, color: (u8, u8, u8, u8), _s: f32) {
+pub(crate) fn draw_bell_icon(
+    pixmap: &mut Pixmap,
+    cx: f32,
+    cy: f32,
+    r: f32,
+    color: (u8, u8, u8, u8),
+    _s: f32,
+) {
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.0, color.1, color.2, color.3);
     paint.anti_alias = true;
@@ -115,7 +169,13 @@ pub(crate) fn draw_bell_icon(pixmap: &mut Pixmap, cx: f32, cy: f32, r: f32, colo
     pb.line_to(cx - r * 0.95, cy + r * 0.35);
     pb.close();
     if let Some(path) = pb.finish() {
-        pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
     fill_circle(pixmap, cx, cy + r * 0.55, r * 0.15, color);
     fill_circle(pixmap, cx, cy - r * 1.0, r * 0.1, color);

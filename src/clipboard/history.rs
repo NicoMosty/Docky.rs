@@ -6,9 +6,9 @@ use std::{
 };
 
 use image::{
+    ColorType, ImageEncoder, ImageReader, Limits,
     codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder},
     imageops::FilterType,
-    ColorType, ImageEncoder, ImageReader, Limits,
 };
 
 const PREVIEW_WIDTH: u32 = 1024;
@@ -81,7 +81,11 @@ impl ClipboardEntry {
     }
 
     pub fn size(&self) -> usize {
-        self.data.len() + self.thumbnail.as_ref().map_or(0, |thumbnail| thumbnail.png.len())
+        self.data.len()
+            + self
+                .thumbnail
+                .as_ref()
+                .map_or(0, |thumbnail| thumbnail.png.len())
     }
 
     pub(crate) fn stored(&self) -> StoredEntry<'_> {
@@ -90,11 +94,20 @@ impl ClipboardEntry {
             data: &self.data,
             title: &self.title,
             description: &self.description,
-            preview: self.thumbnail.as_ref().map(|thumbnail| thumbnail.png.as_slice()),
+            preview: self
+                .thumbnail
+                .as_ref()
+                .map(|thumbnail| thumbnail.png.as_slice()),
         }
     }
 
-    pub(crate) fn restore(mime: String, data: Vec<u8>, title: String, description: String, preview: Vec<u8>) -> Option<Self> {
+    pub(crate) fn restore(
+        mime: String,
+        data: Vec<u8>,
+        title: String,
+        description: String,
+        preview: Vec<u8>,
+    ) -> Option<Self> {
         if data.is_empty() {
             return None;
         }
@@ -136,7 +149,12 @@ impl Thumbnail {
         if width == 0 || height == 0 {
             return None;
         }
-        let source = ImageReader::new(Cursor::new(&self.png)).with_guessed_format().ok()?.decode().ok()?.to_rgba8();
+        let source = ImageReader::new(Cursor::new(&self.png))
+            .with_guessed_format()
+            .ok()?
+            .decode()
+            .ok()?
+            .to_rgba8();
         let (source_width, source_height) = (source.width(), source.height());
         let source = source.as_raw();
         let mut pixels = vec![0; (width * height * 4) as usize];
@@ -156,16 +174,26 @@ impl Thumbnail {
                 pixels[target + 3] = source[origin + 3];
             }
         }
-        Some(ScaledPreview { pixels, width, height })
+        Some(ScaledPreview {
+            pixels,
+            width,
+            height,
+        })
     }
 }
 
 fn text_entry(mime: String, data: Vec<u8>, fingerprint: u64) -> Option<ClipboardEntry> {
-    let text = std::str::from_utf8(&data).ok()?.trim_matches(['\0', '\n', '\r', ' ']);
+    let text = std::str::from_utf8(&data)
+        .ok()?
+        .trim_matches(['\0', '\n', '\r', ' ']);
     if text.is_empty() {
         return None;
     }
-    let title = text.split_whitespace().take(18).collect::<Vec<_>>().join(" ");
+    let title = text
+        .split_whitespace()
+        .take(18)
+        .collect::<Vec<_>>()
+        .join(" ");
     let characters = text.chars().count();
     Some(ClipboardEntry {
         mime,
@@ -178,7 +206,9 @@ fn text_entry(mime: String, data: Vec<u8>, fingerprint: u64) -> Option<Clipboard
 }
 
 fn image_entry(mime: String, data: Vec<u8>, fingerprint: u64) -> Option<ClipboardEntry> {
-    let mut reader = ImageReader::new(Cursor::new(data.as_slice())).with_guessed_format().ok()?;
+    let mut reader = ImageReader::new(Cursor::new(data.as_slice()))
+        .with_guessed_format()
+        .ok()?;
     let mut limits = Limits::default();
     limits.max_image_width = Some(8192);
     limits.max_image_height = Some(8192);
@@ -186,7 +216,10 @@ fn image_entry(mime: String, data: Vec<u8>, fingerprint: u64) -> Option<Clipboar
     reader.limits(limits);
     let image = reader.decode().ok()?;
     let (width, height) = (image.width(), image.height());
-    let thumbnail = image.resize_to_fill(PREVIEW_WIDTH, PREVIEW_HEIGHT, FilterType::Lanczos3).to_rgba8().into_raw();
+    let thumbnail = image
+        .resize_to_fill(PREVIEW_WIDTH, PREVIEW_HEIGHT, FilterType::Lanczos3)
+        .to_rgba8()
+        .into_raw();
     Some(ClipboardEntry {
         mime: mime.clone(),
         data: data.into(),

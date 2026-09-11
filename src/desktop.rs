@@ -83,10 +83,10 @@ pub fn list_all_desktop_entries() -> Vec<DesktopEntry> {
             if !file_name.ends_with(".desktop") || !seen.insert(file_name.to_string()) {
                 continue;
             }
-            if let Ok(contents) = std::fs::read_to_string(&path) {
-                if let Some(entry) = parse_entry(&contents) {
-                    entries.push(entry);
-                }
+            if let Ok(contents) = std::fs::read_to_string(&path)
+                && let Some(entry) = parse_entry(&contents)
+            {
+                entries.push(entry);
             }
         }
     }

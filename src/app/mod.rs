@@ -2,57 +2,62 @@ use crate::config::PinnedApp;
 use crate::desktop::{self, DesktopEntry};
 use crate::dock;
 use crate::dock::Dock;
+use crate::icon_browser;
 use crate::icon_cache::IconCache;
 use crate::menu;
 use crate::menu_render;
 use crate::render;
 use crate::text::TextCache;
-use crate::icon_browser;
 use crate::thumbnail_cache::ThumbnailCache;
 use crate::wallpaper::{self, WallpaperEntry};
 use crate::widgets;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_registry, delegate_seat,
-    delegate_shm,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_registry,
+    delegate_seat, delegate_shm,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
+        Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
-        Capability, SeatHandler, SeatState,
     },
     shell::{
-        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
         WaylandSurface,
+        wlr_layer::{
+            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+            LayerSurfaceConfigure,
+        },
     },
-    shm::{slot::SlotPool, Shm, ShmHandler},
+    shm::{Shm, ShmHandler, slot::SlotPool},
 };
 use wayland_client::{
+    Connection, Dispatch, QueueHandle,
     backend::ObjectId,
     protocol::{wl_callback, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
-    Connection, Dispatch, QueueHandle,
 };
 use wayland_protocols_wlr::data_control::v1::client::{
-    zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
-    zwlr_data_control_offer_v1::ZwlrDataControlOfferV1, zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
+    zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
+    zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
+    zwlr_data_control_offer_v1::ZwlrDataControlOfferV1,
+    zwlr_data_control_source_v1::ZwlrDataControlSourceV1,
 };
 
-mod draw;
-mod pointer;
+mod app_search;
+mod clipboard_ui;
 mod dock_menu;
 mod dock_menu_input;
 mod dock_popup;
-mod wallpaper_picker;
-mod app_search;
-mod osd;
+mod draw;
+mod fonts;
 mod notification;
+mod osd;
+mod pointer;
 mod popup_menu;
 mod popup_menu_input;
-mod clipboard_ui;
 mod screenshot;
-mod fonts;
+mod wallpaper_picker;
 use fonts::{apply_kitty_font, apply_system_gtk_font, apply_system_qt_font};
 mod handlers;
 
@@ -61,9 +66,18 @@ const BTN_RIGHT: u32 = 0x111;
 const MENU_GAP: i32 = 0;
 const WALLPAPER_PANEL_H: f32 = 170.0;
 const WALLPAPER_PANEL_MIN_W: f32 = 640.0;
-const EMPTY_CUSTOM_HEX: [String; 5] = [String::new(), String::new(), String::new(), String::new(), String::new()];
+const EMPTY_CUSTOM_HEX: [String; 5] = [
+    String::new(),
+    String::new(),
+    String::new(),
+    String::new(),
+    String::new(),
+];
 
-pub(crate) fn single_edge_anchor_margin(edge: crate::config::DockEdge, pos_y: i32) -> (Anchor, (i32, i32, i32, i32)) {
+pub(crate) fn single_edge_anchor_margin(
+    edge: crate::config::DockEdge,
+    pos_y: i32,
+) -> (Anchor, (i32, i32, i32, i32)) {
     use crate::config::DockEdge;
     match edge {
         DockEdge::Bottom => (Anchor::BOTTOM, (0, 0, pos_y, 0)),
@@ -73,7 +87,12 @@ pub(crate) fn single_edge_anchor_margin(edge: crate::config::DockEdge, pos_y: i3
     }
 }
 
-pub(crate) fn edge_anchor_margin(edge: crate::config::DockEdge, align: crate::config::DockAlign, pos_y: i32, extra: i32) -> (Anchor, (i32, i32, i32, i32)) {
+pub(crate) fn edge_anchor_margin(
+    edge: crate::config::DockEdge,
+    align: crate::config::DockAlign,
+    pos_y: i32,
+    extra: i32,
+) -> (Anchor, (i32, i32, i32, i32)) {
     use crate::config::{DockAlign, DockEdge};
     match edge {
         DockEdge::Bottom => {
@@ -197,7 +216,8 @@ pub(crate) struct WallpaperMode {
     thumb_h: u32,
     thumb_requested: std::collections::HashSet<std::path::PathBuf>,
     thumb_request_tx: std::sync::mpsc::Sender<(std::path::PathBuf, u32, u32)>,
-    thumb_result_rx: std::sync::mpsc::Receiver<(std::path::PathBuf, u32, u32, Option<tiny_skia::Pixmap>)>,
+    thumb_result_rx:
+        std::sync::mpsc::Receiver<(std::path::PathBuf, u32, u32, Option<tiny_skia::Pixmap>)>,
 }
 
 pub(crate) struct AppSearchMode {
@@ -317,19 +337,13 @@ pub(crate) struct ClipboardMode {
     previews: std::collections::HashMap<usize, crate::clipboard::ScaledPreview>,
 }
 
-
-
 fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
     format!("{r:02x}{g:02x}{b:02x}")
 }
 
 // ----- skip blur -----
 pub(super) fn anim_opacity(transparency: f32, eased: f32) -> f32 {
-    if transparency >= 0.999 {
-        1.0
-    } else {
-        eased
-    }
+    if transparency >= 0.999 { 1.0 } else { eased }
 }
 
 fn bgra_from_rgba(src: &[u8], dst: &mut [u8]) {
@@ -343,7 +357,10 @@ fn bgra_from_rgba(src: &[u8], dst: &mut [u8]) {
 
 fn launch_app(exec: &str) {
     let exec = exec.to_string();
-    let _ = std::process::Command::new("sh").arg("-c").arg(format!("{} &", exec)).spawn();
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{} &", exec))
+        .spawn();
 }
 
 fn repo_dir() -> std::path::PathBuf {

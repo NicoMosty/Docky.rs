@@ -1,26 +1,43 @@
 use super::*;
 
 impl App {
-    pub(crate) fn show_notification(&mut self, title: String, body: String, qh: &QueueHandle<Self>) {
-        if self.wallpaper_mode.is_some() || self.dock_menu_mode.is_some() || self.app_search_mode.is_some() || self.menu.is_some() || self.osd_mode.is_some() || self.clipboard_mode.is_some() {
+    pub(crate) fn show_notification(
+        &mut self,
+        title: String,
+        body: String,
+        qh: &QueueHandle<Self>,
+    ) {
+        if self.wallpaper_mode.is_some()
+            || self.dock_menu_mode.is_some()
+            || self.app_search_mode.is_some()
+            || self.menu.is_some()
+            || self.osd_mode.is_some()
+            || self.clipboard_mode.is_some()
+        {
             return;
         }
         let length = menu::OSD_NOTIFICATION_BASE_LEN + menu::NOTIFICATION_GROWTH_W;
         let mut body_lines = 1usize;
         let (panel_w, panel_h) = if self.dock.is_vertical() {
-            let cross = menu::OSD_NOTIFICATION_BASE_THICKNESS.max(menu::NOTIFICATION_MIN_PANEL_H) + menu::NOTIFICATION_GROWTH_H;
+            let cross = menu::OSD_NOTIFICATION_BASE_THICKNESS.max(menu::NOTIFICATION_MIN_PANEL_H)
+                + menu::NOTIFICATION_GROWTH_H;
             (cross, length)
         } else {
             // ----- grow for wrapped body -----
             let pad = menu::MENU_PADDING;
             let text_x = pad + 9.0 * 2.0 + 14.0;
             let max_w = (length - text_x - pad).max(1.0);
-            body_lines = menu_render::wrap_to_width(&body, 8.5, max_w, menu::NOTIFICATION_BODY_MAX_LINES).len().max(1);
+            body_lines =
+                menu_render::wrap_to_width(&body, 8.5, max_w, menu::NOTIFICATION_BODY_MAX_LINES)
+                    .len()
+                    .max(1);
             let block_h = 9.5 * 1.4 + 3.0 + body_lines as f32 * 8.5 * 1.4;
-            let cross = (block_h + pad * 2.0).max(menu::NOTIFICATION_MIN_PANEL_H + menu::NOTIFICATION_GROWTH_H);
+            let cross = (block_h + pad * 2.0)
+                .max(menu::NOTIFICATION_MIN_PANEL_H + menu::NOTIFICATION_GROWTH_H);
             (length, cross)
         };
-        let timeout = (menu::NOTIFICATION_TIMEOUT_MS + body_lines.saturating_sub(1) as u64 * 900).min(15000);
+        let timeout =
+            (menu::NOTIFICATION_TIMEOUT_MS + body_lines.saturating_sub(1) as u64 * 900).min(15000);
         let needs_resize = match self.notification_mode.as_ref() {
             None => true,
             Some(m) => m.panel_w != panel_w || m.panel_h != panel_h,
@@ -47,7 +64,8 @@ impl App {
             let s = &self.dock.config.settings;
             let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
             self.layer.set_anchor(anchor);
-            self.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+            self.layer
+                .set_margin(margin.0, margin.1, margin.2, margin.3);
             self.layer.set_size(panel_w as u32, panel_h as u32);
         }
         self.layer.set_layer(Layer::Overlay);
@@ -69,7 +87,11 @@ impl App {
             return;
         };
         let linear = m.anim.clamp(0.0, 1.0);
-        let eased = (0.5 - 0.5 * (std::f32::consts::PI * linear).cos()).max(if m.closing { 0.0 } else { 0.04 });
+        let eased = (0.5 - 0.5 * (std::f32::consts::PI * linear).cos()).max(if m.closing {
+            0.0
+        } else {
+            0.04
+        });
 
         let width = (m.panel_w * scale).round() as i32;
         let height = (m.panel_h * scale).round() as i32;
@@ -98,15 +120,39 @@ impl App {
             if m.closing {
                 let (full_w, full_h) = (width as f32, height as f32);
                 let (rw, rh) = (full_w * linear, full_h * linear);
-                let rect = tiny_skia::Rect::from_xywh((full_w - rw) / 2.0, (full_h - rh) / 2.0, rw.max(0.0), rh.max(0.0));
+                let rect = tiny_skia::Rect::from_xywh(
+                    (full_w - rw) / 2.0,
+                    (full_h - rh) / 2.0,
+                    rw.max(0.0),
+                    rh.max(0.0),
+                );
                 if let Some(rect) = rect {
                     let mut mask = tiny_skia::Mask::new(width as u32, height as u32).unwrap();
                     let path = tiny_skia::PathBuilder::from_rect(rect);
-                    mask.fill_path(&path, tiny_skia::FillRule::Winding, true, tiny_skia::Transform::identity());
-                    pixmap.draw_pixmap(0, 0, content.as_ref(), &paint, tiny_skia::Transform::identity(), Some(&mask));
+                    mask.fill_path(
+                        &path,
+                        tiny_skia::FillRule::Winding,
+                        true,
+                        tiny_skia::Transform::identity(),
+                    );
+                    pixmap.draw_pixmap(
+                        0,
+                        0,
+                        content.as_ref(),
+                        &paint,
+                        tiny_skia::Transform::identity(),
+                        Some(&mask),
+                    );
                 }
             } else {
-                pixmap.draw_pixmap(0, 0, content.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+                pixmap.draw_pixmap(
+                    0,
+                    0,
+                    content.as_ref(),
+                    &paint,
+                    tiny_skia::Transform::identity(),
+                    None,
+                );
             }
         }
 

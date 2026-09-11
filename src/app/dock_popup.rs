@@ -4,14 +4,30 @@ impl App {
     pub(super) fn open_power_menu(&mut self, qh: &QueueHandle<Self>) {
         let (controls, content_height) = menu::build_controls(menu::MenuScreen::PowerMenu, 0, 0);
         let tray_count = self.tray.lock().unwrap().len();
-        let center = render::widget_center(&self.dock, &self.widgets, tray_count, crate::config::WidgetKind::PowerMenu);
-        self.create_popup_surface(menu::MenuScreen::PowerMenu, controls, content_height, Vec::new(), String::new(), String::new(), center, qh);
+        let center = render::widget_center(
+            &self.dock,
+            &self.widgets,
+            tray_count,
+            crate::config::WidgetKind::PowerMenu,
+        );
+        self.create_popup_surface(
+            menu::MenuScreen::PowerMenu,
+            controls,
+            content_height,
+            Vec::new(),
+            String::new(),
+            String::new(),
+            center,
+            qh,
+        );
     }
 
     pub(super) fn open_tray_menu(&mut self, idx: usize, qh: &QueueHandle<Self>) {
         let item = self.tray.lock().unwrap().get(idx).cloned();
         let Some(item) = item else { return };
-        let Some(menu_path) = item.menu_path.clone() else { return };
+        let Some(menu_path) = item.menu_path.clone() else {
+            return;
+        };
         let items = crate::tray::fetch_menu(&item.service, &menu_path, 0);
         if items.is_empty() {
             return;
@@ -19,19 +35,34 @@ impl App {
         let (controls, content_height) = menu::build_tray_menu_controls(&items, false);
         let tray_count = self.tray.lock().unwrap().len();
         let center = render::tray_icon_center(&self.dock, &self.widgets, tray_count, idx);
-        self.create_popup_surface(menu::MenuScreen::TrayMenu, controls, content_height, items, item.service, menu_path, center, qh);
+        self.create_popup_surface(
+            menu::MenuScreen::TrayMenu,
+            controls,
+            content_height,
+            items,
+            item.service,
+            menu_path,
+            center,
+            qh,
+        );
     }
 
-    fn popup_geometry(&self, content_height: f32, center: Option<(f32, f32)>) -> (f32, f32, f32, f32) {
+    fn popup_geometry(
+        &self,
+        content_height: f32,
+        center: Option<(f32, f32)>,
+    ) -> (f32, f32, f32, f32) {
         let is_vertical = self.dock.is_vertical();
         let (base_w, base_h) = self.dock.base_size();
         if is_vertical {
             let cy = center.map(|(_, y)| y).unwrap_or(base_h as f32 / 2.0);
-            let box_y = (cy - content_height / 2.0).clamp(0.0, (base_h as f32 - content_height).max(0.0));
+            let box_y =
+                (cy - content_height / 2.0).clamp(0.0, (base_h as f32 - content_height).max(0.0));
             (menu::MENU_WIDTH, base_h as f32, 0.0, box_y)
         } else {
             let cx = center.map(|(x, _)| x).unwrap_or(base_w as f32 / 2.0);
-            let box_x = (cx - menu::MENU_WIDTH / 2.0).clamp(0.0, (base_w as f32 - menu::MENU_WIDTH).max(0.0));
+            let box_x = (cx - menu::MENU_WIDTH / 2.0)
+                .clamp(0.0, (base_w as f32 - menu::MENU_WIDTH).max(0.0));
             (base_w as f32, content_height, box_x, 0.0)
         }
     }
@@ -39,16 +70,28 @@ impl App {
     // ----- full redeclare -----
     fn popup_anchor_margin(&self) -> (Anchor, (i32, i32, i32, i32)) {
         let s = &self.dock.config.settings;
-        edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, self.dock.thickness() as i32 + MENU_GAP)
+        edge_anchor_margin(
+            s.dock_edge,
+            s.dock_align,
+            s.pos_y,
+            self.dock.thickness() as i32 + MENU_GAP,
+        )
     }
 
     // ----- submenu navigation -----
-    fn set_tray_items(&mut self, items: Vec<crate::tray::TrayMenuItem>, has_back: bool, qh: &QueueHandle<Self>) {
+    fn set_tray_items(
+        &mut self,
+        items: Vec<crate::tray::TrayMenuItem>,
+        has_back: bool,
+        qh: &QueueHandle<Self>,
+    ) {
         let (controls, content_height) = menu::build_tray_menu_controls(&items, has_back);
         let center = self.popup_mode.as_ref().and_then(|p| p.center);
         let (surface_w, surface_h, box_x, box_y) = self.popup_geometry(content_height, center);
         let (anchor, margin) = self.popup_anchor_margin();
-        let Some(p) = self.popup_mode.as_mut() else { return };
+        let Some(p) = self.popup_mode.as_mut() else {
+            return;
+        };
         p.layer.set_anchor(anchor);
         p.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
         p.layer.set_size(surface_w as u32, surface_h as u32);
@@ -82,7 +125,13 @@ impl App {
         let (surface_w, surface_h, box_x, box_y) = self.popup_geometry(content_height, center);
 
         let surface = self.compositor.create_surface(qh);
-        let layer = self.layer_shell.create_layer_surface(qh, surface, Layer::Overlay, Some("dockyrs-menu"), None);
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            surface,
+            Layer::Overlay,
+            Some("dockyrs-menu"),
+            None,
+        );
         let (anchor, margin) = self.popup_anchor_margin();
         layer.set_anchor(anchor);
         layer.set_margin(margin.0, margin.1, margin.2, margin.3);
@@ -172,8 +221,16 @@ impl App {
             custom_panel_blend: None,
             tray_items: &p.tray_items,
         };
-        let mut box_pixmap = tiny_skia::Pixmap::new(box_w.round().max(1.0) as u32, box_h.round().max(1.0) as u32).unwrap();
-        menu_render::draw_content(&mut box_pixmap, &mut self.icon_cache, &mut self.text_cache, &self.thumbnail_cache, &args);
+        let mut box_pixmap =
+            tiny_skia::Pixmap::new(box_w.round().max(1.0) as u32, box_h.round().max(1.0) as u32)
+                .unwrap();
+        menu_render::draw_content(
+            &mut box_pixmap,
+            &mut self.icon_cache,
+            &mut self.text_cache,
+            &self.thumbnail_cache,
+            &args,
+        );
 
         let Some(p) = self.popup_mode.as_ref() else {
             return;
@@ -188,29 +245,47 @@ impl App {
             DockEdge::Top => (bx, by, box_w, box_h * linear),
             DockEdge::Bottom => (bx, by + box_h - box_h * linear, box_w, box_h * linear),
         };
-        if mask_w > 0.5 && mask_h > 0.5 {
-            if let Some(rect) = tiny_skia::Rect::from_xywh(mask_x, mask_y, mask_w, mask_h) {
-                let mut mask = tiny_skia::Mask::new(sw as u32, sh as u32).unwrap();
-                let path = tiny_skia::PathBuilder::from_rect(rect);
-                mask.fill_path(&path, tiny_skia::FillRule::Winding, true, tiny_skia::Transform::identity());
-                let paint = tiny_skia::PixmapPaint {
-                    opacity: anim_opacity(transparency, eased),
-                    ..Default::default()
-                };
-                pixmap.draw_pixmap(0, 0, box_pixmap.as_ref(), &paint, tiny_skia::Transform::from_translate(bx, by), Some(&mask));
-            }
+        if mask_w > 0.5
+            && mask_h > 0.5
+            && let Some(rect) = tiny_skia::Rect::from_xywh(mask_x, mask_y, mask_w, mask_h)
+        {
+            let mut mask = tiny_skia::Mask::new(sw as u32, sh as u32).unwrap();
+            let path = tiny_skia::PathBuilder::from_rect(rect);
+            mask.fill_path(
+                &path,
+                tiny_skia::FillRule::Winding,
+                true,
+                tiny_skia::Transform::identity(),
+            );
+            let paint = tiny_skia::PixmapPaint {
+                opacity: anim_opacity(transparency, eased),
+                ..Default::default()
+            };
+            pixmap.draw_pixmap(
+                0,
+                0,
+                box_pixmap.as_ref(),
+                &paint,
+                tiny_skia::Transform::from_translate(bx, by),
+                Some(&mask),
+            );
         }
 
         let Some(p) = self.popup_mode.as_mut() else {
             return;
         };
         let stride = sw * 4;
-        let (buffer, canvas) = p.pool.create_buffer(sw, sh, stride, wl_shm::Format::Argb8888).expect("failed to create popup shm buffer");
+        let (buffer, canvas) = p
+            .pool
+            .create_buffer(sw, sh, stride, wl_shm::Format::Argb8888)
+            .expect("failed to create popup shm buffer");
         bgra_from_rgba(pixmap.data(), canvas);
 
         let surface = p.layer.wl_surface();
         surface.set_buffer_scale(self.output_scale.max(1));
-        buffer.attach_to(surface).expect("failed to attach popup buffer");
+        buffer
+            .attach_to(surface)
+            .expect("failed to attach popup buffer");
         surface.damage_buffer(0, 0, sw, sh);
         surface.frame(qh, surface.clone());
         p.awaiting_frame = true;
@@ -247,13 +322,27 @@ impl App {
         self.draw_popup_mode(qh);
     }
 
-    pub(super) fn handle_popup_pointer_event(&mut self, event: &PointerEvent, qh: &QueueHandle<Self>) {
-        let (box_x, box_y) = self.popup_mode.as_ref().map(|p| (p.box_x, p.box_y)).unwrap_or((0.0, 0.0));
+    pub(super) fn handle_popup_pointer_event(
+        &mut self,
+        event: &PointerEvent,
+        qh: &QueueHandle<Self>,
+    ) {
+        let (box_x, box_y) = self
+            .popup_mode
+            .as_ref()
+            .map(|p| (p.box_x, p.box_y))
+            .unwrap_or((0.0, 0.0));
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 let (x, y) = event.position;
                 if let Some(p) = self.popup_mode.as_mut() {
-                    p.hovered = menu::hit_test(&p.controls, &self.dock.config.settings, menu::MENU_WIDTH, x as f32 - box_x, y as f32 - box_y);
+                    p.hovered = menu::hit_test(
+                        &p.controls,
+                        &self.dock.config.settings,
+                        menu::MENU_WIDTH,
+                        x as f32 - box_x,
+                        y as f32 - box_y,
+                    );
                 }
                 self.request_popup_redraw(qh);
             }
@@ -265,17 +354,26 @@ impl App {
             }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
                 let (x, y) = event.position;
-                let hit = self
-                    .popup_mode
-                    .as_ref()
-                    .and_then(|p| menu::hit_test(&p.controls, &self.dock.config.settings, menu::MENU_WIDTH, x as f32 - box_x, y as f32 - box_y));
+                let hit = self.popup_mode.as_ref().and_then(|p| {
+                    menu::hit_test(
+                        &p.controls,
+                        &self.dock.config.settings,
+                        menu::MENU_WIDTH,
+                        x as f32 - box_x,
+                        y as f32 - box_y,
+                    )
+                });
                 self.handle_popup_click(hit, qh);
             }
             _ => {}
         }
     }
 
-    pub(super) fn handle_popup_click(&mut self, hit: Option<menu::HitTarget>, qh: &QueueHandle<Self>) {
+    pub(super) fn handle_popup_click(
+        &mut self,
+        hit: Option<menu::HitTarget>,
+        qh: &QueueHandle<Self>,
+    ) {
         match hit {
             Some(menu::HitTarget::Button(kind)) => match kind {
                 menu::ButtonKind::Suspend => {
@@ -295,16 +393,24 @@ impl App {
                     self.close_popup_mode(qh);
                 }
                 menu::ButtonKind::Back => {
-                    let Some(p) = self.popup_mode.as_mut() else { return };
-                    let Some(items) = p.tray_stack.pop() else { return };
+                    let Some(p) = self.popup_mode.as_mut() else {
+                        return;
+                    };
+                    let Some(items) = p.tray_stack.pop() else {
+                        return;
+                    };
                     let has_back = !p.tray_stack.is_empty();
                     self.set_tray_items(items, has_back, qh);
                 }
                 _ => {}
             },
             Some(menu::HitTarget::TrayItem(index)) => {
-                let Some(p) = self.popup_mode.as_ref() else { return };
-                let Some(item) = p.tray_items.get(index).cloned() else { return };
+                let Some(p) = self.popup_mode.as_ref() else {
+                    return;
+                };
+                let Some(item) = p.tray_items.get(index).cloned() else {
+                    return;
+                };
                 if !item.enabled {
                     return;
                 }
@@ -314,11 +420,17 @@ impl App {
                     if submenu.is_empty() {
                         return;
                     }
-                    let Some(p) = self.popup_mode.as_mut() else { return };
+                    let Some(p) = self.popup_mode.as_mut() else {
+                        return;
+                    };
                     p.tray_stack.push(p.tray_items.clone());
                     self.set_tray_items(submenu, true, qh);
                 } else {
-                    crate::tray::send_menu_event(p.tray_service.clone(), p.tray_menu_path.clone(), item.id);
+                    crate::tray::send_menu_event(
+                        p.tray_service.clone(),
+                        p.tray_menu_path.clone(),
+                        item.id,
+                    );
                     self.close_popup_mode(qh);
                 }
             }

@@ -1,12 +1,12 @@
 use smithay_client_toolkit::{
     compositor::{CompositorState, Region},
     shell::{
-        wlr_layer::{KeyboardInteractivity, LayerSurface},
         WaylandSurface,
+        wlr_layer::{KeyboardInteractivity, LayerSurface},
     },
     shm::{
-        slot::{Buffer, SlotPool},
         Shm,
+        slot::{Buffer, SlotPool},
     },
 };
 use wayland_client::protocol::wl_shm;
@@ -63,7 +63,8 @@ impl RegionSelector {
         self.mapped = true;
         self.dragging = false;
         self.drawn = None;
-        self.layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         self.layer.wl_surface().set_input_region(None);
         if self.configured {
             self.create_buffer(shm);
@@ -123,14 +124,33 @@ impl RegionSelector {
             return;
         };
         if let Some(previous) = self.drawn {
-            draw_border(canvas, previous, self.width, self.height, self.scale, [0, 0, 0, 64]);
+            draw_border(
+                canvas,
+                previous,
+                self.width,
+                self.height,
+                self.scale,
+                [0, 0, 0, 64],
+            );
         }
         if let Some(current) = selection {
-            draw_border(canvas, current, self.width, self.height, self.scale, [235, 235, 235, 255]);
+            draw_border(
+                canvas,
+                current,
+                self.width,
+                self.height,
+                self.scale,
+                [235, 235, 235, 255],
+            );
         }
         self.drawn = selection;
         self.redraw_pending = false;
-        self.layer.wl_surface().damage_buffer(0, 0, (self.width * self.scale) as i32, (self.height * self.scale) as i32);
+        self.layer.wl_surface().damage_buffer(
+            0,
+            0,
+            (self.width * self.scale) as i32,
+            (self.height * self.scale) as i32,
+        );
         if buffer.attach_to(self.layer.wl_surface()).is_ok() {
             self.layer.commit();
         }
@@ -145,9 +165,12 @@ impl RegionSelector {
         self.dragging = false;
         self.frame_pending = false;
         self.redraw_pending = false;
-        self.layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
         if let Ok(region) = Region::new(compositor) {
-            self.layer.wl_surface().set_input_region(Some(region.wl_region()));
+            self.layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
         }
         self.layer.wl_surface().attach(None, 0, 0);
         self.layer.commit();
@@ -162,7 +185,12 @@ impl RegionSelector {
         let Ok(mut pool) = SlotPool::new(length, shm) else {
             return;
         };
-        let Ok((buffer, canvas)) = pool.create_buffer(buffer_width as i32, buffer_height as i32, buffer_width as i32 * 4, wl_shm::Format::Argb8888) else {
+        let Ok((buffer, canvas)) = pool.create_buffer(
+            buffer_width as i32,
+            buffer_height as i32,
+            buffer_width as i32 * 4,
+            wl_shm::Format::Argb8888,
+        ) else {
             return;
         };
         for pixel in canvas.chunks_exact_mut(4) {
@@ -177,8 +205,18 @@ impl RegionSelector {
         self.dragging.then(|| {
             let x = self.start.0.min(self.current.0).floor().max(0.0) as i32;
             let y = self.start.1.min(self.current.1).floor().max(0.0) as i32;
-            let right = self.start.0.max(self.current.0).ceil().min(self.width as f64) as i32;
-            let bottom = self.start.1.max(self.current.1).ceil().min(self.height as f64) as i32;
+            let right = self
+                .start
+                .0
+                .max(self.current.0)
+                .ceil()
+                .min(self.width as f64) as i32;
+            let bottom = self
+                .start
+                .1
+                .max(self.current.1)
+                .ceil()
+                .min(self.height as f64) as i32;
             Selection {
                 x,
                 y,
@@ -189,7 +227,14 @@ impl RegionSelector {
     }
 }
 
-fn draw_border(canvas: &mut [u8], rect: Selection, width: u32, height: u32, scale: u32, color: [u8; 4]) {
+fn draw_border(
+    canvas: &mut [u8],
+    rect: Selection,
+    width: u32,
+    height: u32,
+    scale: u32,
+    color: [u8; 4],
+) {
     let width = width * scale;
     let height = height * scale;
     let left = rect.x.max(0) as u32 * scale;
@@ -199,7 +244,11 @@ fn draw_border(canvas: &mut [u8], rect: Selection, width: u32, height: u32, scal
     let thickness = 2 * scale;
     for y in top..bottom {
         for x in left..right {
-            if x < left + thickness || x + thickness >= right || y < top + thickness || y + thickness >= bottom {
+            if x < left + thickness
+                || x + thickness >= right
+                || y < top + thickness
+                || y + thickness >= bottom
+            {
                 let offset = ((y * width + x) * 4) as usize;
                 canvas[offset..offset + 4].copy_from_slice(&color);
             }

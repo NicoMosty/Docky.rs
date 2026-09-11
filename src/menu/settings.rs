@@ -69,7 +69,10 @@ impl SettingId {
     }
 
     pub fn is_toggle(self) -> bool {
-        matches!(self, SettingId::BlurEnabled | SettingId::BlurXray | SettingId::MediaSmoothScroll)
+        matches!(
+            self,
+            SettingId::BlurEnabled | SettingId::BlurXray | SettingId::MediaSmoothScroll
+        )
     }
 
     pub fn get(self, s: &DockSettings) -> f32 {
@@ -134,13 +137,17 @@ impl SettingId {
             | SettingId::CornerRadius
             | SettingId::BlurSize => format!("{}px", self.get(s).round() as i32),
             SettingId::BlurPasses => format!("{}", self.get(s).round() as i32),
-            SettingId::DockScale | SettingId::WidgetScale | SettingId::MediaWidthScale => format!("{}%", (self.get(s) * 100.0).round() as i32),
+            SettingId::DockScale | SettingId::WidgetScale | SettingId::MediaWidthScale => {
+                format!("{}%", (self.get(s) * 100.0).round() as i32)
+            }
             SettingId::Transparency | SettingId::BlurVibrancy => {
                 format!("{}%", (self.get(s) * 100.0).round() as i32)
             }
             SettingId::BlurBrightness | SettingId::BlurContrast => format!("{:.2}", self.get(s)),
             SettingId::BorderWidth => format!("{:.2}px", self.get(s)),
-            SettingId::BlurEnabled | SettingId::BlurXray | SettingId::MediaSmoothScroll => String::new(),
+            SettingId::BlurEnabled | SettingId::BlurXray | SettingId::MediaSmoothScroll => {
+                String::new()
+            }
         }
     }
 
@@ -173,9 +180,15 @@ impl SettingId {
     pub fn hyprctl_value(self, s: &DockSettings) -> String {
         match self {
             SettingId::BlurEnabled | SettingId::BlurXray => {
-                if self.get(s) >= 0.5 { "true".into() } else { "false".into() }
+                if self.get(s) >= 0.5 {
+                    "true".into()
+                } else {
+                    "false".into()
+                }
             }
-            SettingId::BlurPasses | SettingId::BlurSize => format!("{}", self.get(s).round() as i32),
+            SettingId::BlurPasses | SettingId::BlurSize => {
+                format!("{}", self.get(s).round() as i32)
+            }
             _ => format!("{:.3}", self.get(s)),
         }
     }

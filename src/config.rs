@@ -8,31 +8,21 @@ pub struct PinnedApp {
     pub exec: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DockEdge {
     Top,
+    #[default]
     Bottom,
     Left,
     Right,
 }
 
-impl Default for DockEdge {
-    fn default() -> Self {
-        DockEdge::Bottom
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DockAlign {
     Left,
+    #[default]
     Middle,
     Right,
-}
-
-impl Default for DockAlign {
-    fn default() -> Self {
-        DockAlign::Middle
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +43,9 @@ pub enum WidgetKind {
     Workspaces,
     Cpu,
     Ram,
+    Network,
+    Volume,
+    KbdLayout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,11 +55,20 @@ pub struct WidgetPlacement {
 }
 
 fn default_widgets() -> Vec<WidgetPlacement> {
+    use WidgetSlot::{Left, Middle, Right};
+    // ----- waybar order -----
     vec![
-        WidgetPlacement { kind: WidgetKind::Media, slot: WidgetSlot::Left },
-        WidgetPlacement { kind: WidgetKind::Clock, slot: WidgetSlot::Middle },
-        WidgetPlacement { kind: WidgetKind::Tray, slot: WidgetSlot::Right },
-        WidgetPlacement { kind: WidgetKind::Battery, slot: WidgetSlot::Right },
+        WidgetPlacement { kind: WidgetKind::Network, slot: Left },
+        WidgetPlacement { kind: WidgetKind::Cpu, slot: Left },
+        WidgetPlacement { kind: WidgetKind::Ram, slot: Left },
+        WidgetPlacement { kind: WidgetKind::Tray, slot: Middle },
+        WidgetPlacement { kind: WidgetKind::Workspaces, slot: Middle },
+        WidgetPlacement { kind: WidgetKind::Clock, slot: Middle },
+        WidgetPlacement { kind: WidgetKind::Bluetooth, slot: Right },
+        WidgetPlacement { kind: WidgetKind::Media, slot: Right },
+        WidgetPlacement { kind: WidgetKind::Volume, slot: Right },
+        WidgetPlacement { kind: WidgetKind::KbdLayout, slot: Right },
+        WidgetPlacement { kind: WidgetKind::PowerMenu, slot: Right },
     ]
 }
 
