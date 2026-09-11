@@ -1,0 +1,10 @@
+// Añade esto a tu config.kdl de niri para Docky.rs (el binario autodetecta Niri):
+// Cambia la ruta al binario de tu fork.
+spawn-at-startup "sh" "-c" "/home/nicomosty/Projects/Docky.rs/target/release/dockyrs"
+spawn-at-startup "sh" "-c" "/home/nicomosty/Projects/Docky.rs/target/release/dockyrs-notifyd"
+
+// Notas:
+// - Workspaces: lee `niri msg --json workspaces`, cambia con `focus-workspace`, escucha `event-stream`.
+// - Blur de Hyprland (layerrule) no existe en Niri: el panel queda translúcido plano.
+// - Auto-pegado del portapapeles usa `wtype` en Niri (`pacman -S wtype`).
+// - Logout usa `niri msg action quit`.

@@ -48,7 +48,11 @@ impl ClipboardHistory {
 
     pub fn add(&mut self, entry: ClipboardEntry) {
         self.ensure_loaded();
-        if let Some(index) = self.entries.iter().position(|existing| existing.same_content(&entry)) {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|existing| existing.same_content(&entry))
+        {
             self.entries.remove(index);
         }
         self.entries.insert(0, entry);
@@ -75,17 +79,23 @@ impl ClipboardHistory {
     }
 }
 
-// ----- auto paste -----
+// ----- auto paste: hypr socket, sino wtype (niri) -----
 pub fn paste_active() {
-    let Ok(sig) = std::env::var("HYPRLAND_INSTANCE_SIGNATURE") else {
-        return;
-    };
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    let path = std::path::PathBuf::from(runtime).join("hypr").join(sig).join(".socket.sock");
-    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
-        use std::io::Write;
-        let _ = stream.write_all(b"dispatch sendshortcut CTRL,V,activewindow");
+    if let Ok(sig) = std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
+        let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+        let path = std::path::PathBuf::from(runtime)
+            .join("hypr")
+            .join(sig)
+            .join(".socket.sock");
+        if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
+            use std::io::Write;
+            let _ = stream.write_all(b"dispatch sendshortcut CTRL,V,activewindow");
+            return;
+        }
     }
+    let _ = std::process::Command::new("wtype")
+        .args(["-M", "ctrl", "v", "-m", "ctrl"])
+        .spawn();
 }
 
 fn preferred_mime(mimes: &[String]) -> Option<(String, usize)> {
@@ -110,7 +120,10 @@ fn preferred_mime(mimes: &[String]) -> Option<(String, usize)> {
 
 impl App {
     pub(crate) fn clipboard_offer_mimes(&self, offer: &ZwlrDataControlOfferV1) -> Vec<String> {
-        self.clipboard_offers.get(&offer.id()).cloned().unwrap_or_default()
+        self.clipboard_offers
+            .get(&offer.id())
+            .cloned()
+            .unwrap_or_default()
     }
 
     // ----- capture selection -----
@@ -160,13 +173,21 @@ impl App {
     // ----- become owner -----
     pub(crate) fn set_clipboard_entry(&mut self, entry: &ClipboardEntry, qh: &QueueHandle<Self>) {
         self.ensure_clipboard_device(qh);
-        let (Some(manager), Some(device)) = (self.clipboard_manager.as_ref(), self.clipboard_device.as_ref()) else {
+        let (Some(manager), Some(device)) = (
+            self.clipboard_manager.as_ref(),
+            self.clipboard_device.as_ref(),
+        ) else {
             return;
         };
         self.clipboard_copy_bytes = std::sync::Arc::new(entry.data.to_vec());
         let source = manager.create_data_source(qh, ());
         if entry.is_text() {
-            for mime in ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "STRING"] {
+            for mime in [
+                "text/plain;charset=utf-8",
+                "text/plain",
+                "UTF8_STRING",
+                "STRING",
+            ] {
                 source.offer(mime.into());
             }
         } else {
@@ -177,7 +198,12 @@ impl App {
         let _ = self.conn.flush();
     }
 
-    pub(crate) fn ingest_clipboard_capture(&mut self, mime: String, data: Vec<u8>, qh: &QueueHandle<Self>) {
+    pub(crate) fn ingest_clipboard_capture(
+        &mut self,
+        mime: String,
+        data: Vec<u8>,
+        qh: &QueueHandle<Self>,
+    ) {
         let Some(entry) = ClipboardEntry::from_data(mime, data) else {
             return;
         };
@@ -193,7 +219,14 @@ impl App {
 wayland_client::delegate_noop!(App: ZwlrDataControlManagerV1);
 
 impl Dispatch<ZwlrDataControlDeviceV1, ()> for App {
-    fn event(state: &mut Self, _: &ZwlrDataControlDeviceV1, event: zwlr_data_control_device_v1::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &ZwlrDataControlDeviceV1,
+        event: zwlr_data_control_device_v1::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         match event {
             zwlr_data_control_device_v1::Event::DataOffer { id } => {
                 state.clipboard_offers.insert(id.id(), Vec::new());
@@ -224,15 +257,33 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for App {
 }
 
 impl Dispatch<ZwlrDataControlOfferV1, ()> for App {
-    fn event(state: &mut Self, offer: &ZwlrDataControlOfferV1, event: zwlr_data_control_offer_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        offer: &ZwlrDataControlOfferV1,
+        event: zwlr_data_control_offer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
-            state.clipboard_offers.entry(offer.id()).or_default().push(mime_type);
+            state
+                .clipboard_offers
+                .entry(offer.id())
+                .or_default()
+                .push(mime_type);
         }
     }
 }
 
 impl Dispatch<ZwlrDataControlSourceV1, ()> for App {
-    fn event(state: &mut Self, source: &ZwlrDataControlSourceV1, event: zwlr_data_control_source_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        source: &ZwlrDataControlSourceV1,
+        event: zwlr_data_control_source_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match event {
             zwlr_data_control_source_v1::Event::Send { fd, .. } => {
                 let bytes = state.clipboard_copy_bytes.clone();

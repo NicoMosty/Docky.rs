@@ -53,7 +53,12 @@ pub fn spawn_listener(tx: Sender<IpcMessage>, conn: Connection, qh: QueueHandle<
     });
 }
 
-fn handle_client(mut stream: UnixStream, tx: &Sender<IpcMessage>, conn: &Connection, qh: &QueueHandle<crate::app::App>) {
+fn handle_client(
+    mut stream: UnixStream,
+    tx: &Sender<IpcMessage>,
+    conn: &Connection,
+    qh: &QueueHandle<crate::app::App>,
+) {
     let mut buf = [0u8; 1024];
     let Ok(n) = stream.read(&mut buf) else {
         return;
@@ -85,7 +90,11 @@ fn handle_client(mut stream: UnixStream, tx: &Sender<IpcMessage>, conn: &Connect
     }
 }
 
-pub fn spawn_brightness_watcher(tx: Sender<IpcMessage>, conn: Connection, qh: QueueHandle<crate::app::App>) {
+pub fn spawn_brightness_watcher(
+    tx: Sender<IpcMessage>,
+    conn: Connection,
+    qh: QueueHandle<crate::app::App>,
+) {
     let Some(dir) = crate::widgets::backlight_dir() else {
         return;
     };
@@ -94,7 +103,11 @@ pub fn spawn_brightness_watcher(tx: Sender<IpcMessage>, conn: Connection, qh: Qu
         let Ok(mut inotify) = inotify::Inotify::init() else {
             return;
         };
-        if inotify.watches().add(&path, inotify::WatchMask::MODIFY).is_err() {
+        if inotify
+            .watches()
+            .add(&path, inotify::WatchMask::MODIFY)
+            .is_err()
+        {
             return;
         }
         let mut buffer = [0u8; 1024];
@@ -113,7 +126,11 @@ pub fn spawn_brightness_watcher(tx: Sender<IpcMessage>, conn: Connection, qh: Qu
     });
 }
 
-pub fn spawn_battery_watcher(tx: Sender<IpcMessage>, conn: Connection, qh: QueueHandle<crate::app::App>) {
+pub fn spawn_battery_watcher(
+    tx: Sender<IpcMessage>,
+    conn: Connection,
+    qh: QueueHandle<crate::app::App>,
+) {
     let Some(dir) = crate::widgets::battery_dir() else {
         return;
     };
@@ -130,7 +147,11 @@ pub fn spawn_battery_watcher(tx: Sender<IpcMessage>, conn: Connection, qh: Queue
 
             let mut pfds: Vec<libc::pollfd> = files
                 .iter()
-                .map(|f| libc::pollfd { fd: f.as_raw_fd(), events: libc::POLLPRI | libc::POLLERR, revents: 0 })
+                .map(|f| libc::pollfd {
+                    fd: f.as_raw_fd(),
+                    events: libc::POLLPRI | libc::POLLERR,
+                    revents: 0,
+                })
                 .collect();
             if pfds.is_empty() {
                 std::thread::sleep(std::time::Duration::from_secs(30));
@@ -159,36 +180,58 @@ fn die_with_parent(cmd: &mut std::process::Command) -> &mut std::process::Comman
     cmd
 }
 
-pub fn spawn_media_watcher(tx: Sender<IpcMessage>, conn: Connection, qh: QueueHandle<crate::app::App>) {
-    std::thread::spawn(move || loop {
-        let mut cmd = std::process::Command::new("playerctl");
-        cmd.args(["-a", "metadata", "--follow", "--format", "{{status}}\t{{title}}\t{{artist}}"]).stdout(Stdio::piped()).stderr(Stdio::null());
-        let child = die_with_parent(&mut cmd).spawn();
-        let Ok(mut child) = child else {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        };
-        if let Some(stdout) = child.stdout.take() {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                let _ = line;
-                if tx.send(IpcMessage::MediaChanged).is_ok() {
-                    conn.display().sync(&qh, ());
-                    let _ = conn.flush();
+pub fn spawn_media_watcher(
+    tx: Sender<IpcMessage>,
+    conn: Connection,
+    qh: QueueHandle<crate::app::App>,
+) {
+    std::thread::spawn(move || {
+        loop {
+            let mut cmd = std::process::Command::new("playerctl");
+            cmd.args([
+                "-a",
+                "metadata",
+                "--follow",
+                "--format",
+                "{{status}}\t{{title}}\t{{artist}}",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+            let child = die_with_parent(&mut cmd).spawn();
+            let Ok(mut child) = child else {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                continue;
+            };
+            if let Some(stdout) = child.stdout.take() {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    let _ = line;
+                    if tx.send(IpcMessage::MediaChanged).is_ok() {
+                        conn.display().sync(&qh, ());
+                        let _ = conn.flush();
+                    }
                 }
             }
+            let _ = child.wait();
+            std::thread::sleep(std::time::Duration::from_secs(3));
         }
-        let _ = child.wait();
-        std::thread::sleep(std::time::Duration::from_secs(3));
     });
 }
 
-pub fn spawn_bluetooth_watcher(tx: Sender<IpcMessage>, conn: Connection, qh: QueueHandle<crate::app::App>) {
+pub fn spawn_bluetooth_watcher(
+    tx: Sender<IpcMessage>,
+    conn: Connection,
+    qh: QueueHandle<crate::app::App>,
+) {
     std::thread::spawn(move || {
         let _ = watch_bluetooth(&tx, &conn, &qh);
     });
 }
 
-fn watch_bluetooth(tx: &Sender<IpcMessage>, conn: &Connection, qh: &QueueHandle<crate::app::App>) -> zbus::Result<()> {
+fn watch_bluetooth(
+    tx: &Sender<IpcMessage>,
+    conn: &Connection,
+    qh: &QueueHandle<crate::app::App>,
+) -> zbus::Result<()> {
     let system = zbus::blocking::Connection::system()?;
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
@@ -198,7 +241,11 @@ fn watch_bluetooth(tx: &Sender<IpcMessage>, conn: &Connection, qh: &QueueHandle<
         .build();
     let iter = zbus::blocking::MessageIterator::for_match_rule(rule, &system, Some(8))?;
     for msg in iter.flatten() {
-        type Changed = (String, std::collections::HashMap<String, zbus::zvariant::OwnedValue>, Vec<String>);
+        type Changed = (
+            String,
+            std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+            Vec<String>,
+        );
         let Ok((_iface, changed, invalidated)) = msg.body().deserialize::<Changed>() else {
             continue;
         };
@@ -215,23 +262,77 @@ fn watch_bluetooth(tx: &Sender<IpcMessage>, conn: &Connection, qh: &QueueHandle<
     Ok(())
 }
 
-pub fn spawn_workspace_watcher(tx: Sender<IpcMessage>, conn: Connection, qh: QueueHandle<crate::app::App>) {
-    std::thread::spawn(move || loop {
-        let Ok(sig) = std::env::var("HYPRLAND_INSTANCE_SIGNATURE") else { return };
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-        let path = std::path::PathBuf::from(runtime_dir).join("hypr").join(&sig).join(".socket2.sock");
-        let Ok(stream) = UnixStream::connect(&path) else {
+pub fn spawn_workspace_watcher(
+    tx: Sender<IpcMessage>,
+    conn: Connection,
+    qh: QueueHandle<crate::app::App>,
+) {
+    match crate::compositor::Compositor::detect() {
+        crate::compositor::Compositor::Niri => spawn_niri_workspace_watcher(tx, conn, qh),
+        _ => spawn_hypr_workspace_watcher(tx, conn, qh),
+    }
+}
+
+fn spawn_niri_workspace_watcher(
+    tx: Sender<IpcMessage>,
+    conn: Connection,
+    qh: QueueHandle<crate::app::App>,
+) {
+    std::thread::spawn(move || {
+        loop {
+            let mut cmd = std::process::Command::new("niri");
+            cmd.args(["msg", "--json", "event-stream"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            let Ok(mut child) = cmd.spawn() else {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                continue;
+            };
+            if let Some(stdout) = child.stdout.take() {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    // ponytail: filtrado por substring, sin parsear JSON por evento
+                    if (line.contains("Workspace") || line.contains("workspace"))
+                        && tx.send(IpcMessage::WorkspacesChanged).is_ok()
+                    {
+                        conn.display().sync(&qh, ());
+                        let _ = conn.flush();
+                    }
+                }
+            }
+            let _ = child.wait();
             std::thread::sleep(std::time::Duration::from_secs(3));
-            continue;
-        };
-        for line in BufReader::new(stream).lines().map_while(Result::ok) {
-            if line.starts_with("workspace") || line.starts_with("focusedmon") {
-                if tx.send(IpcMessage::WorkspacesChanged).is_ok() {
+        }
+    });
+}
+
+fn spawn_hypr_workspace_watcher(
+    tx: Sender<IpcMessage>,
+    conn: Connection,
+    qh: QueueHandle<crate::app::App>,
+) {
+    std::thread::spawn(move || {
+        loop {
+            let Ok(sig) = std::env::var("HYPRLAND_INSTANCE_SIGNATURE") else {
+                return;
+            };
+            let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+            let path = std::path::PathBuf::from(runtime_dir)
+                .join("hypr")
+                .join(&sig)
+                .join(".socket2.sock");
+            let Ok(stream) = UnixStream::connect(&path) else {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                continue;
+            };
+            for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                if (line.starts_with("workspace") || line.starts_with("focusedmon"))
+                    && tx.send(IpcMessage::WorkspacesChanged).is_ok()
+                {
                     conn.display().sync(&qh, ());
                     let _ = conn.flush();
                 }
             }
+            std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        std::thread::sleep(std::time::Duration::from_secs(1));
     });
 }

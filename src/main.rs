@@ -1,4 +1,6 @@
+mod app;
 mod clipboard;
+mod compositor;
 mod config;
 mod desktop;
 mod dock;
@@ -11,30 +13,29 @@ mod power;
 mod render;
 mod screenshot;
 mod text;
-mod tray;
 mod thumbnail_cache;
+mod tray;
 mod wallpaper;
-mod app;
 mod widgets;
 
+use app::App;
 use config::Config;
 use dock::Dock;
 use icon_cache::IconCache;
-use thumbnail_cache::ThumbnailCache;
 use smithay_client_toolkit::{
     compositor::CompositorState,
     output::OutputState,
     registry::RegistryState,
     seat::SeatState,
     shell::{
-        wlr_layer::{KeyboardInteractivity, Layer, LayerShell},
         WaylandSurface,
+        wlr_layer::{KeyboardInteractivity, Layer, LayerShell},
     },
-    shm::{slot::SlotPool, Shm},
+    shm::{Shm, slot::SlotPool},
 };
 use text::TextCache;
-use app::App;
-use wayland_client::{globals::registry_queue_init, Connection};
+use thumbnail_cache::ThumbnailCache;
+use wayland_client::{Connection, globals::registry_queue_init};
 
 pub const ICON_THEME: &str = "WhiteSur";
 
@@ -96,7 +97,14 @@ fn main() -> anyhow::Result<()> {
         let cross_len = dock.cross_len();
         // ----- resized later -----
         let widget_scale = dock.config.settings.widget_scale;
-        dock.widget_bar_content_len = render::widget_bar_natural_len(&dock.config.settings, &initial_widgets, 0, is_vertical, cross_len, widget_scale);
+        dock.widget_bar_content_len = render::widget_bar_natural_len(
+            &dock.config.settings,
+            &initial_widgets,
+            0,
+            is_vertical,
+            cross_len,
+            widget_scale,
+        );
     }
     let (base_w, base_h) = dock.base_size();
 
@@ -114,11 +122,13 @@ fn main() -> anyhow::Result<()> {
     let seat_state = SeatState::new(&globals, &qh);
     let seat = seat_state.seats().next();
     // ----- eager avoids race -----
-    let clipboard_device = clipboard_manager.as_ref().zip(seat.as_ref()).map(|(m, s)| m.get_data_device(s, &qh, ()));
+    let clipboard_device = clipboard_manager
+        .as_ref()
+        .zip(seat.as_ref())
+        .map(|(m, s)| m.get_data_device(s, &qh, ()));
 
     let surface = compositor.create_surface(&qh);
-    let layer =
-        layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("dockyrs"), None);
+    let layer = layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("dockyrs"), None);
 
     let s = &dock.config.settings;
     let (anchor, margin) = app::edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
@@ -130,15 +140,28 @@ fn main() -> anyhow::Result<()> {
     layer.commit();
 
     let reserve_surface = compositor.create_surface(&qh);
-    let reserve_layer = layer_shell.create_layer_surface(&qh, reserve_surface, Layer::Top, Some("dockyrs-reserve"), None);
+    let reserve_layer = layer_shell.create_layer_surface(
+        &qh,
+        reserve_surface,
+        Layer::Top,
+        Some("dockyrs-reserve"),
+        None,
+    );
     let (reserve_anchor, reserve_margin) = app::single_edge_anchor_margin(s.dock_edge, s.pos_y);
     reserve_layer.set_anchor(reserve_anchor);
     reserve_layer.set_size(1, 1);
-    reserve_layer.set_margin(reserve_margin.0, reserve_margin.1, reserve_margin.2, reserve_margin.3);
+    reserve_layer.set_margin(
+        reserve_margin.0,
+        reserve_margin.1,
+        reserve_margin.2,
+        reserve_margin.3,
+    );
     reserve_layer.set_exclusive_zone(dock.thickness() as i32 + s.pos_y);
     reserve_layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     if let Ok(empty_region) = smithay_client_toolkit::compositor::Region::new(&compositor) {
-        reserve_layer.wl_surface().set_input_region(Some(empty_region.wl_region()));
+        reserve_layer
+            .wl_surface()
+            .set_input_region(Some(empty_region.wl_region()));
     }
     reserve_layer.commit();
 
@@ -151,7 +174,12 @@ fn main() -> anyhow::Result<()> {
 
     let tray_state: tray::TrayState = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let tray_tick_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    tray::spawn(tray_state.clone(), tray_tick_pending.clone(), conn.clone(), qh.clone());
+    tray::spawn(
+        tray_state.clone(),
+        tray_tick_pending.clone(),
+        conn.clone(),
+        qh.clone(),
+    );
 
     let available_fonts = std::rc::Rc::new(text::list_font_families());
     let mut text_cache = TextCache::new();
@@ -161,7 +189,8 @@ fn main() -> anyhow::Result<()> {
     let (clip_tx, clip_rx) = std::sync::mpsc::channel::<(String, Vec<u8>)>();
 
     let output_state = OutputState::new(&globals, &qh);
-    let screenshot = screenshot::ScreenshotState::new(&globals, &qh, &compositor, &layer_shell, &output_state);
+    let screenshot =
+        screenshot::ScreenshotState::new(&globals, &qh, &compositor, &layer_shell, &output_state);
 
     let mut app = App {
         registry_state: RegistryState::new(&globals),
@@ -239,13 +268,29 @@ fn main() -> anyhow::Result<()> {
     spawn_cpu_ram_ticker(cpu_ram_tick_pending.clone(), conn.clone(), qh.clone());
 
     let osd_timeout_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    spawn_osd_timer(osd_reset_rx, osd_timeout_pending.clone(), conn.clone(), qh.clone());
+    spawn_osd_timer(
+        osd_reset_rx,
+        osd_timeout_pending.clone(),
+        conn.clone(),
+        qh.clone(),
+    );
 
-    let notification_timeout_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    spawn_notification_timer(notification_reset_rx, notification_timeout_pending.clone(), conn.clone(), qh.clone());
+    let notification_timeout_pending =
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    spawn_notification_timer(
+        notification_reset_rx,
+        notification_timeout_pending.clone(),
+        conn.clone(),
+        qh.clone(),
+    );
 
     let marquee_tick_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    spawn_marquee_ticker(marquee_tick_rx, marquee_tick_pending.clone(), conn.clone(), qh.clone());
+    spawn_marquee_ticker(
+        marquee_tick_rx,
+        marquee_tick_pending.clone(),
+        conn.clone(),
+        qh.clone(),
+    );
 
     loop {
         event_queue.blocking_dispatch(&mut app)?;
@@ -263,9 +308,11 @@ fn main() -> anyhow::Result<()> {
                 ipc::IpcMessage::ScreenshotFull => app.start_full_screenshot(&qh),
                 ipc::IpcMessage::ScreenshotRegion => app.start_region_screenshot(&qh),
                 ipc::IpcMessage::ToggleDockMenu => app.toggle_dock_menu(&qh),
-                ipc::IpcMessage::TestNotification => {
-                    app.show_notification("Test Notification".to_string(), "This is a test notification from Docky.rs".to_string(), &qh)
-                }
+                ipc::IpcMessage::TestNotification => app.show_notification(
+                    "Test Notification".to_string(),
+                    "This is a test notification from Docky.rs".to_string(),
+                    &qh,
+                ),
                 ipc::IpcMessage::Notify(title, body) => app.show_notification(title, body, &qh),
             }
         }
@@ -301,21 +348,33 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn spawn_clock_ticker(flag: std::sync::Arc<std::sync::atomic::AtomicBool>, conn: Connection, qh: wayland_client::QueueHandle<App>) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(20));
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        conn.display().sync(&qh, ());
-        let _ = conn.flush();
+fn spawn_clock_ticker(
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    conn: Connection,
+    qh: wayland_client::QueueHandle<App>,
+) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(20));
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            conn.display().sync(&qh, ());
+            let _ = conn.flush();
+        }
     });
 }
 
-fn spawn_cpu_ram_ticker(flag: std::sync::Arc<std::sync::atomic::AtomicBool>, conn: Connection, qh: wayland_client::QueueHandle<App>) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(15));
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        conn.display().sync(&qh, ());
-        let _ = conn.flush();
+fn spawn_cpu_ram_ticker(
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    conn: Connection,
+    qh: wayland_client::QueueHandle<App>,
+) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(15));
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            conn.display().sync(&qh, ());
+            let _ = conn.flush();
+        }
     });
 }
 
@@ -326,20 +385,23 @@ fn spawn_osd_timer(
     qh: wayland_client::QueueHandle<App>,
 ) {
     use std::sync::mpsc::RecvTimeoutError;
-    std::thread::spawn(move || loop {
-        if reset_rx.recv().is_err() {
-            return;
-        }
+    std::thread::spawn(move || {
         loop {
-            match reset_rx.recv_timeout(std::time::Duration::from_millis(menu::OSD_TIMEOUT_MS)) {
-                Ok(()) => continue,
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(RecvTimeoutError::Disconnected) => return,
+            if reset_rx.recv().is_err() {
+                return;
             }
+            loop {
+                match reset_rx.recv_timeout(std::time::Duration::from_millis(menu::OSD_TIMEOUT_MS))
+                {
+                    Ok(()) => continue,
+                    Err(RecvTimeoutError::Timeout) => break,
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+            }
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            conn.display().sync(&qh, ());
+            let _ = conn.flush();
         }
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        conn.display().sync(&qh, ());
-        let _ = conn.flush();
     });
 }
 
