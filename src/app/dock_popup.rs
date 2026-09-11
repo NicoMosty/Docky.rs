@@ -130,7 +130,7 @@ impl App {
             surface,
             Layer::Overlay,
             Some("dockyrs-menu"),
-            None,
+            self.pinned_output.as_ref(),
         );
         let (anchor, margin) = self.popup_anchor_margin();
         layer.set_anchor(anchor);

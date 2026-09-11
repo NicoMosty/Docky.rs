@@ -29,67 +29,154 @@ use smithay_client_toolkit::{
     seat::SeatState,
     shell::{
         WaylandSurface,
-        wlr_layer::{KeyboardInteractivity, Layer, LayerShell},
+        wlr_layer::{KeyboardInteractivity, Layer, LayerShell, LayerSurface},
     },
     shm::{Shm, slot::SlotPool},
 };
 use text::TextCache;
 use thumbnail_cache::ThumbnailCache;
-use wayland_client::{Connection, globals::registry_queue_init};
+use wayland_client::{Connection, QueueHandle, globals::registry_queue_init, protocol::wl_output};
 
 pub const ICON_THEME: &str = "WhiteSur";
+
+struct Cli {
+    profile: String,
+    output: Option<String>,
+    command: Option<String>,
+    notify_args: Vec<String>,
+}
+
+fn parse_cli() -> Cli {
+    let mut cli = Cli { profile: String::new(), output: None, command: None, notify_args: Vec::new() };
+    let mut it = std::env::args().skip(1).peekable();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--profile" => cli.profile = it.next().unwrap_or_default(),
+            "--output" => cli.output = it.next(),
+            other => {
+                if cli.command.is_none() {
+                    cli.command = Some(other.to_string());
+                } else {
+                    cli.notify_args.push(other.to_string());
+                }
+            }
+        }
+    }
+    cli
+}
+
+fn ns(base: &str, profile: &str) -> String {
+    if profile.is_empty() { base.to_string() } else { format!("{base}-{profile}") }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_dock_surfaces(
+    compositor: &CompositorState,
+    layer_shell: &LayerShell,
+    qh: &QueueHandle<App>,
+    dock: &Dock,
+    base_w: u32,
+    base_h: u32,
+    namespace: String,
+    reserve_namespace: String,
+    output: Option<&wl_output::WlOutput>,
+) -> (LayerSurface, LayerSurface) {
+    let surface = compositor.create_surface(qh);
+    let layer = layer_shell.create_layer_surface(qh, surface, Layer::Top, Some(namespace), output);
+
+    let s = &dock.config.settings;
+    let (anchor, margin) = app::edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
+    layer.set_anchor(anchor);
+    layer.set_size(base_w, base_h);
+    layer.set_margin(margin.0, margin.1, margin.2, margin.3);
+    layer.set_exclusive_zone(-1);
+    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+    layer.commit();
+
+    let reserve_surface = compositor.create_surface(qh);
+    let reserve_layer = layer_shell.create_layer_surface(
+        qh,
+        reserve_surface,
+        Layer::Top,
+        Some(reserve_namespace),
+        output,
+    );
+    let (reserve_anchor, reserve_margin) = app::single_edge_anchor_margin(s.dock_edge, s.pos_y);
+    reserve_layer.set_anchor(reserve_anchor);
+    reserve_layer.set_size(1, 1);
+    reserve_layer.set_margin(
+        reserve_margin.0,
+        reserve_margin.1,
+        reserve_margin.2,
+        reserve_margin.3,
+    );
+    reserve_layer.set_exclusive_zone(dock.thickness() as i32 + s.pos_y);
+    reserve_layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+    if let Ok(empty_region) = smithay_client_toolkit::compositor::Region::new(compositor) {
+        reserve_layer
+            .wl_surface()
+            .set_input_region(Some(empty_region.wl_region()));
+    }
+    reserve_layer.commit();
+    (layer, reserve_layer)
+}
 
 fn main() -> anyhow::Result<()> {
     unsafe { libc::mallopt(libc::M_ARENA_MAX, 1) };
     env_logger::init();
 
-    match std::env::args().nth(1).as_deref() {
+    let cli = parse_cli();
+    match cli.command.as_deref() {
         Some("--toggle-search") => {
-            ipc::send_message("toggle-search");
+            ipc::send_message("toggle-search", &cli.profile);
             return Ok(());
         }
         Some("--osd-volume") => {
-            ipc::send_message("osd-volume");
+            ipc::send_message("osd-volume", &cli.profile);
             return Ok(());
         }
         Some("--osd-brightness") => {
-            ipc::send_message("osd-brightness");
+            ipc::send_message("osd-brightness", &cli.profile);
             return Ok(());
         }
         Some("--toggle-wallpaper") => {
-            ipc::send_message("toggle-wallpaper");
+            ipc::send_message("toggle-wallpaper", &cli.profile);
             return Ok(());
         }
         Some("--toggle-clipboard") => {
-            ipc::send_message("toggle-clipboard");
+            ipc::send_message("toggle-clipboard", &cli.profile);
             return Ok(());
         }
         Some("--screenshot-full") => {
-            ipc::send_message("screenshot-full");
+            ipc::send_message("screenshot-full", &cli.profile);
             return Ok(());
         }
         Some("--screenshot-region") => {
-            ipc::send_message("screenshot-region");
+            ipc::send_message("screenshot-region", &cli.profile);
             return Ok(());
         }
         Some("--toggle-dock-menu") => {
-            ipc::send_message("toggle-dock-menu");
+            ipc::send_message("toggle-dock-menu", &cli.profile);
             return Ok(());
         }
         Some("--test-notification") => {
-            ipc::send_message("test-notification");
+            ipc::send_message("test-notification", &cli.profile);
             return Ok(());
         }
         Some("--notify") => {
-            let title = std::env::args().nth(2).unwrap_or_default();
-            let body = std::env::args().nth(3).unwrap_or_default();
-            ipc::send_message(&format!("notify\u{1f}{title}\u{1f}{body}"));
+            let title = cli.notify_args.first().cloned().unwrap_or_default();
+            let body = cli.notify_args.get(1).cloned().unwrap_or_default();
+            ipc::send_message(&format!("notify\u{1f}{title}\u{1f}{body}"), &cli.profile);
             return Ok(());
         }
-        _ => {}
+        Some(unknown) => {
+            log::warn!("unknown command: {unknown}");
+            return Ok(());
+        }
+        None => {}
     }
 
-    let config = Config::load();
+    let config = Config::load(&cli.profile);
     let mut dock = Dock::new(config);
     let initial_widgets = widgets::WidgetSnapshot::refresh();
     if dock.icons.is_empty() {
@@ -127,43 +214,17 @@ fn main() -> anyhow::Result<()> {
         .zip(seat.as_ref())
         .map(|(m, s)| m.get_data_device(s, &qh, ()));
 
-    let surface = compositor.create_surface(&qh);
-    let layer = layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("dockyrs"), None);
-
-    let s = &dock.config.settings;
-    let (anchor, margin) = app::edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-    layer.set_anchor(anchor);
-    layer.set_size(base_w, base_h);
-    layer.set_margin(margin.0, margin.1, margin.2, margin.3);
-    layer.set_exclusive_zone(-1);
-    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    layer.commit();
-
-    let reserve_surface = compositor.create_surface(&qh);
-    let reserve_layer = layer_shell.create_layer_surface(
+    let (layer, reserve_layer) = create_dock_surfaces(
+        &compositor,
+        &layer_shell,
         &qh,
-        reserve_surface,
-        Layer::Top,
-        Some("dockyrs-reserve"),
+        &dock,
+        base_w,
+        base_h,
+        ns("dockyrs", &cli.profile),
+        ns("dockyrs-reserve", &cli.profile),
         None,
     );
-    let (reserve_anchor, reserve_margin) = app::single_edge_anchor_margin(s.dock_edge, s.pos_y);
-    reserve_layer.set_anchor(reserve_anchor);
-    reserve_layer.set_size(1, 1);
-    reserve_layer.set_margin(
-        reserve_margin.0,
-        reserve_margin.1,
-        reserve_margin.2,
-        reserve_margin.3,
-    );
-    reserve_layer.set_exclusive_zone(dock.thickness() as i32 + s.pos_y);
-    reserve_layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    if let Ok(empty_region) = smithay_client_toolkit::compositor::Region::new(&compositor) {
-        reserve_layer
-            .wl_surface()
-            .set_input_region(Some(empty_region.wl_region()));
-    }
-    reserve_layer.commit();
 
     let pool_size = (base_w as usize * 3) * (base_h as usize * 3) * 4;
     let pool = SlotPool::new(pool_size.max(4096), &shm)?;
@@ -189,8 +250,6 @@ fn main() -> anyhow::Result<()> {
     let (clip_tx, clip_rx) = std::sync::mpsc::channel::<(String, Vec<u8>)>();
 
     let output_state = OutputState::new(&globals, &qh);
-    let screenshot =
-        screenshot::ScreenshotState::new(&globals, &qh, &compositor, &layer_shell, &output_state);
 
     let mut app = App {
         registry_state: RegistryState::new(&globals),
@@ -211,6 +270,7 @@ fn main() -> anyhow::Result<()> {
         available_fonts: available_fonts.clone(),
         thumbnail_cache: ThumbnailCache::new(),
         output_scale: 1,
+        pinned_output: None,
         awaiting_frame: false,
         exit: false,
         first_configure: true,
@@ -239,7 +299,7 @@ fn main() -> anyhow::Result<()> {
         seat,
         conn: conn.clone(),
         qh: qh.clone(),
-        screenshot,
+        screenshot: None,
         clipboard_manager,
         clipboard_device,
         clipboard_offer: None,
@@ -253,8 +313,56 @@ fn main() -> anyhow::Result<()> {
         paste_tx,
     };
 
+    // ----- pin por output: descubrir nombres en la cola principal y recrear anclado -----
+    // (reemplazar suelta la superficie temporal vía Drop; los eventos viejos se ignoran por identidad)
+    if let Some(want) = cli.output.as_deref() {
+        let mut found = None;
+        for _ in 0..4 {
+            if event_queue.roundtrip(&mut app).is_err() {
+                break;
+            }
+            found = app.output_state.outputs().find(|o| {
+                app.output_state.info(o).and_then(|i| i.name).as_deref() == Some(want)
+            });
+            if found.is_some() {
+                break;
+            }
+        }
+        match found {
+            Some(o) => {
+                let (bw, bh) = app.dock.base_size();
+                let (nl, nr) = create_dock_surfaces(
+                    &app.compositor,
+                    &app.layer_shell,
+                    &app.qh,
+                    &app.dock,
+                    bw,
+                    bh,
+                    ns("dockyrs", &cli.profile),
+                    ns("dockyrs-reserve", &cli.profile),
+                    Some(&o),
+                );
+                app.layer = nl;
+                app.reserve_layer = nr;
+                app.pinned_output = Some(o);
+                app.first_configure = true;
+                app.awaiting_frame = false;
+            }
+            None => log::warn!("output '{want}' not found, running unpinned"),
+        }
+    }
+
+    app.screenshot = screenshot::ScreenshotState::new(
+        &globals,
+        &app.qh,
+        &app.compositor,
+        &app.layer_shell,
+        &app.output_state,
+        app.pinned_output.clone(),
+    );
+
     let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<ipc::IpcMessage>();
-    ipc::spawn_listener(ipc_tx.clone(), conn.clone(), qh.clone());
+    ipc::spawn_listener(ipc_tx.clone(), conn.clone(), qh.clone(), cli.profile.clone());
     ipc::spawn_brightness_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
     ipc::spawn_battery_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
     ipc::spawn_bluetooth_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
@@ -374,11 +482,13 @@ fn spawn_sys_ticker(
     conn: Connection,
     qh: wayland_client::QueueHandle<App>,
 ) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        conn.display().sync(&qh, ());
-        let _ = conn.flush();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            conn.display().sync(&qh, ());
+            let _ = conn.flush();
+        }
     });
 }
 

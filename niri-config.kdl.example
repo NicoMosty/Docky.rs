@@ -1,10 +1,19 @@
-// Añade esto a tu config.kdl de niri para Docky.rs (el binario autodetecta Niri):
-// Cambia la ruta al binario de tu fork.
-spawn-at-startup "sh" "-c" "/home/nicomosty/Projects/Docky.rs/target/release/dockyrs"
-spawn-at-startup "sh" "-c" "/home/nicomosty/Projects/Docky.rs/target/release/dockyrs-notifyd"
+// Docky.rs en Niri: una instancia por monitor (contenido independiente).
+// Cada perfil usa su config (~/.config/dockyrs/config-<perfil>.json)
+// y su socket ($XDG_RUNTIME_DIR/dockyrs-<perfil>.sock).
+spawn-at-startup "sh" "-c" "/home/nicomosty/Projects/Docky.rs/target/release/dockyrs --output DP-2 --profile dp"
+spawn-at-startup "sh" "-c" "/home/nicomosty/Projects/Docky.rs/target/release/dockyrs --output HDMI-A-1 --profile hdmi"
 
+// Sin --output: una sola instancia (Niri la pone en un monitor).
+// Sin --profile: config.json y dockyrs.sock por defecto.
+//
+// Keybinds: añade --profile para dirigir el comando a una instancia:
+//   dockyrs --profile dp --toggle-dock-menu
+//   dockyrs --profile dp --toggle-search
+//
 // Notas:
 // - Workspaces: lee `niri msg --json workspaces`, cambia con `focus-workspace`, escucha `event-stream`.
 // - Blur de Hyprland (layerrule) no existe en Niri: el panel queda translúcido plano.
 // - Auto-pegado del portapapeles usa `wtype` en Niri (`pacman -S wtype`).
 // - Logout usa `niri msg action quit`.
+// - El tray se muestra en ambas instancias (mismos iconos).

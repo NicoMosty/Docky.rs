@@ -193,14 +193,25 @@ fn read_network() -> NetworkInfo {
         return info;
     }
     if let Some(label) = ethernet_ip() {
-        return NetworkInfo { label, online: true };
+        return NetworkInfo {
+            label,
+            online: true,
+        };
     }
-    NetworkInfo { label: "Disconnected".to_string(), online: false }
+    NetworkInfo {
+        label: "Disconnected".to_string(),
+        online: false,
+    }
 }
 
 fn wifi_iface() -> Option<String> {
     let wireless = std::fs::read_to_string("/proc/net/wireless").ok()?;
-    wireless.lines().nth(2)?.split(':').next().map(|s| s.trim().to_string())
+    wireless
+        .lines()
+        .nth(2)?
+        .split(':')
+        .next()
+        .map(|s| s.trim().to_string())
 }
 
 fn wifi_info() -> Option<NetworkInfo> {
@@ -228,7 +239,10 @@ fn wifi_info() -> Option<NetworkInfo> {
     if label.chars().count() > 24 {
         label = format!("{}…", label.chars().take(23).collect::<String>());
     }
-    Some(NetworkInfo { label, online: true })
+    Some(NetworkInfo {
+        label,
+        online: true,
+    })
 }
 
 fn ethernet_ip() -> Option<String> {
@@ -264,10 +278,14 @@ fn read_kblayout() -> KbLayout {
         {
             let idx = v.get("current_idx").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
             let full = names.get(idx).and_then(|n| n.as_str()).unwrap_or("?");
-            return KbLayout { short: kb_short(full) };
+            return KbLayout {
+                short: kb_short(full),
+            };
         }
     }
-    KbLayout { short: "--".to_string() }
+    KbLayout {
+        short: "--".to_string(),
+    }
 }
 
 fn kb_short(full: &str) -> String {
@@ -301,7 +319,10 @@ fn home_script(path: &str) -> Option<std::path::PathBuf> {
 }
 
 fn spawn_script(path: std::path::PathBuf) {
-    let _ = std::process::Command::new("sh").arg("-c").arg(format!("{} &", path.display())).spawn();
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{} &", path.display()))
+        .spawn();
 }
 
 /// waybar parity clicks
@@ -310,7 +331,9 @@ pub fn open_network_settings() {
 }
 
 pub fn open_system_monitor() {
-    let _ = std::process::Command::new("alacritty").args(["-e", "btop"]).spawn();
+    let _ = std::process::Command::new("alacritty")
+        .args(["-e", "btop"])
+        .spawn();
 }
 
 pub fn open_bluetooth_manager(fallback_toggle: bool, powered: bool) {

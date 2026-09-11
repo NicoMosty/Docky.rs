@@ -11,6 +11,10 @@ impl App {
         advance_marquee: bool,
         advance_ws: bool,
     ) {
+        // ----- sin dibujar antes del primer configure (la escala puede llegar antes) -----
+        if self.first_configure {
+            return;
+        }
         if self.notification_mode.is_some() {
             self.draw_notification_mode(qh);
         } else if self.osd_mode.is_some() {

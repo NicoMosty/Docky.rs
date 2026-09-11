@@ -64,7 +64,14 @@ fn draw_icon_label(
         let total = icon_r * 2.0 + gap + label_len;
         let block_start = zy + (zh - total) / 2.0;
         let cx = zx + zw / 2.0;
-        draw_icon(pixmap, render_scale, cx, block_start + icon_r, colors, active);
+        draw_icon(
+            pixmap,
+            render_scale,
+            cx,
+            block_start + icon_r,
+            colors,
+            active,
+        );
         draw_text_rotated(
             pixmap,
             text_cache,
@@ -96,10 +103,21 @@ fn draw_icon_label(
     }
 }
 
-fn stroke(pixmap: &mut Pixmap, path: &tiny_skia::Path, render_scale: f32, colors: &WidgetColors, active: bool) {
+fn stroke(
+    pixmap: &mut Pixmap,
+    path: &tiny_skia::Path,
+    render_scale: f32,
+    colors: &WidgetColors,
+    active: bool,
+) {
     let mut paint = Paint::default();
     let alpha = if active { 230 } else { 110 };
-    paint.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, alpha);
+    paint.set_color_rgba8(
+        colors.text_rgb.0,
+        colors.text_rgb.1,
+        colors.text_rgb.2,
+        alpha,
+    );
     paint.anti_alias = true;
     let stroke = tiny_skia::Stroke {
         width: 1.6 * render_scale,
@@ -109,7 +127,14 @@ fn stroke(pixmap: &mut Pixmap, path: &tiny_skia::Path, render_scale: f32, colors
     pixmap.stroke_path(path, &paint, &stroke, Transform::identity(), None);
 }
 
-fn draw_speaker_icon(pixmap: &mut Pixmap, render_scale: f32, cx: f32, cy: f32, colors: &WidgetColors, active: bool) {
+fn draw_speaker_icon(
+    pixmap: &mut Pixmap,
+    render_scale: f32,
+    cx: f32,
+    cy: f32,
+    colors: &WidgetColors,
+    active: bool,
+) {
     let s = 6.0 * render_scale;
     let mut pb = tiny_skia::PathBuilder::new();
     pb.move_to(cx - s, cy - s * 0.45);
@@ -122,9 +147,20 @@ fn draw_speaker_icon(pixmap: &mut Pixmap, render_scale: f32, cx: f32, cy: f32, c
     if let Some(path) = pb.finish() {
         let mut paint = Paint::default();
         let alpha = if active { 230 } else { 110 };
-        paint.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, alpha);
+        paint.set_color_rgba8(
+            colors.text_rgb.0,
+            colors.text_rgb.1,
+            colors.text_rgb.2,
+            alpha,
+        );
         paint.anti_alias = true;
-        pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
     if active {
         let mut arcs = tiny_skia::PathBuilder::new();
@@ -147,7 +183,14 @@ fn draw_speaker_icon(pixmap: &mut Pixmap, render_scale: f32, cx: f32, cy: f32, c
     }
 }
 
-fn draw_wifi_icon(pixmap: &mut Pixmap, render_scale: f32, cx: f32, cy: f32, colors: &WidgetColors, active: bool) {
+fn draw_wifi_icon(
+    pixmap: &mut Pixmap,
+    render_scale: f32,
+    cx: f32,
+    cy: f32,
+    colors: &WidgetColors,
+    active: bool,
+) {
     let mut pb = tiny_skia::PathBuilder::new();
     for r in [3.0, 6.0, 9.0] {
         let r = r * render_scale;
@@ -169,7 +212,12 @@ fn draw_wifi_icon(pixmap: &mut Pixmap, render_scale: f32, cx: f32, cy: f32, colo
     }
     let mut dot = Paint::default();
     let alpha = if active { 230 } else { 110 };
-    dot.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, alpha);
+    dot.set_color_rgba8(
+        colors.text_rgb.0,
+        colors.text_rgb.1,
+        colors.text_rgb.2,
+        alpha,
+    );
     dot.anti_alias = true;
     if let Some(rect) = tiny_skia::Rect::from_xywh(
         cx - 1.2 * render_scale,
@@ -177,8 +225,20 @@ fn draw_wifi_icon(pixmap: &mut Pixmap, render_scale: f32, cx: f32, cy: f32, colo
         2.4 * render_scale,
         2.4 * render_scale,
     ) {
-        let path = rounded_rect_path(rect.x(), rect.y(), rect.width(), rect.height(), 1.2 * render_scale);
-        pixmap.fill_path(&path, &dot, tiny_skia::FillRule::Winding, Transform::identity(), None);
+        let path = rounded_rect_path(
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            1.2 * render_scale,
+        );
+        pixmap.fill_path(
+            &path,
+            &dot,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -195,8 +255,14 @@ pub(super) fn draw_volume_widget(
     colors: &WidgetColors,
     is_vertical: bool,
 ) {
-    let Some((pct, muted)) = widgets.volume else { return };
-    let label = if muted { "MUTE".to_string() } else { format!("{pct}%") };
+    let Some((pct, muted)) = widgets.volume else {
+        return;
+    };
+    let label = if muted {
+        "MUTE".to_string()
+    } else {
+        format!("{pct}%")
+    };
     draw_icon_label(
         pixmap,
         text_cache,

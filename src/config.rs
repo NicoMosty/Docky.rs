@@ -58,17 +58,50 @@ fn default_widgets() -> Vec<WidgetPlacement> {
     use WidgetSlot::{Left, Middle, Right};
     // ----- waybar order -----
     vec![
-        WidgetPlacement { kind: WidgetKind::Network, slot: Left },
-        WidgetPlacement { kind: WidgetKind::Cpu, slot: Left },
-        WidgetPlacement { kind: WidgetKind::Ram, slot: Left },
-        WidgetPlacement { kind: WidgetKind::Tray, slot: Middle },
-        WidgetPlacement { kind: WidgetKind::Workspaces, slot: Middle },
-        WidgetPlacement { kind: WidgetKind::Clock, slot: Middle },
-        WidgetPlacement { kind: WidgetKind::Bluetooth, slot: Right },
-        WidgetPlacement { kind: WidgetKind::Media, slot: Right },
-        WidgetPlacement { kind: WidgetKind::Volume, slot: Right },
-        WidgetPlacement { kind: WidgetKind::KbdLayout, slot: Right },
-        WidgetPlacement { kind: WidgetKind::PowerMenu, slot: Right },
+        WidgetPlacement {
+            kind: WidgetKind::Network,
+            slot: Left,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::Cpu,
+            slot: Left,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::Ram,
+            slot: Left,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::Tray,
+            slot: Middle,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::Workspaces,
+            slot: Middle,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::Clock,
+            slot: Middle,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::Bluetooth,
+            slot: Right,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::Media,
+            slot: Right,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::Volume,
+            slot: Right,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::KbdLayout,
+            slot: Right,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::PowerMenu,
+            slot: Right,
+        },
     ]
 }
 
@@ -205,6 +238,8 @@ impl Default for DockSettings {
 pub struct Config {
     pub apps: Vec<PinnedApp>,
     pub settings: DockSettings,
+    #[serde(skip)]
+    pub profile: String,
 }
 
 impl Default for Config {
@@ -212,6 +247,7 @@ impl Default for Config {
         Self {
             apps: default_apps(),
             settings: DockSettings::default(),
+            profile: String::new(),
         }
     }
 }
@@ -220,27 +256,33 @@ fn default_apps() -> Vec<PinnedApp> {
     Vec::new()
 }
 
-fn config_path() -> PathBuf {
+fn config_path(profile: &str) -> PathBuf {
     let mut dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     dir.push("dockyrs");
-    dir.push("config.json");
+    dir.push(if profile.is_empty() {
+        "config.json".to_string()
+    } else {
+        format!("config-{profile}.json")
+    });
     dir
 }
 
 impl Config {
-    pub fn load() -> Self {
-        let path = config_path();
-        match std::fs::read_to_string(&path) {
+    pub fn load(profile: &str) -> Self {
+        let path = config_path(profile);
+        let mut cfg: Self = match std::fs::read_to_string(&path) {
             Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|err| {
                 log::warn!("failed to parse config at {path:?}, using defaults: {err}");
                 Config::default()
             }),
             Err(_) => Config::default(),
-        }
+        };
+        cfg.profile = profile.to_string();
+        cfg
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
-        let path = config_path();
+        let path = config_path(&self.profile);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

@@ -18,7 +18,7 @@ impl App {
             surface,
             Layer::Overlay,
             Some("dockyrs-menu"),
-            None,
+            self.pinned_output.as_ref(),
         );
         let s = &self.dock.config.settings;
         let (anchor, margin) = edge_anchor_margin(

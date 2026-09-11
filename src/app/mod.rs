@@ -280,6 +280,7 @@ pub struct App {
     pub thumbnail_cache: ThumbnailCache,
     pub available_fonts: std::rc::Rc<Vec<String>>,
     pub output_scale: i32,
+    pub pinned_output: Option<wl_output::WlOutput>,
     pub awaiting_frame: bool,
     pub exit: bool,
     pub first_configure: bool,

@@ -24,20 +24,24 @@ pub enum IpcMessage {
 
 const NOTIFY_SEP: char = '\u{1f}';
 
-fn socket_path() -> std::path::PathBuf {
+fn socket_path(profile: &str) -> std::path::PathBuf {
     let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(dir).join("dockyrs.sock")
+    std::path::PathBuf::from(dir).join(if profile.is_empty() {
+        "dockyrs.sock".to_string()
+    } else {
+        format!("dockyrs-{profile}.sock")
+    })
 }
 
-pub fn send_message(text: &str) {
-    if let Ok(mut stream) = UnixStream::connect(socket_path()) {
+pub fn send_message(text: &str, profile: &str) {
+    if let Ok(mut stream) = UnixStream::connect(socket_path(profile)) {
         let _ = stream.write_all(text.as_bytes());
     }
 }
 
 // ----- wakes loop -----
-pub fn spawn_listener(tx: Sender<IpcMessage>, conn: Connection, qh: QueueHandle<crate::app::App>) {
-    let path = socket_path();
+pub fn spawn_listener(tx: Sender<IpcMessage>, conn: Connection, qh: QueueHandle<crate::app::App>, profile: String) {
+    let path = socket_path(&profile);
     let _ = std::fs::remove_file(&path);
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,

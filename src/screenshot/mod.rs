@@ -71,9 +71,10 @@ impl ScreenshotState {
         compositor: &CompositorState,
         layer_shell: &LayerShell,
         output_state: &OutputState,
+        pinned: Option<wl_output::WlOutput>,
     ) -> Option<Self> {
         let manager: ZwlrScreencopyManagerV1 = bind_manager(globals, qh).ok()?;
-        let output = output_state.outputs().next()?;
+        let output = pinned.or_else(|| output_state.outputs().next())?;
         let surface = compositor.create_surface(qh);
         let layer = layer_shell.create_layer_surface(
             qh,
