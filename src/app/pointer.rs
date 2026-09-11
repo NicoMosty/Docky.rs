@@ -135,7 +135,14 @@ impl App {
                                         x,
                                         y,
                                     ) {
-                                        widgets::workspace_switch(id);
+                                        let output = self
+                                            .widgets
+                                            .workspaces
+                                            .iter()
+                                            .find(|w| w.id == id)
+                                            .map(|w| w.output.clone())
+                                            .unwrap_or_default();
+                                        widgets::workspace_switch(id, &output);
                                     }
                                     return;
                                 }

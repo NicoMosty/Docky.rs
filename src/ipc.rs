@@ -40,7 +40,12 @@ pub fn send_message(text: &str, profile: &str) {
 }
 
 // ----- wakes loop -----
-pub fn spawn_listener(tx: Sender<IpcMessage>, conn: Connection, qh: QueueHandle<crate::app::App>, profile: String) {
+pub fn spawn_listener(
+    tx: Sender<IpcMessage>,
+    conn: Connection,
+    qh: QueueHandle<crate::app::App>,
+    profile: String,
+) {
     let path = socket_path(&profile);
     let _ = std::fs::remove_file(&path);
     let listener = match UnixListener::bind(&path) {

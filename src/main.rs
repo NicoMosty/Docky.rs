@@ -47,7 +47,12 @@ struct Cli {
 }
 
 fn parse_cli() -> Cli {
-    let mut cli = Cli { profile: String::new(), output: None, command: None, notify_args: Vec::new() };
+    let mut cli = Cli {
+        profile: String::new(),
+        output: None,
+        command: None,
+        notify_args: Vec::new(),
+    };
     let mut it = std::env::args().skip(1).peekable();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -66,7 +71,11 @@ fn parse_cli() -> Cli {
 }
 
 fn ns(base: &str, profile: &str) -> String {
-    if profile.is_empty() { base.to_string() } else { format!("{base}-{profile}") }
+    if profile.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}-{profile}")
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -177,6 +186,9 @@ fn main() -> anyhow::Result<()> {
     }
 
     let config = Config::load(&cli.profile);
+    if let Some(output) = cli.output.as_deref() {
+        widgets::set_pinned_output(output);
+    }
     let mut dock = Dock::new(config);
     let initial_widgets = widgets::WidgetSnapshot::refresh();
     if dock.icons.is_empty() {
@@ -321,9 +333,10 @@ fn main() -> anyhow::Result<()> {
             if event_queue.roundtrip(&mut app).is_err() {
                 break;
             }
-            found = app.output_state.outputs().find(|o| {
-                app.output_state.info(o).and_then(|i| i.name).as_deref() == Some(want)
-            });
+            found = app
+                .output_state
+                .outputs()
+                .find(|o| app.output_state.info(o).and_then(|i| i.name).as_deref() == Some(want));
             if found.is_some() {
                 break;
             }
@@ -362,7 +375,12 @@ fn main() -> anyhow::Result<()> {
     );
 
     let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<ipc::IpcMessage>();
-    ipc::spawn_listener(ipc_tx.clone(), conn.clone(), qh.clone(), cli.profile.clone());
+    ipc::spawn_listener(
+        ipc_tx.clone(),
+        conn.clone(),
+        qh.clone(),
+        cli.profile.clone(),
+    );
     ipc::spawn_brightness_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
     ipc::spawn_battery_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
     ipc::spawn_bluetooth_watcher(ipc_tx.clone(), conn.clone(), qh.clone());

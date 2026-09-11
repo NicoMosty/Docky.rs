@@ -38,6 +38,20 @@ pub struct BluetoothInfo {
 pub struct WorkspaceInfo {
     pub id: i32,
     pub active: bool,
+    pub output: String,
+}
+
+// ----- fijado una vez al arrancar desde --output; filtra workspaces por monitor -----
+static PINNED_OUTPUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn set_pinned_output(name: &str) {
+    if !name.is_empty() {
+        let _ = PINNED_OUTPUT.set(name.to_string());
+    }
+}
+
+fn pinned_output() -> Option<&'static str> {
+    PINNED_OUTPUT.get().map(|s| s.as_str())
 }
 
 pub struct NetworkInfo {
@@ -391,9 +405,16 @@ fn read_workspaces_niri() -> Vec<WorkspaceInfo> {
     let Some(list) = niri_json(&["workspaces"]).and_then(|v| v.as_array().cloned()) else {
         return Vec::new();
     };
+    let pinned = pinned_output();
     let mut ws: Vec<WorkspaceInfo> = list
         .iter()
         .filter_map(|w| {
+            let output = w.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if let Some(pin) = pinned
+                && output != pin
+            {
+                return None;
+            }
             let id = w
                 .get("idx")
                 .and_then(|v| v.as_i64())
@@ -404,7 +425,7 @@ fn read_workspaces_niri() -> Vec<WorkspaceInfo> {
                 .or_else(|| w.get("is_focused").and_then(|v| v.as_bool()))
                 .or_else(|| w.get("active").and_then(|v| v.as_bool()))
                 .unwrap_or(false);
-            (id > 0).then_some(WorkspaceInfo { id, active })
+            (id > 0).then_some(WorkspaceInfo { id, active, output })
         })
         .collect();
     ws.sort_by_key(|w| w.id);
@@ -430,12 +451,22 @@ fn read_workspaces_hypr() -> Vec<WorkspaceInfo> {
         .map(|id| WorkspaceInfo {
             id,
             active: Some(id) == active_id,
+            output: String::new(),
         })
         .collect()
 }
 
-pub fn workspace_switch(id: i32) {
+pub fn workspace_switch(id: i32, output: &str) {
     match crate::compositor::Compositor::detect() {
+        crate::compositor::Compositor::Niri if !output.is_empty() => {
+            // ----- el índice se repite por monitor: primero enfocar el monitor -----
+            let _ = std::process::Command::new("niri")
+                .args(["msg", "action", "focus-monitor", output])
+                .output();
+            let _ = std::process::Command::new("niri")
+                .args(["msg", "action", "focus-workspace", &id.to_string()])
+                .spawn();
+        }
         crate::compositor::Compositor::Niri => {
             let _ = std::process::Command::new("niri")
                 .args(["msg", "action", "focus-workspace", &id.to_string()])
