@@ -409,7 +409,11 @@ fn read_workspaces_niri() -> Vec<WorkspaceInfo> {
     let mut ws: Vec<WorkspaceInfo> = list
         .iter()
         .filter_map(|w| {
-            let output = w.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let output = w
+                .get("output")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if let Some(pin) = pinned
                 && output != pin
             {

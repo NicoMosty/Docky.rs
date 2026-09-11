@@ -16,19 +16,19 @@ fn draw_centered_label(
         return;
     }
     if is_vertical {
-        let label_len = text_width_estimate_render(label, 9.0 * render_scale);
+        let label_len = text_width_estimate_render(label, 8.0 * render_scale);
         draw_text_rotated(
             pixmap,
             text_cache,
             label,
             zx + zw / 2.0,
             zy + zh / 2.0,
-            9.0 * render_scale,
+            8.0 * render_scale,
             colors.text_color,
             600,
         );
         let _ = label_len;
-    } else if let Some(txt) = text_cache.get(label, 9.0 * render_scale, colors.text_color, 600) {
+    } else if let Some(txt) = text_cache.get(label, 8.5 * render_scale, colors.text_color, 600) {
         let tx = zx + (zw - txt.width() as f32) / 2.0;
         let ty = zy + (zh - txt.height() as f32) / 2.0;
         pixmap.draw_pixmap(
@@ -60,7 +60,7 @@ fn draw_icon_label(
 ) {
     if is_vertical {
         let label_len = text_width_estimate_render(label, 8.0 * render_scale);
-        let gap = 8.0 * render_scale;
+        let gap = 5.0 * render_scale;
         let total = icon_r * 2.0 + gap + label_len;
         let block_start = zy + (zh - total) / 2.0;
         let cx = zx + zw / 2.0;
@@ -83,14 +83,14 @@ fn draw_icon_label(
             500,
         );
     } else {
-        let label_w = text_width_estimate_render(label, 9.0 * render_scale);
-        let gap = 10.0 * render_scale;
+        let label_w = text_width_estimate_render(label, 8.5 * render_scale);
+        let gap = 6.0 * render_scale;
         let content_w = icon_r * 2.0 + gap + label_w;
         let block_x = zx + (zw - content_w) / 2.0;
         let cy = zy + zh / 2.0;
         let icon_cx = block_x + icon_r;
         draw_icon(pixmap, render_scale, icon_cx, cy, colors, active);
-        if let Some(txt) = text_cache.get(label, 9.0 * render_scale, colors.text_dim_color, 500) {
+        if let Some(txt) = text_cache.get(label, 8.5 * render_scale, colors.text_dim_color, 500) {
             pixmap.draw_pixmap(
                 0,
                 0,
@@ -267,7 +267,7 @@ pub(super) fn draw_volume_widget(
         pixmap,
         text_cache,
         draw_speaker_icon,
-        7.0 * render_scale,
+        6.0 * render_scale,
         !muted,
         &label,
         zx,
@@ -298,7 +298,7 @@ pub(super) fn draw_network_widget(
         pixmap,
         text_cache,
         draw_wifi_icon,
-        7.0 * render_scale,
+        6.0 * render_scale,
         widgets.network.online,
         label,
         zx,

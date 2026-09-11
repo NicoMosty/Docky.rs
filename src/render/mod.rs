@@ -62,6 +62,22 @@ impl MarqueeState {
     pub fn workspace_animating(&self) -> bool {
         self.ws_initialized && self.ws_t < 1.0
     }
+
+    // ----- el tracking vive fuera del draw: si el redraw se salta
+    // (frame pendiente), el update no se pierde y el próximo frame anima -----
+    pub fn track_ws_target(&mut self, target: f32) {
+        if !self.ws_initialized {
+            self.ws_initialized = true;
+            self.ws_current = target;
+            self.ws_target = target;
+            self.ws_t = 1.0;
+        } else if (self.ws_target - target).abs() > 0.01 {
+            self.ws_from = self.ws_current;
+            self.ws_target = target;
+            self.ws_t = 0.0;
+            self.ws_last_tick = None;
+        }
+    }
 }
 
 const WS_ANIM_DURATION_MS: f32 = 220.0;

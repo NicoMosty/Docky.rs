@@ -63,8 +63,8 @@ pub(super) fn draw_clock_widget(
     is_vertical: bool,
 ) {
     if is_vertical {
-        let time_size = 12.0 * render_scale;
-        let date_size = 7.5 * render_scale;
+        let time_size = 11.0 * render_scale;
+        let date_size = 7.0 * render_scale;
         let clock_gap = 3.0 * render_scale;
         let time_px = text_cache.get(&widgets.time, time_size, colors.text_color, 700);
         let date_px = text_cache.get_with_family(
@@ -104,8 +104,8 @@ pub(super) fn draw_clock_widget(
             DATE_FONT_FAMILY,
         );
     } else {
-        let time_size = 13.0 * render_scale;
-        let date_size = 8.0 * render_scale;
+        let time_size = 12.0 * render_scale;
+        let date_size = 7.5 * render_scale;
         let clock_gap = 3.5 * render_scale;
         let time_px = text_cache.get(&widgets.time, time_size, colors.text_color, 700);
         let date_px = text_cache.get_with_family(
@@ -164,8 +164,8 @@ pub(super) fn draw_battery_widget(
     let bh = 10.0 * render_scale;
     let label = format!("{pct}%");
     if is_vertical {
-        let label_len = text_width_estimate_render(&label, 8.5 * render_scale);
-        let gap = 6.0 * render_scale;
+        let label_len = text_width_estimate_render(&label, 8.0 * render_scale);
+        let gap = 5.0 * render_scale;
         let total = bh + gap + label_len;
         let by = zy + (zh - total) / 2.0;
         let bx = zx + zw / 2.0 - bw / 2.0;
@@ -177,18 +177,18 @@ pub(super) fn draw_battery_widget(
             &label,
             zx + zw / 2.0,
             ty,
-            8.5 * render_scale,
+            8.0 * render_scale,
             colors.text_color,
             600,
         );
     } else {
-        let label_w = text_width_estimate_render(&label, 9.0 * render_scale);
-        let gap = 8.0 * render_scale;
+        let label_w = text_width_estimate_render(&label, 8.5 * render_scale);
+        let gap = 6.0 * render_scale;
         let content_w = bw + gap + label_w;
         let bx = zx + (zw - content_w) / 2.0;
         let by = zy + zh / 2.0 - bh / 2.0;
         draw_battery_icon(pixmap, render_scale, bx, by, pct, charging, colors);
-        if let Some(txt) = text_cache.get(&label, 9.0 * render_scale, colors.text_color, 600) {
+        if let Some(txt) = text_cache.get(&label, 8.5 * render_scale, colors.text_color, 600) {
             let tx = bx + bw + gap;
             let ty = zy + zh / 2.0 - txt.height() as f32 / 2.0;
             pixmap.draw_pixmap(

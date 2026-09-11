@@ -202,6 +202,8 @@ impl App {
     pub(crate) fn refresh_workspaces(&mut self, qh: &QueueHandle<Self>) {
         if self.dock.icons.is_empty() {
             self.widgets.refresh_workspaces();
+            self.marquee
+                .track_ws_target(render::ws_target_for(&self.widgets.workspaces));
             self.sync_widget_bar_len();
             self.relayout_dock(qh);
         }

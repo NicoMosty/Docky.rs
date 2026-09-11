@@ -9,7 +9,7 @@ pub(super) struct WidgetRect {
     pub(super) h: f32,
 }
 
-pub(super) const WIDGET_GAP: f32 = 10.0;
+pub(super) const WIDGET_GAP: f32 = 6.0;
 
 // ----- flexible zones -----
 pub(super) fn layout_widgets(
@@ -25,7 +25,7 @@ pub(super) fn layout_widgets(
     let bar_len = if is_vertical { h } else { w };
     let cross_len = if is_vertical { w } else { h };
     let gap = WIDGET_GAP * render_scale;
-    let inset = 14.0 * render_scale;
+    let inset = 10.0 * render_scale;
 
     let members_of = |slot: WidgetSlot| -> Vec<crate::config::WidgetKind> {
         settings
@@ -147,7 +147,7 @@ pub fn widget_bar_natural_len(
         return 0.0;
     }
     let gap = WIDGET_GAP * render_scale;
-    let inset = 14.0 * render_scale;
+    let inset = 10.0 * render_scale;
 
     let zone_len = |slot: WidgetSlot| -> f32 {
         let lens: Vec<f32> = settings
@@ -196,12 +196,12 @@ pub(super) fn widget_natural_len(
     match kind {
         WidgetKind::Clock => {
             if is_vertical {
-                let time_w = text_width_estimate_render(&widgets.time, 12.0 * render_scale);
-                let date_w = text_width_estimate_render(&widgets.date, 7.5 * render_scale);
+                let time_w = text_width_estimate_render(&widgets.time, 11.0 * render_scale);
+                let date_w = text_width_estimate_render(&widgets.date, 7.0 * render_scale);
                 time_w.max(date_w)
             } else {
-                let time_w = text_width_estimate_render(&widgets.time, 13.0 * render_scale);
-                let date_w = text_width_estimate_render(&widgets.date, 8.0 * render_scale);
+                let time_w = text_width_estimate_render(&widgets.time, 12.0 * render_scale);
+                let date_w = text_width_estimate_render(&widgets.date, 7.5 * render_scale);
                 time_w.max(date_w)
             }
         }
@@ -211,17 +211,17 @@ pub(super) fn widget_natural_len(
             };
             let label = format!("{pct}%");
             if is_vertical {
-                let label_len = text_width_estimate_render(&label, 8.5 * render_scale);
-                10.0 * render_scale + 6.0 * render_scale + label_len
+                let label_len = text_width_estimate_render(&label, 8.0 * render_scale);
+                10.0 * render_scale + 5.0 * render_scale + label_len
             } else {
-                let label_w = text_width_estimate_render(&label, 9.0 * render_scale);
-                20.0 * render_scale + 8.0 * render_scale + label_w
+                let label_w = text_width_estimate_render(&label, 8.5 * render_scale);
+                20.0 * render_scale + 6.0 * render_scale + label_w
             }
         }
         WidgetKind::Media => media_ideal_len(is_vertical, render_scale, media_width_scale),
         WidgetKind::PowerMenu => 14.0 * render_scale,
         WidgetKind::Bluetooth => {
-            let icon_r = 6.5 * render_scale;
+            let icon_r = 6.0 * render_scale;
             let label = match &widgets.bluetooth {
                 Some(bt) if !bt.powered => "Off".to_string(),
                 Some(bt) => bt.connected.clone().unwrap_or_else(|| "On".to_string()),
@@ -231,12 +231,12 @@ pub(super) fn widget_natural_len(
                 icon_r * 2.0
             } else if is_vertical {
                 icon_r * 2.0
-                    + 8.0 * render_scale
+                    + 6.0 * render_scale
                     + text_width_estimate_render(&label, 8.0 * render_scale)
             } else {
                 icon_r * 2.0
-                    + 10.0 * render_scale
-                    + text_width_estimate_render(&label, 9.0 * render_scale)
+                    + 6.0 * render_scale
+                    + text_width_estimate_render(&label, 8.5 * render_scale)
             }
         }
         WidgetKind::Tray => {
@@ -268,18 +268,18 @@ pub(super) fn widget_natural_len(
             text_widget_len(&label, is_vertical, render_scale)
         }
         WidgetKind::KbdLayout => {
-            let w = text_width_estimate_render(&widgets.kblayout.short, 9.0 * render_scale);
-            w + 16.0 * render_scale
+            let w = text_width_estimate_render(&widgets.kblayout.short, 8.5 * render_scale);
+            w + 10.0 * render_scale
         }
     }
 }
 
 pub(super) fn text_widget_len(label: &str, is_vertical: bool, render_scale: f32) -> f32 {
-    let icon_side = 13.0 * render_scale;
+    let icon_side = 12.0 * render_scale;
     if is_vertical {
-        icon_side + 6.0 * render_scale + text_width_estimate_render(label, 8.5 * render_scale)
+        icon_side + 5.0 * render_scale + text_width_estimate_render(label, 8.0 * render_scale)
     } else {
-        icon_side + 8.0 * render_scale + text_width_estimate_render(label, 9.0 * render_scale)
+        icon_side + 6.0 * render_scale + text_width_estimate_render(label, 8.5 * render_scale)
     }
 }
 pub(super) fn percentage_widget_len(pct: Option<u8>, is_vertical: bool, render_scale: f32) -> f32 {

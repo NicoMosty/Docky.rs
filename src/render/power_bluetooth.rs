@@ -109,7 +109,7 @@ pub(super) fn draw_bluetooth_widget(
         ),
         None => (false, String::new()),
     };
-    let icon_r = 6.5 * render_scale;
+    let icon_r = 6.0 * render_scale;
     if is_vertical {
         let label_len = if label.is_empty() {
             0.0
@@ -119,7 +119,7 @@ pub(super) fn draw_bluetooth_widget(
         let gap = if label.is_empty() {
             0.0
         } else {
-            8.0 * render_scale
+            6.0 * render_scale
         };
         let total = icon_r * 2.0 + gap + label_len;
         let block_start = zy + (zh - total) / 2.0;
@@ -149,12 +149,12 @@ pub(super) fn draw_bluetooth_widget(
         let label_w = if label.is_empty() {
             0.0
         } else {
-            text_width_estimate_render(&label, 9.0 * render_scale)
+            text_width_estimate_render(&label, 8.5 * render_scale)
         };
         let gap = if label.is_empty() {
             0.0
         } else {
-            10.0 * render_scale
+            6.0 * render_scale
         };
         let content_w = icon_r * 2.0 + gap + label_w;
         let block_x = zx + (zw - content_w) / 2.0;
@@ -163,7 +163,7 @@ pub(super) fn draw_bluetooth_widget(
         draw_bluetooth_icon(pixmap, render_scale, icon_cx, cy, powered, colors);
         if !label.is_empty()
             && let Some(txt) =
-                text_cache.get(&label, 9.0 * render_scale, colors.text_dim_color, 500)
+                text_cache.get(&label, 8.5 * render_scale, colors.text_dim_color, 500)
         {
             let tx = icon_cx + icon_r + gap;
             let ty = cy - txt.height() as f32 / 2.0;

@@ -16,6 +16,10 @@ fn active_slot(workspaces: &[crate::widgets::WorkspaceInfo]) -> f32 {
         .unwrap_or(1.0)
 }
 
+pub fn ws_target_for(workspaces: &[crate::widgets::WorkspaceInfo]) -> f32 {
+    active_slot(workspaces)
+}
+
 pub(super) fn workspaces_geometry(
     workspaces: &[crate::widgets::WorkspaceInfo],
     render_scale: f32,
@@ -52,18 +56,7 @@ pub(super) fn draw_workspaces_widget(
     let slot = WS_SLOT * render_scale;
     let count = slot_count(workspaces);
     let target = active_slot(workspaces);
-
-    if !marquee.ws_initialized {
-        marquee.ws_initialized = true;
-        marquee.ws_current = target;
-        marquee.ws_target = target;
-        marquee.ws_t = 1.0;
-    } else if (marquee.ws_target - target).abs() > 0.01 {
-        marquee.ws_from = marquee.ws_current;
-        marquee.ws_target = target;
-        marquee.ws_t = 0.0;
-        marquee.ws_last_tick = None;
-    }
+    marquee.track_ws_target(target);
     if advance && marquee.ws_t < 1.0 {
         let now = std::time::Instant::now();
         let dt_ms = marquee

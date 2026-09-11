@@ -79,10 +79,10 @@ pub(super) fn draw_labeled_widget(
     colors: &WidgetColors,
     is_vertical: bool,
 ) {
-    let icon_side = 13.0 * render_scale;
+    let icon_side = 12.0 * render_scale;
     if is_vertical {
-        let label_len = text_width_estimate_render(label, 8.5 * render_scale);
-        let gap = 6.0 * render_scale;
+        let label_len = text_width_estimate_render(label, 8.0 * render_scale);
+        let gap = 5.0 * render_scale;
         let total = icon_side + gap + label_len;
         let block_start = zy + (zh - total) / 2.0;
         let cx = zx + zw / 2.0;
@@ -100,18 +100,18 @@ pub(super) fn draw_labeled_widget(
             label,
             cx,
             ty,
-            8.5 * render_scale,
+            8.0 * render_scale,
             colors.text_color,
             600,
         );
     } else {
-        let label_w = text_width_estimate_render(label, 9.0 * render_scale);
-        let gap = 8.0 * render_scale;
+        let label_w = text_width_estimate_render(label, 8.5 * render_scale);
+        let gap = 6.0 * render_scale;
         let content_w = icon_side + gap + label_w;
         let bx = zx + (zw - content_w) / 2.0;
         let cy = zy + zh / 2.0;
         draw_icon(pixmap, render_scale, bx + icon_side / 2.0, cy, colors);
-        if let Some(txt) = text_cache.get(label, 9.0 * render_scale, colors.text_color, 600) {
+        if let Some(txt) = text_cache.get(label, 8.5 * render_scale, colors.text_color, 600) {
             let tx = bx + icon_side + gap;
             let ty = cy - txt.height() as f32 / 2.0;
             pixmap.draw_pixmap(
