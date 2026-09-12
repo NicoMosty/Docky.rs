@@ -245,7 +245,7 @@ pub(crate) fn draw_widget_drag_overlay(
     };
 
     let layout = widget_chip_layout(settings, right_w, chips_y);
-    let target = widget_drop_target(settings, chips_y, right_w, dx, dy);
+    let target = widget_drop_target(settings, chips_y, right_w, dx, dy).map(|(slot, _)| slot);
 
     let content_w = right_w - MENU_PADDING * 2.0;
     let (hx, hy, hw, hh) = match target {

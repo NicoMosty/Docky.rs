@@ -22,6 +22,11 @@ Uso:
     --button   R = click derecho, L = izquierdo
     --y N      pasos de 2px hacia abajo desde el borde superior (default 8 -> y~18,
                dentro de los rects de widgets; con --y 0 el click queda en y~0)
+    --then-dx N / --then-dy M
+               después del primer click, se desplaza N pasos de ~3px en x y M de
+               ~2px en y (admiten negativos) y hace un click IZQUIERDO. Sirve para
+               encadenar dos clicks en la misma sesión de dispositivo, por ejemplo
+               abrir el panel de ajustes y después clickear un control suyo.
 
 Imprime el hit que devolvió la app (`-> Some(Battery)`, `-> None`, …), que es
 lo que permite saber dónde cayó el click sin adivinar.
@@ -121,7 +126,7 @@ def park_away(fd):
     time.sleep(2.0)  # > autohide_delay (1200ms) para que llegue a ocultarse
 
 
-def reveal_and_click(fd, log, extra, button, y_steps):
+def reveal_and_click(fd, log, extra, button, y_steps, then_dx=0, then_dy=0):
     """Se aleja, satisface la esquina, baja a la franja, barre hasta que el dock
     se revela, avanza `extra` pasos y clickea. Devuelve si detectó el reveal."""
     park_away(fd)
@@ -150,6 +155,21 @@ def reveal_and_click(fd, log, extra, button, y_steps):
     emit(fd, EV_KEY, button, 0)
     sync(fd)
     time.sleep(0.5)
+    # ----- segundo click opcional (izquierdo), tras desplazarse del primero -----
+    if then_dx or then_dy:
+        for _ in range(abs(then_dx)):
+            rel(fd, 3 if then_dx > 0 else -3, 0)
+            time.sleep(0.012)
+        for _ in range(abs(then_dy)):
+            rel(fd, 0, 2 if then_dy > 0 else -2)
+            time.sleep(0.012)
+        time.sleep(0.25)
+        emit(fd, EV_KEY, BTN_LEFT, 1)
+        sync(fd)
+        time.sleep(0.06)
+        emit(fd, EV_KEY, BTN_LEFT, 0)
+        sync(fd)
+        time.sleep(0.5)
     return revealed
 
 
@@ -161,13 +181,21 @@ def main():
     parser.add_argument("--extra", type=int, default=0)
     parser.add_argument("--button", choices=("L", "R"), default="R")
     parser.add_argument("--y", type=int, default=8, dest="y_steps")
+    parser.add_argument("--then-dx", type=int, default=0)
+    parser.add_argument("--then-dy", type=int, default=0)
     args = parser.parse_args()
 
     fd = make_device()
     try:
         time.sleep(1.6)  # el dispositivo tarda en ser reconocido
         revealed = reveal_and_click(
-            fd, args.log, args.extra, BTN_LEFT if args.button == "L" else BTN_RIGHT, args.y_steps
+            fd,
+            args.log,
+            args.extra,
+            BTN_LEFT if args.button == "L" else BTN_RIGHT,
+            args.y_steps,
+            args.then_dx,
+            args.then_dy,
         )
     finally:
         os.close(fd)

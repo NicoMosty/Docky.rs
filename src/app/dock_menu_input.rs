@@ -100,7 +100,13 @@ impl App {
             x,
             y,
         );
-        menu::place_widget(&mut self.dock.config.settings, kind, target);
+        // ----- slot destino + fila dentro de él: sin el índice todo drop caía
+        // al final del slot y de última a primera no se movía nada -----
+        let (slot, index) = match target {
+            Some((slot, index)) => (Some(slot), index),
+            None => (None, 0),
+        };
+        menu::place_widget(&mut self.dock.config.settings, kind, slot, index);
         let _ = self.dock.config.save();
         if let Some(dm) = self.dock_menu_mode.as_mut() {
             dm.controls = menu::build_category_controls(dm.category, &self.dock.config.settings);
@@ -296,7 +302,7 @@ impl App {
         let right_col_x0 = menu::DOCK_MENU_LEFT_COL_W + menu::DOCK_MENU_DIVIDER_W;
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                let (x, y) = event.position;
+                let (x, y) = self.panel_local(event.position.0, event.position.1);
                 let dragging = self
                     .dock_menu_mode
                     .as_ref()
@@ -410,7 +416,7 @@ impl App {
                 self.close_dock_menu(qh);
             }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
-                let (x, y) = event.position;
+                let (x, y) = self.panel_local(event.position.0, event.position.1);
                 let right_x = x as f32 - right_col_x0;
                 let open_dropdown = self
                     .dock_menu_mode

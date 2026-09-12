@@ -1,5 +1,58 @@
 use super::*;
 
+/// Separación entre el dock y el panel de ajustes cuando el panel va debajo.
+const PANEL_GAP: f32 = 8.0;
+
+/// Reparto de la superficie compartida entre el dock y el panel, en unidades
+/// lógicas.
+#[derive(Clone, Copy)]
+pub(super) struct PanelLayout {
+    /// Tamaño de la superficie.
+    pub surf: (f32, f32),
+    /// Posición del dock, o `None` si el panel ocupa todo (bordes no superiores).
+    pub dock_at: Option<(f32, f32)>,
+    /// Posición del panel.
+    pub panel_at: (f32, f32),
+}
+
+fn align_offset(outer: f32, inner: f32, align: crate::config::DockAlign) -> f32 {
+    use crate::config::DockAlign;
+    match align {
+        DockAlign::Middle => ((outer - inner) / 2.0).max(0.0),
+        DockAlign::Left => 0.0,
+        DockAlign::Right => (outer - inner).max(0.0),
+    }
+}
+
+/// Con el dock anclado arriba, el panel va DEBAJO de él: así el dock queda a la
+/// vista mientras se tocan los controles (la superficie es compartida, si el
+/// panel ocupara todo el rect el dock desaparecería de la pantalla). En los
+/// otros bordes el panel sigue ocupando la superficie entera, como antes.
+pub(super) fn panel_layout(
+    s: &crate::config::DockSettings,
+    dock_size: (u32, u32),
+    panel_w: f32,
+    panel_h: f32,
+) -> PanelLayout {
+    if s.dock_edge != crate::config::DockEdge::Top {
+        return PanelLayout {
+            surf: (panel_w, panel_h),
+            dock_at: None,
+            panel_at: (0.0, 0.0),
+        };
+    }
+    let (dock_w, dock_h) = (dock_size.0 as f32, dock_size.1 as f32);
+    let surf_w = dock_w.max(panel_w);
+    PanelLayout {
+        surf: (surf_w, dock_h + PANEL_GAP + panel_h),
+        dock_at: Some((align_offset(surf_w, dock_w, s.dock_align), 0.0)),
+        panel_at: (
+            align_offset(surf_w, panel_w, s.dock_align),
+            dock_h + PANEL_GAP,
+        ),
+    }
+}
+
 impl App {
     pub(crate) fn toggle_dock_menu(&mut self, qh: &QueueHandle<Self>) {
         if self.dock_menu_mode.is_some() {
@@ -9,19 +62,38 @@ impl App {
         }
     }
 
-    /// Aplicar a la superficie el tamaño del panel de ajustes, ANOTÁNDOLO en
-    /// `applied_size`/`applied_geom`. Sin esa anotación `relayout_dock` cree que
-    /// el tamaño no cambió y al cerrar el menú la superficie queda con el del
-    /// panel: el dock se dibuja dentro de ese rectángulo y se ve descentrado.
+    /// Coordenadas de la superficie -> coordenadas del panel. El panel ya no está
+    /// en el origen cuando el dock se dibuja arriba, y sin esta resta los
+    /// controles quedan corridos justo esa distancia (y por lo tanto muertos).
+    pub(super) fn panel_local(&self, x: f64, y: f64) -> (f64, f64) {
+        let Some(dm) = self.dock_menu_mode.as_ref() else {
+            return (x, y);
+        };
+        let layout = panel_layout(
+            &self.dock.config.settings,
+            self.dock.base_size(),
+            dm.panel_w,
+            dm.panel_h,
+        );
+        (x - layout.panel_at.0 as f64, y - layout.panel_at.1 as f64)
+    }
+
+    /// Aplicar a la superficie el tamaño que necesita el panel de ajustes,
+    /// ANOTÁNDOLO en `applied_size`/`applied_geom`. Sin esa anotación
+    /// `relayout_dock` cree que el tamaño no cambió y al cerrar el menú la
+    /// superficie queda con el del panel: el dock se dibuja dentro de ese
+    /// rectángulo y se ve descentrado.
     fn apply_panel_size(&mut self, panel_w: f32, panel_h: f32) {
         let s = &self.dock.config.settings;
         let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
         self.layer.set_anchor(anchor);
         self.layer
             .set_margin(margin.0, margin.1, margin.2, margin.3);
-        self.layer.set_size(panel_w as u32, panel_h as u32);
+        let (surf_w, surf_h) = panel_layout(s, self.dock.base_size(), panel_w, panel_h).surf;
+        let (surf_w, surf_h) = (surf_w.round() as u32, surf_h.round() as u32);
+        self.layer.set_size(surf_w, surf_h);
         self.applied_geom = Some((anchor, margin));
-        self.applied_size = Some((panel_w as u32, panel_h as u32));
+        self.applied_size = Some((surf_w, surf_h));
     }
 
     pub(super) fn open_dock_menu(&mut self, qh: &QueueHandle<Self>) {
@@ -139,10 +211,54 @@ impl App {
         let linear = dm.anim.clamp(0.0, 1.0);
         let eased = 0.5 - 0.5 * (std::f32::consts::PI * linear).cos();
 
-        let width = (dm.panel_w * scale).round() as i32;
-        let height = (dm.panel_h * scale).round() as i32;
-        if width <= 0 || height <= 0 {
+        let layout = panel_layout(
+            &self.dock.config.settings,
+            self.dock.base_size(),
+            dm.panel_w,
+            dm.panel_h,
+        );
+        let width = (layout.surf.0 * scale).round() as i32;
+        let height = (layout.surf.1 * scale).round() as i32;
+        let panel_w_px = (dm.panel_w * scale).round() as i32;
+        let panel_h_px = (dm.panel_h * scale).round() as i32;
+        if width <= 0 || height <= 0 || panel_w_px <= 0 || panel_h_px <= 0 {
             return;
+        }
+        let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
+        // ----- el dock, arriba y a opacidad plena: es lo que se mira mientras se
+        // mueven los controles. Se dibuja en su propio pixmap porque `render::draw`
+        // pinta siempre desde (0,0) y la superficie puede ser más ancha que él. -----
+        if let Some((dock_x, dock_y)) = layout.dock_at {
+            let (dock_w, dock_h) = self.dock.base_size();
+            let dock_w_px = (dock_w as f32 * scale).round() as i32;
+            let dock_h_px = (dock_h as f32 * scale).round() as i32;
+            if dock_w_px > 0 && dock_h_px > 0 {
+                let mut dock_pixmap =
+                    tiny_skia::Pixmap::new(dock_w_px as u32, dock_h_px as u32).unwrap();
+                {
+                    let tray_icons = self.tray.lock().unwrap();
+                    let _ = render::draw(
+                        &mut dock_pixmap,
+                        &self.dock,
+                        &mut self.icon_cache,
+                        &mut self.text_cache,
+                        &self.widgets,
+                        &tray_icons,
+                        &mut self.marquee,
+                        false,
+                        false,
+                        scale,
+                    );
+                }
+                pixmap.draw_pixmap(
+                    (dock_x * scale).round() as i32,
+                    (dock_y * scale).round() as i32,
+                    dock_pixmap.as_ref(),
+                    &tiny_skia::PixmapPaint::default(),
+                    tiny_skia::Transform::identity(),
+                    None,
+                );
+            }
         }
 
         let slide_t = dm.slide_anim.clamp(0.0, 1.0);
@@ -172,35 +288,32 @@ impl App {
             custom_name_focused: dm.custom_name_focused,
             custom_panel_blend: dm.custom_panel_blend,
         };
-        let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-        if eased >= 0.999 {
-            menu_render::draw_dock_menu(
-                &mut pixmap,
-                &mut self.icon_cache,
-                &mut self.text_cache,
-                &args,
-            );
+        // ----- el panel se compone en su offset: el fade de apertura ya no toca
+        // al dock (que tiene que verse nítido desde el primer frame) -----
+        let mut content = tiny_skia::Pixmap::new(panel_w_px as u32, panel_h_px as u32).unwrap();
+        menu_render::draw_dock_menu(
+            &mut content,
+            &mut self.icon_cache,
+            &mut self.text_cache,
+            &args,
+        );
+        let opacity = if eased >= 0.999 {
+            1.0
         } else {
-            let mut content = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-            menu_render::draw_dock_menu(
-                &mut content,
-                &mut self.icon_cache,
-                &mut self.text_cache,
-                &args,
-            );
-            let paint = tiny_skia::PixmapPaint {
-                opacity: anim_opacity(transparency, eased),
-                ..Default::default()
-            };
-            pixmap.draw_pixmap(
-                0,
-                0,
-                content.as_ref(),
-                &paint,
-                tiny_skia::Transform::identity(),
-                None,
-            );
-        }
+            anim_opacity(transparency, eased)
+        };
+        let paint = tiny_skia::PixmapPaint {
+            opacity,
+            ..Default::default()
+        };
+        pixmap.draw_pixmap(
+            (layout.panel_at.0 * scale).round() as i32,
+            (layout.panel_at.1 * scale).round() as i32,
+            content.as_ref(),
+            &paint,
+            tiny_skia::Transform::identity(),
+            None,
+        );
 
         let stride = width * 4;
         let (buffer, canvas) = self
