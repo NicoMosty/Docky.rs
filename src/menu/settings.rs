@@ -20,6 +20,8 @@ pub enum SettingId {
     BlurXray,
     MediaSmoothScroll,
     MediaWidthScale,
+    Autohide,
+    AutohideDelay,
 }
 
 impl SettingId {
@@ -43,6 +45,8 @@ impl SettingId {
             SettingId::BlurXray => "X-Ray",
             SettingId::MediaSmoothScroll => "Media Smooth Scroll",
             SettingId::MediaWidthScale => "Media Widget Width",
+            SettingId::Autohide => "Autohide",
+            SettingId::AutohideDelay => "Hide Delay",
         }
     }
 
@@ -62,16 +66,22 @@ impl SettingId {
             SettingId::BlurVibrancy => (0.0, 1.0, 0.01),
             SettingId::BlurBrightness => (0.0, 2.0, 0.01),
             SettingId::BlurContrast => (0.0, 2.0, 0.01),
-            SettingId::BlurEnabled | SettingId::BlurXray => (0.0, 1.0, 1.0),
-            SettingId::MediaSmoothScroll => (0.0, 1.0, 1.0),
+            SettingId::BlurEnabled | SettingId::BlurXray | SettingId::MediaSmoothScroll => {
+                (0.0, 1.0, 1.0)
+            }
+            SettingId::Autohide => (0.0, 1.0, 1.0),
             SettingId::MediaWidthScale => (0.3, 2.0, 0.01),
+            SettingId::AutohideDelay => (100.0, 2000.0, 50.0),
         }
     }
 
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            SettingId::BlurEnabled | SettingId::BlurXray | SettingId::MediaSmoothScroll
+            SettingId::BlurEnabled
+                | SettingId::BlurXray
+                | SettingId::MediaSmoothScroll
+                | SettingId::Autohide
         )
     }
 
@@ -95,6 +105,8 @@ impl SettingId {
             SettingId::BlurXray => bool_f(s.blur_xray),
             SettingId::MediaSmoothScroll => bool_f(s.media_smooth_scroll),
             SettingId::MediaWidthScale => s.media_width_scale,
+            SettingId::Autohide => bool_f(s.autohide),
+            SettingId::AutohideDelay => s.autohide_delay_ms as f32,
         }
     }
 
@@ -120,6 +132,8 @@ impl SettingId {
             SettingId::BlurXray => s.blur_xray = clamped >= 0.5,
             SettingId::MediaSmoothScroll => s.media_smooth_scroll = clamped >= 0.5,
             SettingId::MediaWidthScale => s.media_width_scale = clamped,
+            SettingId::Autohide => s.autohide = clamped >= 0.5,
+            SettingId::AutohideDelay => s.autohide_delay_ms = clamped.round() as u64,
         }
     }
 
@@ -145,9 +159,11 @@ impl SettingId {
             }
             SettingId::BlurBrightness | SettingId::BlurContrast => format!("{:.2}", self.get(s)),
             SettingId::BorderWidth => format!("{:.2}px", self.get(s)),
-            SettingId::BlurEnabled | SettingId::BlurXray | SettingId::MediaSmoothScroll => {
-                String::new()
-            }
+            SettingId::AutohideDelay => format!("{}ms", self.get(s).round() as i32),
+            SettingId::BlurEnabled
+            | SettingId::BlurXray
+            | SettingId::MediaSmoothScroll
+            | SettingId::Autohide => String::new(),
         }
     }
 
@@ -161,6 +177,7 @@ impl SettingId {
                 | SettingId::WidthPadding
                 | SettingId::PosY
                 | SettingId::MediaWidthScale
+                | SettingId::Autohide
         )
     }
 

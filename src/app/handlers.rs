@@ -43,6 +43,8 @@ impl CompositorHandler for App {
                 self.tick_notification_frame(qh);
             } else if self.osd_mode.is_some() {
                 self.tick_osd_frame(qh);
+            } else if self.ws_flash_mode.is_some() {
+                self.tick_ws_flash_frame(qh);
             } else if self.app_search_mode.is_some() {
                 self.tick_app_search_frame(qh);
             } else if self.dock_menu_mode.is_some() {
@@ -150,17 +152,6 @@ impl LayerShellHandler for App {
                 self.first_configure = false;
             }
             self.draw(qh);
-        } else if layer.wl_surface() == self.reserve_layer.wl_surface() {
-            let (buffer, canvas) = self
-                .pool
-                .create_buffer(1, 1, 4, wl_shm::Format::Argb8888)
-                .expect("failed to create reserve buffer");
-            canvas.fill(0);
-            let surface = self.reserve_layer.wl_surface();
-            buffer
-                .attach_to(surface)
-                .expect("failed to attach reserve buffer");
-            surface.commit();
         } else if self
             .menu
             .as_ref()
@@ -234,6 +225,12 @@ impl PointerHandler for App {
         events: &[PointerEvent],
     ) {
         for event in events {
+            log::debug!(
+                "autohide:{} ptr {:?} dock={}",
+                crate::app::hdbg_ms(),
+                event.kind,
+                event.surface == *self.layer.wl_surface()
+            );
             if self
                 .screenshot
                 .as_ref()

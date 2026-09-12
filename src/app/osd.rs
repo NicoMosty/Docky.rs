@@ -11,6 +11,8 @@ impl App {
         {
             return;
         }
+        // ----- el OSD toma la superficie: cancelar el HUD de workspaces -----
+        self.ws_flash_mode = None;
         let (level, muted) = match kind {
             menu::OsdKind::Volume => match crate::widgets::read_volume() {
                 Some((v, m)) => (v, m),

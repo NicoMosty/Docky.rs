@@ -9,6 +9,21 @@ impl App {
         }
     }
 
+    /// Aplicar a la superficie el tamaño del panel de ajustes, ANOTÁNDOLO en
+    /// `applied_size`/`applied_geom`. Sin esa anotación `relayout_dock` cree que
+    /// el tamaño no cambió y al cerrar el menú la superficie queda con el del
+    /// panel: el dock se dibuja dentro de ese rectángulo y se ve descentrado.
+    fn apply_panel_size(&mut self, panel_w: f32, panel_h: f32) {
+        let s = &self.dock.config.settings;
+        let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
+        self.layer.set_anchor(anchor);
+        self.layer
+            .set_margin(margin.0, margin.1, margin.2, margin.3);
+        self.layer.set_size(panel_w as u32, panel_h as u32);
+        self.applied_geom = Some((anchor, margin));
+        self.applied_size = Some((panel_w as u32, panel_h as u32));
+    }
+
     pub(super) fn open_dock_menu(&mut self, qh: &QueueHandle<Self>) {
         self.wallpaper_mode = None;
         self.clipboard_mode = None;
@@ -24,14 +39,13 @@ impl App {
         let panel_w =
             menu::DOCK_MENU_LEFT_COL_W + menu::DOCK_MENU_DIVIDER_W + menu::DOCK_MENU_RIGHT_COL_W;
         let panel_h = menu::dock_menu_content_height(category, &self.dock.config.settings);
-        let s = &self.dock.config.settings;
-        let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-        self.layer.set_anchor(anchor);
+        self.apply_panel_size(panel_w, panel_h);
+        // ----- Exclusive y no OnDemand: con OnDemand el compositor no le da el
+        // foco de teclado a la superficie, así que ningún KeyEvent llega y
+        // Escape no puede cerrar el menú por más que el handler lo contemple.
+        // Es el mismo modo que usan app_search, clipboard y el resto. -----
         self.layer
-            .set_margin(margin.0, margin.1, margin.2, margin.3);
-        self.layer.set_size(panel_w as u32, panel_h as u32);
-        self.layer
-            .set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+            .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         self.dock_menu_mode = Some(DockMenuMode {
             category,
             controls,
@@ -62,13 +76,28 @@ impl App {
     }
 
     pub(super) fn close_dock_menu(&mut self, qh: &QueueHandle<Self>) {
+        // ----- cierre inmediato: la animación era de 20 frames (ANIM_STEP_CLOSE
+        // = 0.05) y ese era el ~1s que tardaba en reaccionar después de Escape.
+        // El teclado se suelta en el mismo paso: así no queda secuestrado -----
         if let Some(dm) = self.dock_menu_mode.as_mut() {
-            dm.closing = true;
-            dm.target_anim = 0.0;
             dm.dragging_slider = None;
             dm.held_stepper = None;
         }
-        self.request_redraw(qh);
+        self.dock_menu_mode = None;
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
+        self.relayout_dock(qh);
+        // ----- el menú se quedó con los eventos del puntero, así que el estado del
+        // autohide quedó viejo: `pointer_pos` y `ptr_left_at` son de antes de
+        // abrirlo, y con `pointer_pos` viejo en `Some` el dock no se oculta nunca.
+        // Se refresca como una salida: si el cursor sigue sobre la franja, el
+        // compositor manda Enter/Motion y el dock se mantiene. -----
+        self.dock.set_pointer(None);
+        self.ptr_left_at = None;
+        self.last_ptr_event = Some(std::time::Instant::now());
+        self.autohide_armed = false;
+        self.arm_autohide();
+        trim_heap();
     }
 
     pub(super) fn switch_dock_menu_category(
@@ -96,12 +125,7 @@ impl App {
         if let (Some(panel_w), Some(panel_h)) =
             (panel_w, self.dock_menu_mode.as_ref().map(|dm| dm.panel_h))
         {
-            let s = &self.dock.config.settings;
-            let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-            self.layer.set_anchor(anchor);
-            self.layer
-                .set_margin(margin.0, margin.1, margin.2, margin.3);
-            self.layer.set_size(panel_w as u32, panel_h as u32);
+            self.apply_panel_size(panel_w, panel_h);
         }
         self.request_redraw(qh);
     }
@@ -232,11 +256,10 @@ impl App {
         let has_stepper = dm.held_stepper.is_some();
 
         if closing && anim <= 0.0 {
-            self.dock_menu_mode = None;
-            self.layer
-                .set_keyboard_interactivity(KeyboardInteractivity::None);
-            self.relayout_dock(qh);
-            trim_heap();
+            // ----- una sola ruta de cierre: si el cierre se duplica acá, este
+            // camino se saltea la restauración del tamaño y el reset del
+            // autohide que sí hace `close_dock_menu`. -----
+            self.close_dock_menu(qh);
             return;
         }
         if has_stepper {
@@ -410,12 +433,7 @@ impl App {
             dm.hovered = None;
         }
         if let Some(panel_w) = panel_w {
-            let s = &self.dock.config.settings;
-            let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-            self.layer.set_anchor(anchor);
-            self.layer
-                .set_margin(margin.0, margin.1, margin.2, margin.3);
-            self.layer.set_size(panel_w as u32, panel_h as u32);
+            self.apply_panel_size(panel_w, panel_h);
         }
         self.request_redraw(qh);
     }

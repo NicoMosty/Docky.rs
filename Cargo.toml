@@ -23,3 +23,13 @@ usvg = "0.48.1"
 wayland-client = "0.31.15"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 zbus = "5.19.0"
+
+# ----- sin optimizar, tiny-skia/resvg/usvg son ~20-50x mas lentos: un render
+# de menu pasaba de ~5ms a 150-1500ms y el hover se arrastraba. Aca las
+# dependencias se compilan optimizadas y el crate propio a opt-level 1
+# (rebuilds rapidos y todavia depurable).
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

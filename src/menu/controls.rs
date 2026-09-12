@@ -1,12 +1,14 @@
 use super::*;
 
-pub(super) const LAYOUT_SETTINGS: [SettingId; 6] = [
+pub(super) const LAYOUT_SETTINGS: [SettingId; 8] = [
     SettingId::DockScale,
     SettingId::IconSize,
     SettingId::IconGap,
     SettingId::WidthPadding,
     SettingId::PosY,
     SettingId::CornerRadius,
+    SettingId::Autohide,
+    SettingId::AutohideDelay,
 ];
 
 pub(super) const APPEARANCE_SETTINGS: [SettingId; 9] = [

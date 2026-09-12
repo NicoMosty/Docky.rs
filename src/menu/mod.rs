@@ -50,6 +50,8 @@ pub const ANIM_STEP_CLOSE: f32 = 0.05;
 
 pub const OSD_MIN_PANEL_H: f32 = 36.0;
 pub const OSD_TIMEOUT_MS: u64 = 1400;
+/// Cuánto tiempo se queda el HUD del indicador de workspaces.
+pub const WS_FLASH_TIMEOUT_MS: u64 = 3000;
 // ----- fixed size -----
 pub const OSD_NOTIFICATION_BASE_LEN: f32 = 240.0;
 pub const OSD_NOTIFICATION_BASE_THICKNESS: f32 = 44.0;
@@ -220,7 +222,7 @@ pub fn slider_value_from_x(id: SettingId, x: f32, control_y: f32) -> f32 {
     let t = ((x - track_x0) / (track_x1 - track_x0).max(1.0)).clamp(0.0, 1.0);
     min + t * (max - min)
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HitTarget {
     Toggle(SettingId),
     SliderTrack(SettingId),

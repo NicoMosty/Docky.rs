@@ -143,13 +143,28 @@ fn resolve_item(conn: &Connection, raw_svc: &str) -> Option<TrayIcon> {
     })
 }
 
+// ----- conexión compartida: antes cada llamada hacía Connection::session(),
+// o sea el handshake completo de D-Bus, y encima en el hilo que dibuja -----
+fn tray_conn() -> Option<&'static Connection> {
+    static CONN: std::sync::OnceLock<Option<Connection>> = std::sync::OnceLock::new();
+    CONN.get_or_init(|| match Connection::session() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            log::warn!("tray: no hay bus de sesión: {e}");
+            None
+        }
+    })
+    .as_ref()
+}
+
 // ----- one level -----
 pub fn fetch_menu(service: &str, menu_path: &str, parent_id: i32) -> Vec<TrayMenuItem> {
-    let Ok(conn) = Connection::session() else {
+    let t0 = std::time::Instant::now();
+    let Some(conn) = tray_conn() else {
         return Vec::new();
     };
     let Ok(proxy) = Proxy::new(
-        &conn,
+        conn,
         service.to_string(),
         menu_path.to_string(),
         "com.canonical.dbusmenu",
@@ -162,11 +177,18 @@ pub fn fetch_menu(service: &str, menu_path: &str, parent_id: i32) -> Vec<TrayMen
         std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
         Vec<zbus::zvariant::OwnedValue>,
     );
+    let t_call = std::time::Instant::now();
     let Ok((_, (_, _, children))) =
         proxy.call::<_, _, (u32, Layout)>("GetLayout", &(parent_id, 1i32, names))
     else {
         return Vec::new();
     };
+    // ----- desglose de latencia (visible con RUST_LOG=debug) -----
+    log::debug!(
+        "tray: {menu_path} setup={}ms getlayout={}ms",
+        t_call.duration_since(t0).as_millis(),
+        t_call.elapsed().as_millis()
+    );
     children
         .into_iter()
         .filter_map(|child| {
@@ -213,8 +235,8 @@ pub fn fetch_menu(service: &str, menu_path: &str, parent_id: i32) -> Vec<TrayMen
 
 pub fn send_menu_event(service: String, menu_path: String, id: i32) {
     std::thread::spawn(move || {
-        if let Ok(conn) = Connection::session()
-            && let Ok(proxy) = Proxy::new(&conn, service, menu_path, "com.canonical.dbusmenu")
+        if let Some(conn) = tray_conn()
+            && let Ok(proxy) = Proxy::new(conn, service, menu_path, "com.canonical.dbusmenu")
         {
             let data = zbus::zvariant::Value::from(0i32);
             let _: zbus::Result<()> = proxy.call("Event", &(id, "clicked", data, 0u32));
@@ -224,8 +246,8 @@ pub fn send_menu_event(service: String, menu_path: String, id: i32) {
 
 pub fn activate(service: String, path: String) {
     std::thread::spawn(move || {
-        if let Ok(conn) = Connection::session()
-            && let Ok(proxy) = item_proxy(&conn, &service, &path)
+        if let Some(conn) = tray_conn()
+            && let Ok(proxy) = item_proxy(conn, &service, &path)
         {
             let _: zbus::Result<()> = proxy.call("Activate", &(0i32, 0i32));
         }

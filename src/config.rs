@@ -56,50 +56,42 @@ pub struct WidgetPlacement {
 
 fn default_widgets() -> Vec<WidgetPlacement> {
     use WidgetSlot::{Left, Middle, Right};
-    // ----- waybar order -----
+    // ----- apagado al extremo izquierdo; bateria a su lado -----
     vec![
+        WidgetPlacement {
+            kind: WidgetKind::PowerMenu,
+            slot: Left,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::Battery,
+            slot: Left,
+        },
+        WidgetPlacement {
+            kind: WidgetKind::KbdLayout,
+            slot: Left,
+        },
         WidgetPlacement {
             kind: WidgetKind::Network,
             slot: Left,
         },
         WidgetPlacement {
-            kind: WidgetKind::Cpu,
+            kind: WidgetKind::Bluetooth,
             slot: Left,
         },
         WidgetPlacement {
-            kind: WidgetKind::Ram,
+            kind: WidgetKind::Volume,
             slot: Left,
-        },
-        WidgetPlacement {
-            kind: WidgetKind::Tray,
-            slot: Middle,
         },
         WidgetPlacement {
             kind: WidgetKind::Workspaces,
             slot: Middle,
         },
         WidgetPlacement {
+            kind: WidgetKind::Tray,
+            slot: Right,
+        },
+        WidgetPlacement {
             kind: WidgetKind::Clock,
-            slot: Middle,
-        },
-        WidgetPlacement {
-            kind: WidgetKind::Bluetooth,
-            slot: Right,
-        },
-        WidgetPlacement {
-            kind: WidgetKind::Media,
-            slot: Right,
-        },
-        WidgetPlacement {
-            kind: WidgetKind::Volume,
-            slot: Right,
-        },
-        WidgetPlacement {
-            kind: WidgetKind::KbdLayout,
-            slot: Right,
-        },
-        WidgetPlacement {
-            kind: WidgetKind::PowerMenu,
             slot: Right,
         },
     ]
@@ -107,6 +99,14 @@ fn default_widgets() -> Vec<WidgetPlacement> {
 
 fn default_matugen_scheme() -> String {
     "scheme-neutral".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_hide_delay() -> u64 {
+    1200
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +173,10 @@ pub struct DockSettings {
     #[serde(default)]
     pub system_font: String,
     pub dock_edge: DockEdge,
+    #[serde(default = "default_true")]
+    pub autohide: bool,
+    #[serde(default = "default_hide_delay")]
+    pub autohide_delay_ms: u64,
     #[serde(default = "default_widgets")]
     pub widgets: Vec<WidgetPlacement>,
     #[serde(default)]
@@ -183,7 +187,7 @@ impl Default for DockSettings {
     fn default() -> Self {
         Self {
             icon_size: 35.688725,
-            dock_scale: 0.49597847,
+            dock_scale: 0.335,
             widget_scale: 1.0,
             media_smooth_scroll: false,
             media_width_scale: 1.2026273,
@@ -193,7 +197,7 @@ impl Default for DockSettings {
             width_padding: 67.51996,
             corner_radius: 8.40339,
             border_width: 0.0,
-            pos_y: 7,
+            pos_y: 0,
             dock_align: DockAlign::Middle,
             transparency: 1.0,
             blur_enabled: false,
@@ -228,6 +232,8 @@ impl Default for DockSettings {
             dock_font: "Adwaita Sans".to_string(),
             system_font: String::new(),
             dock_edge: DockEdge::Top,
+            autohide: true,
+            autohide_delay_ms: default_hide_delay(),
             widgets: default_widgets(),
             custom_palettes: Vec::new(),
         }

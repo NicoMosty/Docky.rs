@@ -16,14 +16,14 @@ fn draw_centered_label(
         return;
     }
     if is_vertical {
-        let label_len = text_width_estimate_render(label, 8.0 * render_scale);
+        let label_len = text_width_estimate_render(label, 8.5 * render_scale);
         draw_text_rotated(
             pixmap,
             text_cache,
             label,
             zx + zw / 2.0,
             zy + zh / 2.0,
-            8.0 * render_scale,
+            8.5 * render_scale,
             colors.text_color,
             600,
         );
@@ -59,8 +59,8 @@ fn draw_icon_label(
     is_vertical: bool,
 ) {
     if is_vertical {
-        let label_len = text_width_estimate_render(label, 8.0 * render_scale);
-        let gap = 5.0 * render_scale;
+        let label_len = text_width_estimate_render(label, 10.0 * render_scale);
+        let gap = 4.0 * render_scale;
         let total = icon_r * 2.0 + gap + label_len;
         let block_start = zy + (zh - total) / 2.0;
         let cx = zx + zw / 2.0;
@@ -78,19 +78,19 @@ fn draw_icon_label(
             label,
             cx,
             block_start + icon_r * 2.0 + gap + label_len / 2.0,
-            8.0 * render_scale,
-            colors.text_dim_color,
-            500,
+            10.0 * render_scale,
+            colors.text_color,
+            600,
         );
     } else {
-        let label_w = text_width_estimate_render(label, 8.5 * render_scale);
-        let gap = 6.0 * render_scale;
+        let label_w = text_width_estimate_render(label, 10.0 * render_scale);
+        let gap = 4.0 * render_scale;
         let content_w = icon_r * 2.0 + gap + label_w;
         let block_x = zx + (zw - content_w) / 2.0;
         let cy = zy + zh / 2.0;
         let icon_cx = block_x + icon_r;
         draw_icon(pixmap, render_scale, icon_cx, cy, colors, active);
-        if let Some(txt) = text_cache.get(label, 8.5 * render_scale, colors.text_dim_color, 500) {
+        if let Some(txt) = text_cache.get(label, 10.0 * render_scale, colors.text_color, 600) {
             pixmap.draw_pixmap(
                 0,
                 0,
@@ -135,25 +135,28 @@ fn draw_speaker_icon(
     colors: &WidgetColors,
     active: bool,
 ) {
-    let s = 6.0 * render_scale;
+    // ----- altavoz compacto: caja + cono y UNA sola onda. Antes llevaba dos
+    // ondas y era ~30% más ancho; así el espacio ahorrado rinde para el número -----
+    let s = 5.2 * render_scale;
+    let alpha = if active { 230 } else { 110 };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(
+        colors.text_rgb.0,
+        colors.text_rgb.1,
+        colors.text_rgb.2,
+        alpha,
+    );
+    paint.anti_alias = true;
+
     let mut pb = tiny_skia::PathBuilder::new();
-    pb.move_to(cx - s, cy - s * 0.45);
-    pb.line_to(cx - s * 0.25, cy - s * 0.45);
-    pb.line_to(cx + s * 0.35, cy - s);
-    pb.line_to(cx + s * 0.35, cy + s);
-    pb.line_to(cx - s * 0.25, cy + s * 0.45);
-    pb.line_to(cx - s, cy + s * 0.45);
+    pb.move_to(cx - s * 0.95, cy - s * 0.34);
+    pb.line_to(cx - s * 0.34, cy - s * 0.34);
+    pb.line_to(cx + s * 0.26, cy - s * 0.92);
+    pb.line_to(cx + s * 0.26, cy + s * 0.92);
+    pb.line_to(cx - s * 0.34, cy + s * 0.34);
+    pb.line_to(cx - s * 0.95, cy + s * 0.34);
     pb.close();
     if let Some(path) = pb.finish() {
-        let mut paint = Paint::default();
-        let alpha = if active { 230 } else { 110 };
-        paint.set_color_rgba8(
-            colors.text_rgb.0,
-            colors.text_rgb.1,
-            colors.text_rgb.2,
-            alpha,
-        );
-        paint.anti_alias = true;
         pixmap.fill_path(
             &path,
             &paint,
@@ -162,23 +165,33 @@ fn draw_speaker_icon(
             None,
         );
     }
+
     if active {
+        // ----- una onda pegada al cono -----
         let mut arcs = tiny_skia::PathBuilder::new();
-        for (r, sweep) in [(s * 0.9, 0.9), (s * 1.5, 0.9)] {
-            let steps = 10;
-            for i in 0..=steps {
-                let t = -sweep / 2.0 + sweep * (i as f32 / steps as f32);
-                let x = cx + s * 0.55 + r * t.cos();
-                let y = cy + r * t.sin();
-                if i == 0 {
-                    arcs.move_to(x, y);
-                } else {
-                    arcs.line_to(x, y);
-                }
+        let r = s * 0.55;
+        let steps = 14;
+        let sweep = 1.15;
+        for i in 0..=steps {
+            let t = -sweep + 2.0 * sweep * (i as f32 / steps as f32);
+            let x = cx + s * 0.30 + r * t.cos();
+            let y = cy + r * t.sin();
+            if i == 0 {
+                arcs.move_to(x, y);
+            } else {
+                arcs.line_to(x, y);
             }
         }
         if let Some(path) = arcs.finish() {
-            stroke(pixmap, &path, render_scale, colors, true);
+            let mut wave = Paint::default();
+            wave.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, 200);
+            wave.anti_alias = true;
+            let stroke = tiny_skia::Stroke {
+                width: 1.35 * render_scale,
+                line_cap: tiny_skia::LineCap::Round,
+                ..Default::default()
+            };
+            pixmap.stroke_path(&path, &wave, &stroke, Transform::identity(), None);
         }
     }
 }
@@ -191,14 +204,15 @@ fn draw_wifi_icon(
     colors: &WidgetColors,
     active: bool,
 ) {
+    // ----- arcos concéntricos simétricos + punto circular -----
     let mut pb = tiny_skia::PathBuilder::new();
-    for r in [3.0, 6.0, 9.0] {
+    for r in [4.0, 7.0, 10.0] {
         let r = r * render_scale;
-        let steps = 12;
+        let steps = 16;
         for i in 0..=steps {
-            let t = std::f32::consts::PI * (1.25 + 0.5 * (i as f32 / steps as f32));
-            let x = cx + r * t.cos();
-            let y = cy + r * 0.9 + r * t.sin() * 0.55 + 3.0 * render_scale;
+            let phi = (-50.0 + 100.0 * (i as f32 / steps as f32)).to_radians();
+            let x = cx + r * phi.sin();
+            let y = cy + 2.5 * render_scale - r * phi.cos();
             if i == 0 {
                 pb.move_to(x, y);
             } else {
@@ -206,7 +220,6 @@ fn draw_wifi_icon(
             }
         }
     }
-    // dot
     if let Some(path) = pb.finish() {
         stroke(pixmap, &path, render_scale, colors, active);
     }
@@ -219,19 +232,9 @@ fn draw_wifi_icon(
         alpha,
     );
     dot.anti_alias = true;
-    if let Some(rect) = tiny_skia::Rect::from_xywh(
-        cx - 1.2 * render_scale,
-        cy + 5.2 * render_scale,
-        2.4 * render_scale,
-        2.4 * render_scale,
-    ) {
-        let path = rounded_rect_path(
-            rect.x(),
-            rect.y(),
-            rect.width(),
-            rect.height(),
-            1.2 * render_scale,
-        );
+    let mut db = tiny_skia::PathBuilder::new();
+    db.push_circle(cx, cy + 5.5 * render_scale, 1.6 * render_scale);
+    if let Some(path) = db.finish() {
         pixmap.fill_path(
             &path,
             &dot,
@@ -267,7 +270,7 @@ pub(super) fn draw_volume_widget(
         pixmap,
         text_cache,
         draw_speaker_icon,
-        6.0 * render_scale,
+        4.7 * render_scale,
         !muted,
         &label,
         zx,
@@ -283,7 +286,7 @@ pub(super) fn draw_volume_widget(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_network_widget(
     pixmap: &mut Pixmap,
-    text_cache: &mut TextCache,
+    _text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,
     zx: f32,
     zy: f32,
@@ -291,23 +294,29 @@ pub(super) fn draw_network_widget(
     zh: f32,
     render_scale: f32,
     colors: &WidgetColors,
-    is_vertical: bool,
+    _is_vertical: bool,
+    hovered: bool,
 ) {
-    let label = &widgets.network.label;
-    draw_icon_label(
+    // ----- botón solo-icono; el nombre va en pill flotante al hover -----
+    let bg_alpha = if hovered { 80 } else { 30 };
+    let path = rounded_rect_path(zx + 1.0, zy + 1.0, zw - 2.0, zh - 2.0, 6.0 * render_scale);
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(colors.accent.0, colors.accent.1, colors.accent.2, bg_alpha);
+    paint.anti_alias = true;
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+    draw_wifi_icon(
         pixmap,
-        text_cache,
-        draw_wifi_icon,
-        6.0 * render_scale,
-        widgets.network.online,
-        label,
-        zx,
-        zy,
-        zw,
-        zh,
         render_scale,
+        zx + zw / 2.0,
+        zy + zh / 2.0,
         colors,
-        is_vertical,
+        widgets.network.online,
     );
 }
 

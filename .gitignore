@@ -1,2 +1,6 @@
 /target
 .pi/tasks/
+
+# Python (scripts/)
+__pycache__/
+*.pyc

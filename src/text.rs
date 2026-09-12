@@ -54,6 +54,25 @@ pub fn list_font_families() -> Vec<String> {
     names
 }
 
+// ----- conjunto de familias disponibles (se arma UNA vez) -----
+// Antes has_family() recorria todas las caras instaladas en cada lookup de
+// texto: con ~500-1000 caras y una etiqueta por fila, eso dominaba el render.
+fn family_set() -> &'static std::collections::HashSet<String> {
+    static FAMILIES: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    FAMILIES.get_or_init(|| {
+        options()
+            .fontdb
+            .faces()
+            .flat_map(|f| f.families.iter().map(|(name, _)| name.clone()))
+            .collect()
+    })
+}
+
+// ----- familia inexistente = pixmap vacío; caer al default -----
+fn has_family(family: &str) -> bool {
+    family_set().contains(family)
+}
+
 fn rasterize(text: &str, size_px: f32, color: &str, weight: u16, family: &str) -> Option<Pixmap> {
     if text.is_empty() {
         return None;
@@ -144,6 +163,16 @@ impl TextCache {
         family: &str,
     ) -> Option<Rc<Pixmap>> {
         use std::fmt::Write;
+        let fallback;
+        let mut family = family;
+        if !has_family(family) {
+            fallback = self.default_family.clone();
+            family = if fallback.is_empty() || !has_family(&fallback) {
+                "sans-serif"
+            } else {
+                &fallback
+            };
+        }
         self.key_buf.clear();
         let _ = write!(
             self.key_buf,

@@ -10,6 +10,7 @@ pub(super) struct WidgetRect {
 }
 
 pub(super) const WIDGET_GAP: f32 = 6.0;
+pub(super) const ZONE_GAP: f32 = 18.0;
 
 // ----- flexible zones -----
 pub(super) fn layout_widgets(
@@ -25,6 +26,7 @@ pub(super) fn layout_widgets(
     let bar_len = if is_vertical { h } else { w };
     let cross_len = if is_vertical { w } else { h };
     let gap = WIDGET_GAP * render_scale;
+    let zone_gap = ZONE_GAP * render_scale;
     let inset = 10.0 * render_scale;
 
     let members_of = |slot: WidgetSlot| -> Vec<crate::config::WidgetKind> {
@@ -105,19 +107,18 @@ pub(super) fn layout_widgets(
     let mid_lens = lens_of(&mid_members);
     let mid_len = block_len(&mid_lens);
     let segment_start = if left_len > 0.0 {
-        left_end + gap
+        left_end + zone_gap
     } else {
         inset
     };
     let segment_end = if right_len > 0.0 {
-        right_start - gap
+        right_start - zone_gap
     } else {
         bar_len - inset
     };
+    // ----- zona media siempre centrada en su espacio libre -----
     let gap_center = segment_start + (segment_end - segment_start - mid_len) / 2.0;
-    let true_center = (bar_len - mid_len) / 2.0;
-    let blended = gap_center + (true_center - gap_center) * 0.8;
-    let mid_start = blended.clamp(
+    let mid_start = gap_center.clamp(
         segment_start.min(segment_end - mid_len),
         segment_end - mid_len,
     );
@@ -147,6 +148,7 @@ pub fn widget_bar_natural_len(
         return 0.0;
     }
     let gap = WIDGET_GAP * render_scale;
+    let zone_gap = ZONE_GAP * render_scale;
     let inset = 10.0 * render_scale;
 
     let zone_len = |slot: WidgetSlot| -> f32 {
@@ -180,7 +182,7 @@ pub fn widget_bar_natural_len(
         zone_len(WidgetSlot::Right),
     ];
     let present: Vec<f32> = zones.into_iter().filter(|&len| len > 0.0).collect();
-    present.iter().sum::<f32>() + gap * (present.len() as f32 - 1.0).max(0.0) + inset * 2.0
+    present.iter().sum::<f32>() + zone_gap * (present.len() as f32 - 1.0).max(0.0) + inset * 2.0
 }
 
 pub(super) fn widget_natural_len(
@@ -197,12 +199,12 @@ pub(super) fn widget_natural_len(
         WidgetKind::Clock => {
             if is_vertical {
                 let time_w = text_width_estimate_render(&widgets.time, 11.0 * render_scale);
-                let date_w = text_width_estimate_render(&widgets.date, 7.0 * render_scale);
+                let date_w = text_width_estimate_render(&widgets.date, 11.0 * render_scale);
                 time_w.max(date_w)
             } else {
                 let time_w = text_width_estimate_render(&widgets.time, 12.0 * render_scale);
-                let date_w = text_width_estimate_render(&widgets.date, 7.5 * render_scale);
-                time_w.max(date_w)
+                let date_w = text_width_estimate_render(&widgets.date, 12.0 * render_scale);
+                time_w + 3.5 * render_scale + date_w
             }
         }
         WidgetKind::Battery => {
@@ -211,33 +213,18 @@ pub(super) fn widget_natural_len(
             };
             let label = format!("{pct}%");
             if is_vertical {
-                let label_len = text_width_estimate_render(&label, 8.0 * render_scale);
-                10.0 * render_scale + 5.0 * render_scale + label_len
+                let label_len = text_width_estimate_render(&label, 9.5 * render_scale);
+                9.0 * render_scale + 5.0 * render_scale + label_len
             } else {
-                let label_w = text_width_estimate_render(&label, 8.5 * render_scale);
-                20.0 * render_scale + 6.0 * render_scale + label_w
+                // ----- el porcentaje va dentro del icono: sólo el ancho de éste -----
+                32.0 * render_scale
             }
         }
         WidgetKind::Media => media_ideal_len(is_vertical, render_scale, media_width_scale),
         WidgetKind::PowerMenu => 14.0 * render_scale,
         WidgetKind::Bluetooth => {
-            let icon_r = 6.0 * render_scale;
-            let label = match &widgets.bluetooth {
-                Some(bt) if !bt.powered => "Off".to_string(),
-                Some(bt) => bt.connected.clone().unwrap_or_else(|| "On".to_string()),
-                None => String::new(),
-            };
-            if label.is_empty() {
-                icon_r * 2.0
-            } else if is_vertical {
-                icon_r * 2.0
-                    + 6.0 * render_scale
-                    + text_width_estimate_render(&label, 8.0 * render_scale)
-            } else {
-                icon_r * 2.0
-                    + 6.0 * render_scale
-                    + text_width_estimate_render(&label, 8.5 * render_scale)
-            }
+            // ----- sólo el icono: el estado se expresa con color, sin texto -----
+            16.0 * render_scale
         }
         WidgetKind::Tray => {
             if tray_count == 0 {
@@ -258,14 +245,17 @@ pub(super) fn widget_natural_len(
             };
             text_widget_len(&label, is_vertical, render_scale)
         }
-        WidgetKind::Network => text_widget_len(&widgets.network.label, is_vertical, render_scale),
+        WidgetKind::Network => 24.0 * render_scale,
         WidgetKind::Volume => {
             let label = match widgets.volume {
                 Some((_, true)) => "MUTE".to_string(),
                 Some((pct, false)) => format!("{pct}%"),
                 None => return 0.0,
             };
-            text_widget_len(&label, is_vertical, render_scale)
+            // ----- icono compacto (4.7) + hueco corto (4) y número grande (10) -----
+            9.4 * render_scale
+                + 4.0 * render_scale
+                + text_width_estimate_render(&label, 10.0 * render_scale)
         }
         WidgetKind::KbdLayout => {
             let w = text_width_estimate_render(&widgets.kblayout.short, 8.5 * render_scale);
@@ -277,7 +267,7 @@ pub(super) fn widget_natural_len(
 pub(super) fn text_widget_len(label: &str, is_vertical: bool, render_scale: f32) -> f32 {
     let icon_side = 12.0 * render_scale;
     if is_vertical {
-        icon_side + 5.0 * render_scale + text_width_estimate_render(label, 8.0 * render_scale)
+        icon_side + 5.0 * render_scale + text_width_estimate_render(label, 8.5 * render_scale)
     } else {
         icon_side + 6.0 * render_scale + text_width_estimate_render(label, 8.5 * render_scale)
     }
@@ -306,39 +296,11 @@ pub(super) fn draw_widgets(
     let h = base_h as f32 * render_scale;
     // ----- widget scale -----
     let render_scale = render_scale * s.widget_scale;
-    let accent = (s.accent_r, s.accent_g, s.accent_b, 255);
-    // ----- skip accent blend -----
-    let blend =
-        |base: u8, tint: u8, frac: f32| (base as f32 * (1.0 - frac) + tint as f32 * frac) as u8;
-    let (text_rgb, text_dim_rgb) = if s.custom_theme {
-        (
-            (s.text_r, s.text_g, s.text_b),
-            (s.text_dim_r, s.text_dim_g, s.text_dim_b),
-        )
-    } else {
-        (
-            (
-                blend(s.text_r, s.accent_r, 0.45),
-                blend(s.text_g, s.accent_g, 0.45),
-                blend(s.text_b, s.accent_b, 0.45),
-            ),
-            (
-                blend(s.text_r, s.accent2_r, 0.65),
-                blend(s.text_g, s.accent2_g, 0.65),
-                blend(s.text_b, s.accent2_b, 0.65),
-            ),
-        )
-    };
-    let text_color = format!("#{:02x}{:02x}{:02x}", text_rgb.0, text_rgb.1, text_rgb.2);
-    let text_dim_color = format!(
-        "#{:02x}{:02x}{:02x}",
-        text_dim_rgb.0, text_dim_rgb.1, text_dim_rgb.2
-    );
+    let palette = widget_palette(s);
     let colors = WidgetColors {
-        accent,
-        text_rgb,
-        text_color: &text_color,
-        text_dim_color: &text_dim_color,
+        accent: palette.accent,
+        text_rgb: palette.text_rgb,
+        text_color: &palette.text_color,
     };
 
     let key = widgets
@@ -413,18 +375,22 @@ pub(super) fn draw_widgets(
                 &colors,
                 is_vertical,
             ),
-            WidgetKind::Bluetooth => draw_bluetooth_widget(
-                pixmap,
-                text_cache,
-                widgets,
-                r.x,
-                r.y,
-                r.w,
-                r.h,
-                render_scale,
-                &colors,
-                is_vertical,
-            ),
+            WidgetKind::Bluetooth => {
+                // ----- sin etiqueta: el estado se expresa con el color del icono -----
+                let (powered, in_use) = match &widgets.bluetooth {
+                    Some(bt) => (bt.powered, bt.powered && bt.connected.is_some()),
+                    None => (false, false),
+                };
+                draw_bluetooth_icon(
+                    pixmap,
+                    render_scale,
+                    r.x + r.w / 2.0,
+                    r.y + r.h / 2.0,
+                    powered,
+                    in_use,
+                    &colors,
+                );
+            }
             WidgetKind::Tray => draw_tray_widget(
                 pixmap,
                 icon_cache,
@@ -486,6 +452,7 @@ pub(super) fn draw_widgets(
                 render_scale,
                 &colors,
                 is_vertical,
+                dock.hovered_widget == Some(WidgetKind::Network),
             ),
             WidgetKind::Volume => draw_volume_widget(
                 pixmap,
@@ -513,7 +480,139 @@ pub(super) fn draw_widgets(
             ),
         }
     }
+    // ----- separadores sutiles entre zonas -----
+    {
+        use crate::config::WidgetSlot;
+        let rects = layout_widgets(
+            &dock.config.settings,
+            widgets,
+            tray_count,
+            dock.is_vertical(),
+            w,
+            h,
+            render_scale,
+        );
+        // (min, max) por zona sobre el eje principal; max < 0 = vacía
+        let mut bounds = [(0.0f32, -1.0f32); 3];
+        for r in &rects {
+            let i = match r.slot {
+                WidgetSlot::Left => 0,
+                WidgetSlot::Middle => 1,
+                WidgetSlot::Right => 2,
+            };
+            let (a, b) = if dock.is_vertical() {
+                (r.y, r.y + r.h)
+            } else {
+                (r.x, r.x + r.w)
+            };
+            if bounds[i].1 < 0.0 {
+                bounds[i] = (a, b);
+            } else {
+                bounds[i].0 = bounds[i].0.min(a);
+                bounds[i].1 = bounds[i].1.max(b);
+            }
+        }
+        let mut div_paint = Paint::default();
+        div_paint.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, 35);
+        div_paint.anti_alias = true;
+        let mut prev: Option<(f32, f32)> = None;
+        for i in [0, 1, 2] {
+            if bounds[i].1 < 0.0 {
+                continue;
+            }
+            if let Some((_, pmx)) = prev {
+                let s = (pmx + bounds[i].0) / 2.0;
+                let rc = if dock.is_vertical() {
+                    let m = 4.0 * render_scale;
+                    tiny_skia::Rect::from_xywh(m, s - 0.5, (w - 2.0 * m).max(0.0), 1.0)
+                } else {
+                    let m = 4.0 * render_scale;
+                    tiny_skia::Rect::from_xywh(s - 0.5, m, 1.0, (h - 2.0 * m).max(0.0))
+                };
+                if let Some(rc) = rc {
+                    pixmap.fill_rect(rc, &div_paint, Transform::identity(), None);
+                }
+            }
+            prev = Some(bounds[i]);
+        }
+    }
+    // ----- pill flotante con el SSID al pasar el mouse -----
+    if dock.hovered_widget == Some(WidgetKind::Network) {
+        draw_network_hover_pill(
+            pixmap,
+            dock,
+            text_cache,
+            widgets,
+            tray_count,
+            w,
+            h,
+            render_scale,
+            &colors,
+        );
+    }
     animating
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_network_hover_pill(
+    pixmap: &mut Pixmap,
+    dock: &Dock,
+    text_cache: &mut TextCache,
+    widgets: &WidgetSnapshot,
+    tray_count: usize,
+    w: f32,
+    h: f32,
+    render_scale: f32,
+    colors: &WidgetColors,
+) {
+    use crate::config::WidgetKind;
+    let label = widgets.network.label.trim();
+    if label.is_empty() {
+        return;
+    }
+    let Some(rect) = layout_widgets(
+        &dock.config.settings,
+        widgets,
+        tray_count,
+        dock.is_vertical(),
+        w,
+        h,
+        render_scale,
+    )
+    .into_iter()
+    .find(|r| r.kind == WidgetKind::Network) else {
+        return;
+    };
+    let fs = 8.5 * render_scale;
+    let Some(txt) = text_cache.get(label, fs, colors.text_color, 500) else {
+        return;
+    };
+    let pad_x = 7.0 * render_scale;
+    let pad_y = 4.0 * render_scale;
+    let pw = txt.width() as f32 + pad_x * 2.0;
+    let ph = txt.height() as f32 + pad_y * 2.0;
+    let margin = 3.0 * render_scale;
+    let px = (rect.x + rect.w / 2.0 - pw / 2.0).clamp(margin, (w - pw - margin).max(margin));
+    let py = (rect.y + rect.h / 2.0 - ph / 2.0).clamp(0.0, (h - ph).max(0.0));
+    let path = rounded_rect_path(px, py, pw, ph, 6.0 * render_scale);
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(18, 18, 22, 235);
+    paint.anti_alias = true;
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+    pixmap.draw_pixmap(
+        0,
+        0,
+        txt.as_ref().as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        Transform::from_translate(px + pad_x, py + pad_y),
+        None,
+    );
 }
 
 pub fn widget_hit_test(

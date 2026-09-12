@@ -6,6 +6,29 @@ impl App {
         event: &PointerEvent,
         qh: &QueueHandle<Self>,
     ) {
+        // ----- HUD de workspaces: un click sobre un punto cambia de workspace.
+        // Va ANTES del revelado a propósito: el HUD vive justamente con el dock
+        // oculto, así que la rama de abajo se tragaba el click y el hit-test de
+        // los puntos nunca llegaba a ejecutarse. -----
+        if self.ws_flash_mode.is_some() {
+            self.handle_ws_flash_pointer_event(event, qh);
+            return;
+        }
+        // ----- oculto: la franja superior del dock es el disparador -----
+        if !self.dock_visible {
+            match event.kind {
+                PointerEventKind::Enter { .. }
+                | PointerEventKind::Motion { .. }
+                | PointerEventKind::Press { .. } => {
+                    // registrar el puntero ya en el evento que revela: si no, el
+                    // timer no ve interacción y vuelve a ocultarlo enseguida
+                    self.dock.set_pointer(Some(event.position));
+                    self.reveal_dock(qh);
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.notification_mode.is_some() {
             if let PointerEventKind::Press { .. } = event.kind {
                 self.close_notification_mode(qh);
@@ -38,6 +61,16 @@ impl App {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 let (x, y) = event.position;
                 self.dock.set_pointer(Some((x, y)));
+                // ----- actividad del puntero: reinicia el reloj de ocultado -----
+                self.last_ptr_event = Some(std::time::Instant::now());
+                // ----- el puntero volvió: cancelar el ocultado por salida -----
+                self.ptr_left_at = None;
+                // ----- puntero encima: no ocultar -----
+                self.autohide_armed = false;
+                // ----- hover para pills (solo redibuja, el layout es fijo) -----
+                let tray_count = self.tray.lock().unwrap().len();
+                let hovered = render::widget_hit_test(&self.dock, &self.widgets, tray_count, x, y);
+                self.dock.hovered_widget = hovered;
 
                 if self.pointer_down {
                     if self.dock.dragging_index.is_some() {
@@ -56,6 +89,15 @@ impl App {
             }
             PointerEventKind::Leave { .. } => {
                 self.dock.set_pointer(None);
+                self.dock.hovered_widget = None;
+                // ----- salir de la franja oculta enseguida en vez de esperar el
+                // delay configurable. No se oculta acá porque este Leave también
+                // llega cuando el compositor reconfigura la superficie o cuando el
+                // hit-test oscila en el borde: el ocultado lo decide el plazo
+                // corto, y cualquier Enter/Motion lo cancela antes. -----
+                self.ptr_left_at = Some(std::time::Instant::now());
+                log::debug!("autohide:{} leave (franja)", crate::app::hdbg_ms());
+                self.arm_autohide_after(super::draw::LEAVE_HIDE_MS);
                 self.request_redraw(qh);
             }
             PointerEventKind::Press { button, .. } => {
@@ -142,7 +184,14 @@ impl App {
                                             .find(|w| w.id == id)
                                             .map(|w| w.output.clone())
                                             .unwrap_or_default();
-                                        widgets::workspace_switch(id, &output);
+                                        let current = self
+                                            .widgets
+                                            .workspaces
+                                            .iter()
+                                            .find(|w| w.active)
+                                            .map(|w| w.output.clone())
+                                            .unwrap_or_default();
+                                        widgets::workspace_switch(id, &output, &current);
                                     }
                                     return;
                                 }
@@ -186,23 +235,30 @@ impl App {
                         Some(idx) => self.open_menu(menu::MenuScreen::IconMenu(idx), qh),
                         None => {
                             let tray_count = self.tray.lock().unwrap().len();
-                            let tray_idx = matches!(
-                                render::widget_hit_test(
+                            let hit = render::widget_hit_test(
+                                &self.dock,
+                                &self.widgets,
+                                tray_count,
+                                x,
+                                y,
+                            );
+                            log::debug!("dock: click derecho ({x:.0},{y:.0}) -> {hit:?}");
+                            if matches!(hit, Some(crate::config::WidgetKind::Tray)) {
+                                if let Some(idx) = render::tray_icon_hit(
                                     &self.dock,
                                     &self.widgets,
                                     tray_count,
                                     x,
-                                    y
-                                ),
-                                Some(crate::config::WidgetKind::Tray)
-                            )
-                            .then(|| {
-                                render::tray_icon_hit(&self.dock, &self.widgets, tray_count, x, y)
-                            })
-                            .flatten();
-                            match tray_idx {
-                                Some(idx) => self.open_tray_menu(idx, qh),
-                                None => self.open_dock_menu(qh),
+                                    y,
+                                ) {
+                                    self.open_tray_menu(idx, qh);
+                                }
+                            } else if matches!(hit, Some(crate::config::WidgetKind::Workspaces)) {
+                                // ----- ajustes: SÓLO con click derecho sobre el
+                                // indicador de workspaces. Antes se abría en cualquier
+                                // punto sin icono ni tray: reloj, huecos entre zonas,
+                                // o encima de cualquier widget. -----
+                                self.open_dock_menu(qh);
                             }
                         }
                     }

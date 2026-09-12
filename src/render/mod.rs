@@ -1,7 +1,8 @@
+use crate::config::DockEdge;
 use crate::dock::Dock;
 use crate::icon_cache::IconCache;
 use crate::text::TextCache;
-use crate::widgets::WidgetSnapshot;
+use crate::widgets::{BatteryState, WidgetSnapshot};
 use std::time::Instant;
 use tiny_skia::{Color, Paint, Pixmap, Rect, Transform};
 
@@ -156,6 +157,37 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> tiny_skia::Path 
     pb.finish().unwrap()
 }
 
+// ----- esquinas redondeadas solo en el lado opuesto al borde anclado -----
+fn edge_rounded_rect_path(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    r: f32,
+    edge: DockEdge,
+) -> tiny_skia::Path {
+    let r = r.min(w / 2.0).min(h / 2.0);
+    // (tl, tr, br, bl)
+    let (tl, tr, br, bl) = match edge {
+        DockEdge::Top => (0.0, 0.0, r, r),
+        DockEdge::Bottom => (r, r, 0.0, 0.0),
+        DockEdge::Left => (0.0, r, r, 0.0),
+        DockEdge::Right => (r, 0.0, 0.0, r),
+    };
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(x + tl, y);
+    pb.line_to(x + w - tr, y);
+    pb.quad_to(x + w, y, x + w, y + tr);
+    pb.line_to(x + w, y + h - br);
+    pb.quad_to(x + w, y + h, x + w - br, y + h);
+    pb.line_to(x + bl, y + h);
+    pb.quad_to(x, y + h, x, y + h - bl);
+    pb.line_to(x, y + tl);
+    pb.quad_to(x, y, x + tl, y);
+    pb.close();
+    pb.finish().unwrap()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     pixmap: &mut Pixmap,
@@ -178,12 +210,13 @@ pub fn draw(
 
     // ----- blur via layerrule -----
     let bg_margin = 0.0;
-    let bg_path = rounded_rect_path(
+    let bg_path = edge_rounded_rect_path(
         bg_margin,
         bg_margin,
         w - bg_margin * 2.0,
         h - bg_margin * 2.0,
         s.corner_radius * render_scale,
+        s.dock_edge,
     );
     let (bg_r, bg_g, bg_b) = (s.panel_r, s.panel_g, s.panel_b);
     let mut bg_paint = Paint::default();
@@ -311,7 +344,88 @@ struct WidgetColors<'a> {
     accent: (u8, u8, u8, u8),
     text_rgb: (u8, u8, u8),
     text_color: &'a str,
-    text_dim_color: &'a str,
+}
+
+/// Paleta derivada de los ajustes. La comparten el dock y los HUDs para que el
+/// color sea idéntico sin duplicar la lógica de mezcla con el acento.
+pub(super) struct WidgetPalette {
+    pub(super) accent: (u8, u8, u8, u8),
+    pub(super) text_rgb: (u8, u8, u8),
+    pub(super) text_color: String,
+}
+
+pub(super) fn widget_palette(s: &crate::config::DockSettings) -> WidgetPalette {
+    let blend =
+        |base: u8, tint: u8, frac: f32| (base as f32 * (1.0 - frac) + tint as f32 * frac) as u8;
+    let text_rgb = if s.custom_theme {
+        (s.text_r, s.text_g, s.text_b)
+    } else {
+        (
+            blend(s.text_r, s.accent_r, 0.45),
+            blend(s.text_g, s.accent_g, 0.45),
+            blend(s.text_b, s.accent_b, 0.45),
+        )
+    };
+    WidgetPalette {
+        accent: (s.accent_r, s.accent_g, s.accent_b, 255),
+        text_rgb,
+        text_color: format!("#{:02x}{:02x}{:02x}", text_rgb.0, text_rgb.1, text_rgb.2),
+    }
+}
+
+/// HUD al cambiar de workspace: mismo panel y misma posición que el dock, pero
+/// con un único contenido: el indicador de workspaces.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_ws_flash(
+    pixmap: &mut Pixmap,
+    dock: &Dock,
+    widgets: &WidgetSnapshot,
+    marquee: &mut MarqueeState,
+    advance: bool,
+    render_scale: f32,
+    panel_w: f32,
+    panel_h: f32,
+) -> bool {
+    let s = &dock.config.settings;
+    let w = panel_w * render_scale;
+    let h = panel_h * render_scale;
+    // ----- fondo: el mismo panel del dock, como pastilla redondeada -----
+    let path = rounded_rect_path(0.0, 0.0, w, h, s.corner_radius * render_scale);
+    let mut bg = Paint::default();
+    bg.set_color_rgba8(
+        s.panel_r,
+        s.panel_g,
+        s.panel_b,
+        (255.0 * s.transparency) as u8,
+    );
+    bg.anti_alias = true;
+    pixmap.fill_path(
+        &path,
+        &bg,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+    // ----- sólo el indicador de workspaces, centrado -----
+    let palette = widget_palette(s);
+    let colors = WidgetColors {
+        accent: palette.accent,
+        text_rgb: palette.text_rgb,
+        text_color: &palette.text_color,
+    };
+    draw_workspaces_widget(
+        pixmap,
+        &widgets.workspaces,
+        marquee,
+        advance,
+        0.0,
+        0.0,
+        w,
+        h,
+        render_scale,
+        &colors,
+        dock.is_vertical(),
+    )
 }
 
 fn draw_text_rotated(

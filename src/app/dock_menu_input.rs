@@ -117,22 +117,7 @@ impl App {
     ) {
         self.dock.config.settings.dock_edge = edge;
         let _ = self.dock.config.save();
-        let s = &self.dock.config.settings;
-        let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-        self.layer.set_anchor(anchor);
-        self.layer
-            .set_margin(margin.0, margin.1, margin.2, margin.3);
-        let (reserve_anchor, reserve_margin) = single_edge_anchor_margin(s.dock_edge, s.pos_y);
-        self.reserve_layer.set_anchor(reserve_anchor);
-        self.reserve_layer.set_margin(
-            reserve_margin.0,
-            reserve_margin.1,
-            reserve_margin.2,
-            reserve_margin.3,
-        );
-        self.reserve_layer
-            .set_exclusive_zone(self.dock.thickness() as i32 + s.pos_y);
-        self.reserve_layer.commit();
+        self.sync_autohide_surfaces();
         self.request_redraw(qh);
     }
 
@@ -320,6 +305,8 @@ impl App {
                     .dock_menu_mode
                     .as_ref()
                     .and_then(|dm| dm.dragging_widget.map(|(k, _, _)| k));
+                let was_dragging = dragging.is_some() || dragging_widget.is_some();
+                let hovered_before = self.dock_menu_mode.as_ref().and_then(|dm| dm.hovered);
                 if let Some(id) = dragging {
                     let cy = self.dock_menu_mode.as_ref().and_then(|dm| {
                         dm.controls.iter().find_map(|c| match c.kind {
@@ -406,7 +393,12 @@ impl App {
                         }
                     });
                 }
-                self.request_redraw(qh);
+                // ----- el menú del dock vuelve a dibujar todo el panel: sólo si el
+                // hover cambió de fila (o se está arrastrando) -----
+                let hovered_after = self.dock_menu_mode.as_ref().and_then(|dm| dm.hovered);
+                if was_dragging || hovered_before != hovered_after {
+                    self.request_redraw(qh);
+                }
             }
             PointerEventKind::Leave { .. } => {
                 if let Some(dm) = self.dock_menu_mode.as_mut() {
@@ -585,6 +577,11 @@ impl App {
                 self.handle_custom_name_key(event, qh);
             } else if dm.custom_focus.is_some() {
                 self.handle_custom_hex_key(event, qh);
+            } else if event.keysym == Keysym::Escape {
+                // ----- Escape cierra el menu de ajustes. Antes este caso salia
+                // por el return de abajo sin mirar la tecla, asi que no habia
+                // ninguna forma de cerrar el menu con el teclado -----
+                self.close_dock_menu(qh);
             }
             return;
         }

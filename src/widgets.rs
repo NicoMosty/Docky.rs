@@ -63,10 +63,20 @@ pub struct KbLayout {
     pub short: String,
 }
 
+/// Estado de carga de la bateria.
+/// `Conserving` = enchufado pero sin cargar (sysfs lo reporta como
+/// "Not charging": modo conservacion / tope de carga).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatteryState {
+    Discharging,
+    Charging,
+    Conserving,
+}
+
 pub struct WidgetSnapshot {
     pub time: String,
     pub date: String,
-    pub battery: Option<(u8, bool)>,
+    pub battery: Option<(u8, BatteryState)>,
     pub media: Option<MediaInfo>,
     pub bluetooth: Option<BluetoothInfo>,
     pub workspaces: Vec<WorkspaceInfo>,
@@ -82,7 +92,7 @@ impl WidgetSnapshot {
     pub fn refresh() -> Self {
         Self {
             time: strftime_now("%I:%M %p").unwrap_or_default(),
-            date: strftime_now("%a %b %d").unwrap_or_default(),
+            date: clock_date_now().unwrap_or_default(),
             battery: read_battery(),
             media: read_media(),
             bluetooth: read_bluetooth(),
@@ -124,7 +134,7 @@ impl WidgetSnapshot {
 
     pub fn refresh_clock(&mut self) -> bool {
         let time = strftime_now("%I:%M %p").unwrap_or_default();
-        let date = strftime_now("%a %b %d").unwrap_or_default();
+        let date = clock_date_now().unwrap_or_default();
         let changed = time != self.time || date != self.date;
         self.time = time;
         self.date = date;
@@ -460,13 +470,19 @@ fn read_workspaces_hypr() -> Vec<WorkspaceInfo> {
         .collect()
 }
 
-pub fn workspace_switch(id: i32, output: &str) {
+pub fn workspace_switch(id: i32, output: &str, current_output: &str) {
     match crate::compositor::Compositor::detect() {
         crate::compositor::Compositor::Niri if !output.is_empty() => {
-            // ----- el índice se repite por monitor: primero enfocar el monitor -----
-            let _ = std::process::Command::new("niri")
-                .args(["msg", "action", "focus-monitor", output])
-                .output();
+            // ----- el índice se repite por monitor, así que hay que enfocar el
+            // monitor destino primero... pero SOLO si es otro monitor: la acción
+            // focus-monitor de niri mueve el cursor al centro del monitor, y con
+            // un único monitor eso recentraba el cursor en cada cambio de
+            // workspace. -----
+            if output != current_output {
+                let _ = std::process::Command::new("niri")
+                    .args(["msg", "action", "focus-monitor", output])
+                    .output();
+            }
             let _ = std::process::Command::new("niri")
                 .args(["msg", "action", "focus-workspace", &id.to_string()])
                 .spawn();
@@ -513,6 +529,24 @@ pub fn bluetooth_toggle(currently_powered: bool) {
         .spawn();
 }
 
+const MONTH_ABBR: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec",
+];
+
+// ----- fecha estilo "11-Sept" (strftime no tiene ese formato) -----
+fn clock_date_now() -> Option<String> {
+    unsafe {
+        let mut t: libc::time_t = 0;
+        libc::time(&mut t);
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() {
+            return None;
+        }
+        let mon = MONTH_ABBR.get(tm.tm_mon as usize).copied().unwrap_or("???");
+        Some(format!("{}-{mon}", tm.tm_mday))
+    }
+}
+
 fn strftime_now(fmt: &str) -> Option<String> {
     let cfmt = std::ffi::CString::new(fmt).ok()?;
     let mut buf = [0u8; 128];
@@ -550,7 +584,7 @@ pub fn battery_dir() -> Option<PathBuf> {
         })
 }
 
-fn read_battery() -> Option<(u8, bool)> {
+fn read_battery() -> Option<(u8, BatteryState)> {
     let dir = battery_dir()?;
     let capacity: u8 = std::fs::read_to_string(dir.join("capacity"))
         .ok()?
@@ -558,8 +592,15 @@ fn read_battery() -> Option<(u8, bool)> {
         .parse()
         .ok()?;
     let status = std::fs::read_to_string(dir.join("status")).ok()?;
-    let charging = matches!(status.trim(), "Charging" | "Full");
-    Some((capacity, charging))
+    let state = match status.trim() {
+        "Charging" => BatteryState::Charging,
+        // ----- "Not charging" = enchufado sin cargar (modo conservacion de
+        // Lenovo). "Full" es el final de una carga normal: sigue en verde. -----
+        "Not charging" => BatteryState::Conserving,
+        "Full" => BatteryState::Charging,
+        _ => BatteryState::Discharging,
+    };
+    Some((capacity, state))
 }
 
 fn playerctl(args: &[&str]) -> Option<String> {

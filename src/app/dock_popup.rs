@@ -103,6 +103,8 @@ impl App {
         p.box_x = box_x;
         p.box_y = box_y;
         p.hovered = None;
+        // ----- los items cambiaron (submenú / volver): re-renderizar el contenido -----
+        p.content_dirty = true;
         p.layer.wl_surface().commit();
         self.request_popup_redraw(qh);
     }
@@ -151,13 +153,15 @@ impl App {
             controls,
             content_height,
             hovered: None,
-            anim: 0.0,
+            anim: 1.0,
             target_anim: 1.0,
             closing: false,
             tray_items,
             tray_service,
             tray_menu_path,
             tray_stack: Vec::new(),
+            content: None,
+            content_dirty: true,
             center,
             surface_w,
             surface_h,
@@ -167,11 +171,13 @@ impl App {
     }
 
     pub(super) fn close_popup_mode(&mut self, qh: &QueueHandle<Self>) {
-        if let Some(p) = self.popup_mode.as_mut() {
-            p.closing = true;
-            p.target_anim = 0.0;
+        // ----- cierre directo: sin animación no hay frames que recompongan el panel -----
+        if let Some(p) = self.popup_mode.take() {
+            p.layer.wl_surface().attach(None, 0, 0);
+            p.layer.wl_surface().commit();
+            trim_heap();
         }
-        self.request_popup_redraw(qh);
+        let _ = qh;
     }
 
     pub(super) fn request_popup_redraw(&mut self, qh: &QueueHandle<Self>) {
@@ -181,10 +187,9 @@ impl App {
     }
 
     pub(super) fn draw_popup_mode(&mut self, qh: &QueueHandle<Self>) {
-        use crate::config::DockEdge;
+        let t0 = std::time::Instant::now();
         let scale = self.output_scale.max(1) as f32;
         let transparency = self.dock.config.settings.transparency;
-        let dock_edge = self.dock.config.settings.dock_edge;
         let Some(p) = self.popup_mode.as_ref() else {
             return;
         };
@@ -221,55 +226,61 @@ impl App {
             custom_panel_blend: None,
             tray_items: &p.tray_items,
         };
-        let mut box_pixmap =
-            tiny_skia::Pixmap::new(box_w.round().max(1.0) as u32, box_h.round().max(1.0) as u32)
-                .unwrap();
-        menu_render::draw_content(
-            &mut box_pixmap,
-            &mut self.icon_cache,
-            &mut self.text_cache,
-            &self.thumbnail_cache,
-            &args,
-        );
+        // ----- el contenido se renderiza UNA vez por apertura/cambio de estado:
+        // rehacerlo en cada frame de la animación saturaba el hilo principal y
+        // hacía que el menú tardara en aparecer y que los clicks se encolaran -----
+        let need_w = box_w.round().max(1.0) as u32;
+        let need_h = box_h.round().max(1.0) as u32;
+        let reuse = self
+            .popup_mode
+            .as_ref()
+            .and_then(|p| {
+                p.content
+                    .as_ref()
+                    .map(|c| (c.width(), c.height(), p.content_dirty))
+            })
+            .is_some_and(|(w, h, dirty)| w == need_w && h == need_h && !dirty);
+        if !reuse {
+            let mut fresh = tiny_skia::Pixmap::new(need_w, need_h).unwrap();
+            menu_render::draw_content(
+                &mut fresh,
+                &mut self.icon_cache,
+                &mut self.text_cache,
+                &self.thumbnail_cache,
+                &args,
+            );
+            if let Some(p) = self.popup_mode.as_mut() {
+                p.content = Some(fresh);
+                p.content_dirty = false;
+            }
+        }
 
         let Some(p) = self.popup_mode.as_ref() else {
             return;
         };
-        let bx = p.box_x * scale;
-        let by = p.box_y * scale;
+        let Some(box_pixmap) = p.content.as_ref() else {
+            return;
+        };
+        // ----- offsets enteros: con un desplazamiento fraccionario tiny-skia vuelve
+        // a muestrear el contenido y el texto y los bordes salen borrosos -----
+        let bx = (p.box_x * scale).round();
+        let by = (p.box_y * scale).round();
 
         let mut pixmap = tiny_skia::Pixmap::new(sw as u32, sh as u32).unwrap();
-        let (mask_x, mask_y, mask_w, mask_h) = match dock_edge {
-            DockEdge::Left => (bx, by, box_w * linear, box_h),
-            DockEdge::Right => (bx + box_w - box_w * linear, by, box_w * linear, box_h),
-            DockEdge::Top => (bx, by, box_w, box_h * linear),
-            DockEdge::Bottom => (bx, by + box_h - box_h * linear, box_w, box_h * linear),
+        // ----- sin máscara de recorte: el panel se dibuja completo de una sola pasada
+        // (se elimina el desplegado a hachazos y la allocación de máscara por frame) -----
+        let paint = tiny_skia::PixmapPaint {
+            opacity: anim_opacity(transparency, eased),
+            ..Default::default()
         };
-        if mask_w > 0.5
-            && mask_h > 0.5
-            && let Some(rect) = tiny_skia::Rect::from_xywh(mask_x, mask_y, mask_w, mask_h)
-        {
-            let mut mask = tiny_skia::Mask::new(sw as u32, sh as u32).unwrap();
-            let path = tiny_skia::PathBuilder::from_rect(rect);
-            mask.fill_path(
-                &path,
-                tiny_skia::FillRule::Winding,
-                true,
-                tiny_skia::Transform::identity(),
-            );
-            let paint = tiny_skia::PixmapPaint {
-                opacity: anim_opacity(transparency, eased),
-                ..Default::default()
-            };
-            pixmap.draw_pixmap(
-                0,
-                0,
-                box_pixmap.as_ref(),
-                &paint,
-                tiny_skia::Transform::from_translate(bx, by),
-                Some(&mask),
-            );
-        }
+        pixmap.draw_pixmap(
+            0,
+            0,
+            box_pixmap.as_ref(),
+            &paint,
+            tiny_skia::Transform::from_translate(bx, by),
+            None,
+        );
 
         let Some(p) = self.popup_mode.as_mut() else {
             return;
@@ -289,6 +300,12 @@ impl App {
         surface.damage_buffer(0, 0, sw, sh);
         surface.frame(qh, surface.clone());
         p.awaiting_frame = true;
+        log::debug!(
+            "popup: t={} anim={linear:.2} cache={} frame={}ms",
+            crate::app::hdbg_ms(),
+            if reuse { "reuse" } else { "render" },
+            t0.elapsed().as_millis()
+        );
         surface.commit();
     }
 
@@ -335,22 +352,42 @@ impl App {
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 let (x, y) = event.position;
-                if let Some(p) = self.popup_mode.as_mut() {
-                    p.hovered = menu::hit_test(
+                // ----- sólo se toca el contenido si cambia la fila bajo el puntero:
+                // antes se re-renderizaba el panel entero en CADA movimiento -----
+                let changed = if let Some(p) = self.popup_mode.as_mut() {
+                    let new = menu::hit_test(
                         &p.controls,
                         &self.dock.config.settings,
                         menu::MENU_WIDTH,
                         x as f32 - box_x,
                         y as f32 - box_y,
                     );
+                    if p.hovered != new {
+                        p.hovered = new;
+                        p.content_dirty = true;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if changed {
+                    self.request_popup_redraw(qh);
                 }
-                self.request_popup_redraw(qh);
             }
             PointerEventKind::Leave { .. } => {
+                let had_hover = self
+                    .popup_mode
+                    .as_ref()
+                    .is_some_and(|p| p.hovered.is_some());
                 if let Some(p) = self.popup_mode.as_mut() {
                     p.hovered = None;
+                    p.content_dirty = true;
                 }
-                self.request_popup_redraw(qh);
+                if had_hover {
+                    self.request_popup_redraw(qh);
+                }
             }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
                 let (x, y) = event.position;

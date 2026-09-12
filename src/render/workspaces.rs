@@ -20,10 +20,7 @@ pub fn ws_target_for(workspaces: &[crate::widgets::WorkspaceInfo]) -> f32 {
     active_slot(workspaces)
 }
 
-pub(super) fn workspaces_geometry(
-    workspaces: &[crate::widgets::WorkspaceInfo],
-    render_scale: f32,
-) -> f32 {
+pub fn workspaces_geometry(workspaces: &[crate::widgets::WorkspaceInfo], render_scale: f32) -> f32 {
     let n = slot_count(workspaces) as f32;
     ((n - 1.0) * WS_SLOT + WS_ACTIVE) * render_scale
 }
@@ -155,6 +152,38 @@ pub fn workspace_dot_hit(
         (r.h, r.y, y as f32)
     } else {
         (r.w, r.x, x as f32)
+    };
+    let count = slot_count(workspaces);
+    let first = first_center(count, bar_len, bar_start, 1.0);
+    let half = WS_SLOT / 2.0;
+    for (i, ws) in workspaces.iter().enumerate() {
+        if (main - (first + i as f32 * WS_SLOT)).abs() <= half {
+            return Some(ws.id);
+        }
+    }
+    None
+}
+
+/// ----- hit test del HUD de workspaces -----
+/// Mismo cálculo que `workspace_dot_hit`, pero sobre el panel del HUD: ahí los
+/// puntos van centrados en el panel entero (zx=0, zw=panel_w), no en la
+/// posición que ocupa el widget dentro del layout del dock. Coordenadas
+/// lógicas, igual que el dibujo (el factor de escala se cancela).
+pub fn ws_flash_dot_hit(
+    workspaces: &[crate::widgets::WorkspaceInfo],
+    is_vertical: bool,
+    panel_w: f32,
+    panel_h: f32,
+    x: f64,
+    y: f64,
+) -> Option<i32> {
+    if workspaces.is_empty() {
+        return None;
+    }
+    let (bar_len, bar_start, main) = if is_vertical {
+        (panel_h, 0.0, y as f32)
+    } else {
+        (panel_w, 0.0, x as f32)
     };
     let count = slot_count(workspaces);
     let first = first_center(count, bar_len, bar_start, 1.0);

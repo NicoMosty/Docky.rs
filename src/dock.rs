@@ -1,4 +1,4 @@
-use crate::config::{Config, DockEdge, PinnedApp};
+use crate::config::{Config, DockEdge, PinnedApp, WidgetKind};
 
 const EASE_FACTOR: f32 = 0.35;
 const SETTLE_EPSILON: f32 = 0.001;
@@ -24,6 +24,7 @@ pub struct Dock {
     pub config: Config,
     pub pointer_pos: Option<(f64, f64)>,
     pub dragging_index: Option<usize>,
+    pub hovered_widget: Option<WidgetKind>,
     // ----- caller syncs -----
     pub widget_bar_content_len: f32,
 }
@@ -48,6 +49,7 @@ impl Dock {
             config,
             pointer_pos: None,
             dragging_index: None,
+            hovered_widget: None,
             widget_bar_content_len: 0.0,
         };
         dock.update_layout_targets();

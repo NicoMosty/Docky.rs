@@ -60,121 +60,51 @@ pub(super) fn draw_bluetooth_icon(
     render_scale: f32,
     cx: f32,
     cy: f32,
-    active: bool,
+    powered: bool,
+    in_use: bool,
     colors: &WidgetColors,
 ) {
-    let s = 6.5 * render_scale;
-    let mut paint = Paint::default();
-    if active {
-        paint.set_color_rgba8(colors.accent.0, colors.accent.1, colors.accent.2, 255);
+    // ----- color por estado (sin palabras): verde si está en uso, color del
+    // texto si está encendido, tenue si está apagado -----
+    let (r, g, b, alpha) = if in_use {
+        (74, 222, 128, 255)
+    } else if powered {
+        (colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, 235)
     } else {
-        paint.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, 130);
-    }
+        (colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, 90)
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(r, g, b, alpha);
     paint.anti_alias = true;
+    // ----- mismo trazo que los arcos del icono de wifi -----
     let stroke = tiny_skia::Stroke {
-        width: 1.4 * render_scale,
+        width: 1.6 * render_scale,
+        line_cap: tiny_skia::LineCap::Round,
+        line_join: tiny_skia::LineJoin::Round,
         ..Default::default()
     };
+    let s = 7.0 * render_scale;
     let mut pb = tiny_skia::PathBuilder::new();
     pb.move_to(cx, cy - s);
-    pb.line_to(cx + s * 0.6, cy - s * 0.4);
-    pb.line_to(cx - s * 0.6, cy + s * 0.4);
+    pb.line_to(cx + s * 0.62, cy - s * 0.38);
+    pb.line_to(cx - s * 0.62, cy + s * 0.38);
     pb.line_to(cx, cy + s);
     pb.line_to(cx, cy - s);
-    pb.move_to(cx - s * 0.6, cy - s * 0.4);
-    pb.line_to(cx + s * 0.6, cy + s * 0.4);
+    pb.move_to(cx - s * 0.62, cy - s * 0.38);
+    pb.line_to(cx + s * 0.62, cy + s * 0.38);
     if let Some(path) = pb.finish() {
         pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn draw_bluetooth_widget(
-    pixmap: &mut Pixmap,
-    text_cache: &mut TextCache,
-    widgets: &WidgetSnapshot,
-    zx: f32,
-    zy: f32,
-    zw: f32,
-    zh: f32,
-    render_scale: f32,
-    colors: &WidgetColors,
-    is_vertical: bool,
-) {
-    let (powered, label) = match &widgets.bluetooth {
-        Some(bt) if !bt.powered => (false, "Off".to_string()),
-        Some(bt) => (
-            true,
-            bt.connected.clone().unwrap_or_else(|| "On".to_string()),
-        ),
-        None => (false, String::new()),
-    };
-    let icon_r = 6.0 * render_scale;
-    if is_vertical {
-        let label_len = if label.is_empty() {
-            0.0
-        } else {
-            text_width_estimate_render(&label, 8.0 * render_scale)
-        };
-        let gap = if label.is_empty() {
-            0.0
-        } else {
-            6.0 * render_scale
-        };
-        let total = icon_r * 2.0 + gap + label_len;
-        let block_start = zy + (zh - total) / 2.0;
-        let cx = zx + zw / 2.0;
-        draw_bluetooth_icon(
-            pixmap,
-            render_scale,
-            cx,
-            block_start + icon_r,
-            powered,
-            colors,
-        );
-        if !label.is_empty() {
-            let ty = block_start + icon_r * 2.0 + gap + label_len / 2.0;
-            draw_text_rotated(
-                pixmap,
-                text_cache,
-                &label,
-                cx,
-                ty,
-                8.0 * render_scale,
-                colors.text_dim_color,
-                500,
-            );
-        }
-    } else {
-        let label_w = if label.is_empty() {
-            0.0
-        } else {
-            text_width_estimate_render(&label, 8.5 * render_scale)
-        };
-        let gap = if label.is_empty() {
-            0.0
-        } else {
-            6.0 * render_scale
-        };
-        let content_w = icon_r * 2.0 + gap + label_w;
-        let block_x = zx + (zw - content_w) / 2.0;
-        let cy = zy + zh / 2.0;
-        let icon_cx = block_x + icon_r;
-        draw_bluetooth_icon(pixmap, render_scale, icon_cx, cy, powered, colors);
-        if !label.is_empty()
-            && let Some(txt) =
-                text_cache.get(&label, 8.5 * render_scale, colors.text_dim_color, 500)
-        {
-            let tx = icon_cx + icon_r + gap;
-            let ty = cy - txt.height() as f32 / 2.0;
-            pixmap.draw_pixmap(
-                0,
-                0,
-                txt.as_ref().as_ref(),
-                &tiny_skia::PixmapPaint::default(),
-                Transform::from_translate(tx, ty),
-                None,
-            );
+    // ----- apagado: barra diagonal, para que se lea sin la palabra "Off" -----
+    if !powered {
+        let mut slash = Paint::default();
+        slash.set_color_rgba8(255, 69, 58, 215);
+        slash.anti_alias = true;
+        let mut sb = tiny_skia::PathBuilder::new();
+        sb.move_to(cx - s * 0.8, cy + s * 0.8);
+        sb.line_to(cx + s * 0.8, cy - s * 0.8);
+        if let Some(path) = sb.finish() {
+            pixmap.stroke_path(&path, &slash, &stroke, Transform::identity(), None);
         }
     }
 }

@@ -58,6 +58,7 @@ mod popup_menu;
 mod popup_menu_input;
 mod screenshot;
 mod wallpaper_picker;
+mod ws_flash;
 use fonts::{apply_kitty_font, apply_system_gtk_font, apply_system_qt_font};
 mod handlers;
 
@@ -74,17 +75,16 @@ const EMPTY_CUSTOM_HEX: [String; 5] = [
     String::new(),
 ];
 
-pub(crate) fn single_edge_anchor_margin(
-    edge: crate::config::DockEdge,
-    pos_y: i32,
-) -> (Anchor, (i32, i32, i32, i32)) {
-    use crate::config::DockEdge;
-    match edge {
-        DockEdge::Bottom => (Anchor::BOTTOM, (0, 0, pos_y, 0)),
-        DockEdge::Top => (Anchor::TOP, (pos_y, 0, 0, 0)),
-        DockEdge::Left => (Anchor::LEFT, (0, 0, 0, pos_y)),
-        DockEdge::Right => (Anchor::RIGHT, (0, pos_y, 0, 0)),
-    }
+// ----- el dock se revela al pasar el mouse por su franja superior:
+// su input region se mantiene activa incluso oculto (disparador), porque
+// niri sólo re-evalúa el foco del puntero con movimiento real -----
+
+// ----- marca de tiempo relativa (solo depuración del hotcorner) -----
+pub(crate) fn hdbg_ms() -> u128 {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis()
 }
 
 pub(crate) fn edge_anchor_margin(
@@ -167,6 +167,9 @@ pub(crate) struct DockPopupMode {
     tray_service: String,
     tray_menu_path: String,
     tray_stack: Vec<Vec<crate::tray::TrayMenuItem>>,
+    // ----- contenido renderizado, reusado entre frames de la animación -----
+    content: Option<tiny_skia::Pixmap>,
+    content_dirty: bool,
     center: Option<(f32, f32)>,
     surface_w: f32,
     surface_h: f32,
@@ -251,6 +254,15 @@ pub(crate) struct OsdMode {
     panel_h: f32,
 }
 
+/// HUD que aparece al cambiar de workspace: sólo el indicador de workspaces.
+pub(crate) struct WsFlashMode {
+    anim: f32,
+    target_anim: f32,
+    closing: bool,
+    panel_w: f32,
+    panel_h: f32,
+}
+
 pub(crate) struct NotificationMode {
     title: String,
     body: String,
@@ -270,7 +282,17 @@ pub struct App {
     pub compositor: CompositorState,
     pub layer_shell: LayerShell,
     pub layer: LayerSurface,
-    pub reserve_layer: LayerSurface,
+    pub dock_visible: bool,
+    pub autohide_armed: bool,
+    pub applied_geom: Option<(Anchor, (i32, i32, i32, i32))>,
+    pub applied_size: Option<(u32, u32)>,
+    pub last_ptr_event: Option<std::time::Instant>,
+    /// Instante en que el puntero salió de la franja. Sirve para ocultar el dock
+    /// al salir sin esperar el delay largo, pero sin ocultarlo por un `Leave`
+    /// espurio: lo limpia cualquier Enter/Motion, así que el plazo (LEAVE_HIDE_MS)
+    /// sólo vence si el puntero se fue de verdad.
+    pub ptr_left_at: Option<std::time::Instant>,
+    pub autohide_hide_tx: std::sync::mpsc::Sender<u64>,
     pub pointer: Option<wl_pointer::WlPointer>,
     pub keyboard: Option<wl_keyboard::WlKeyboard>,
     pub dock: Dock,
@@ -294,6 +316,8 @@ pub struct App {
     pub app_search_mode: Option<AppSearchMode>,
     pub osd_mode: Option<OsdMode>,
     pub osd_reset_tx: std::sync::mpsc::Sender<()>,
+    pub ws_flash_mode: Option<WsFlashMode>,
+    pub ws_reset_tx: std::sync::mpsc::Sender<()>,
     pub notification_mode: Option<NotificationMode>,
     pub notification_reset_tx: std::sync::mpsc::Sender<u64>,
     pub widgets: crate::widgets::WidgetSnapshot,

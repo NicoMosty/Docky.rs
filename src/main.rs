@@ -87,9 +87,8 @@ fn create_dock_surfaces(
     base_w: u32,
     base_h: u32,
     namespace: String,
-    reserve_namespace: String,
     output: Option<&wl_output::WlOutput>,
-) -> (LayerSurface, LayerSurface) {
+) -> LayerSurface {
     let surface = compositor.create_surface(qh);
     let layer = layer_shell.create_layer_surface(qh, surface, Layer::Top, Some(namespace), output);
 
@@ -101,33 +100,9 @@ fn create_dock_surfaces(
     layer.set_exclusive_zone(-1);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.commit();
-
-    let reserve_surface = compositor.create_surface(qh);
-    let reserve_layer = layer_shell.create_layer_surface(
-        qh,
-        reserve_surface,
-        Layer::Top,
-        Some(reserve_namespace),
-        output,
-    );
-    let (reserve_anchor, reserve_margin) = app::single_edge_anchor_margin(s.dock_edge, s.pos_y);
-    reserve_layer.set_anchor(reserve_anchor);
-    reserve_layer.set_size(1, 1);
-    reserve_layer.set_margin(
-        reserve_margin.0,
-        reserve_margin.1,
-        reserve_margin.2,
-        reserve_margin.3,
-    );
-    reserve_layer.set_exclusive_zone(dock.thickness() as i32 + s.pos_y);
-    reserve_layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    if let Ok(empty_region) = smithay_client_toolkit::compositor::Region::new(compositor) {
-        reserve_layer
-            .wl_surface()
-            .set_input_region(Some(empty_region.wl_region()));
-    }
-    reserve_layer.commit();
-    (layer, reserve_layer)
+    // ----- sin capa de reserva: el dock flota encima de las ventanas y se
+    // revela al pasar el mouse por su propia franja superior -----
+    layer
 }
 
 fn main() -> anyhow::Result<()> {
@@ -226,7 +201,7 @@ fn main() -> anyhow::Result<()> {
         .zip(seat.as_ref())
         .map(|(m, s)| m.get_data_device(s, &qh, ()));
 
-    let (layer, reserve_layer) = create_dock_surfaces(
+    let layer = create_dock_surfaces(
         &compositor,
         &layer_shell,
         &qh,
@@ -234,7 +209,6 @@ fn main() -> anyhow::Result<()> {
         base_w,
         base_h,
         ns("dockyrs", &cli.profile),
-        ns("dockyrs-reserve", &cli.profile),
         None,
     );
 
@@ -242,8 +216,10 @@ fn main() -> anyhow::Result<()> {
     let pool = SlotPool::new(pool_size.max(4096), &shm)?;
 
     let (osd_reset_tx, osd_reset_rx) = std::sync::mpsc::channel::<()>();
+    let (ws_reset_tx, ws_reset_rx) = std::sync::mpsc::channel::<()>();
     let (notification_reset_tx, notification_reset_rx) = std::sync::mpsc::channel::<u64>();
     let (marquee_tick_tx, marquee_tick_rx) = std::sync::mpsc::channel::<u64>();
+    let (autohide_hide_tx, autohide_hide_rx) = std::sync::mpsc::channel::<u64>();
 
     let tray_state: tray::TrayState = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let tray_tick_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -272,7 +248,13 @@ fn main() -> anyhow::Result<()> {
         compositor,
         layer_shell,
         layer,
-        reserve_layer,
+        dock_visible: true,
+        autohide_armed: false,
+        applied_geom: None,
+        applied_size: None,
+        last_ptr_event: None,
+        ptr_left_at: None,
+        autohide_hide_tx,
         pointer: None,
         keyboard: None,
         dock,
@@ -296,6 +278,8 @@ fn main() -> anyhow::Result<()> {
         app_search_mode: None,
         osd_mode: None,
         osd_reset_tx,
+        ws_flash_mode: None,
+        ws_reset_tx,
         notification_mode: None,
         notification_reset_tx,
         widgets: initial_widgets,
@@ -344,7 +328,7 @@ fn main() -> anyhow::Result<()> {
         match found {
             Some(o) => {
                 let (bw, bh) = app.dock.base_size();
-                let (nl, nr) = create_dock_surfaces(
+                let nl = create_dock_surfaces(
                     &app.compositor,
                     &app.layer_shell,
                     &app.qh,
@@ -352,11 +336,9 @@ fn main() -> anyhow::Result<()> {
                     bw,
                     bh,
                     ns("dockyrs", &cli.profile),
-                    ns("dockyrs-reserve", &cli.profile),
                     Some(&o),
                 );
                 app.layer = nl;
-                app.reserve_layer = nr;
                 app.pinned_output = Some(o);
                 app.first_configure = true;
                 app.awaiting_frame = false;
@@ -402,6 +384,16 @@ fn main() -> anyhow::Result<()> {
         osd_timeout_pending.clone(),
         conn.clone(),
         qh.clone(),
+        menu::OSD_TIMEOUT_MS,
+    );
+
+    let ws_timeout_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    spawn_osd_timer(
+        ws_reset_rx,
+        ws_timeout_pending.clone(),
+        conn.clone(),
+        qh.clone(),
+        menu::WS_FLASH_TIMEOUT_MS,
     );
 
     let notification_timeout_pending =
@@ -420,6 +412,17 @@ fn main() -> anyhow::Result<()> {
         conn.clone(),
         qh.clone(),
     );
+
+    let autohide_timeout_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    spawn_autohide_timer(
+        autohide_hide_rx,
+        autohide_timeout_pending.clone(),
+        conn.clone(),
+        qh.clone(),
+    );
+
+    // ----- estado inicial coherente del autohide -----
+    app.sync_autohide_surfaces();
 
     loop {
         event_queue.blocking_dispatch(&mut app)?;
@@ -466,11 +469,17 @@ fn main() -> anyhow::Result<()> {
         if osd_timeout_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
             app.close_osd_mode(&qh);
         }
+        if ws_timeout_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            app.close_ws_flash_mode(&qh);
+        }
         if notification_timeout_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
             app.close_notification_mode(&qh);
         }
         if marquee_tick_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
             app.tick_marquee(&qh);
+        }
+        if autohide_timeout_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            app.autohide_timeout(&qh);
         }
         if app.exit {
             break;
@@ -530,6 +539,7 @@ fn spawn_osd_timer(
     flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     conn: Connection,
     qh: wayland_client::QueueHandle<App>,
+    timeout_ms: u64,
 ) {
     use std::sync::mpsc::RecvTimeoutError;
     std::thread::spawn(move || {
@@ -538,8 +548,7 @@ fn spawn_osd_timer(
                 return;
             }
             loop {
-                match reset_rx.recv_timeout(std::time::Duration::from_millis(menu::OSD_TIMEOUT_MS))
-                {
+                match reset_rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
                     Ok(()) => continue,
                     Err(RecvTimeoutError::Timeout) => break,
                     Err(RecvTimeoutError::Disconnected) => return,
@@ -568,6 +577,37 @@ fn spawn_notification_timer(
             }
             loop {
                 match reset_rx.recv_timeout(std::time::Duration::from_millis(dur)) {
+                    Ok(ms) => {
+                        dur = ms;
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Timeout) => break,
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+            }
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            conn.display().sync(&qh, ());
+            let _ = conn.flush();
+        }
+    });
+}
+
+fn spawn_autohide_timer(
+    rx: std::sync::mpsc::Receiver<u64>,
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    conn: Connection,
+    qh: wayland_client::QueueHandle<App>,
+) {
+    use std::sync::mpsc::RecvTimeoutError;
+    std::thread::spawn(move || {
+        let mut dur;
+        loop {
+            match rx.recv() {
+                Ok(ms) => dur = ms,
+                Err(_) => return,
+            }
+            loop {
+                match rx.recv_timeout(std::time::Duration::from_millis(dur)) {
                     Ok(ms) => {
                         dur = ms;
                         continue;

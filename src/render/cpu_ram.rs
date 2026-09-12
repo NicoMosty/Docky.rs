@@ -81,7 +81,7 @@ pub(super) fn draw_labeled_widget(
 ) {
     let icon_side = 12.0 * render_scale;
     if is_vertical {
-        let label_len = text_width_estimate_render(label, 8.0 * render_scale);
+        let label_len = text_width_estimate_render(label, 8.5 * render_scale);
         let gap = 5.0 * render_scale;
         let total = icon_side + gap + label_len;
         let block_start = zy + (zh - total) / 2.0;
@@ -100,7 +100,7 @@ pub(super) fn draw_labeled_widget(
             label,
             cx,
             ty,
-            8.0 * render_scale,
+            8.5 * render_scale,
             colors.text_color,
             600,
         );

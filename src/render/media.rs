@@ -429,7 +429,7 @@ pub(super) fn draw_media_widget(
         ),
     }
 
-    let title_size = 9.0 * render_scale;
+    let title_size = 8.5 * render_scale;
     let glyphs = text_cache.get(title, title_size, colors.text_color, 600);
     let title_w = glyphs.as_ref().map(|p| p.width() as f32).unwrap_or(0.0);
     let (title_offset, title_anim) = marquee_step(
