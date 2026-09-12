@@ -260,10 +260,16 @@ pub(crate) fn draw_button(
         text_hex(settings)
     };
     let ty = y + centered_text_y(control.height, 10.5) * s;
+    // ----- este botón muestra la carpeta elegida, no una etiqueta fija -----
+    let label = if kind == ButtonKind::WallpaperDir {
+        crate::wallpaper::dir_label(&settings.wallpaper_dir)
+    } else {
+        kind.label().to_string()
+    };
     draw_text(
         pixmap,
         text_cache,
-        kind.label(),
+        &label,
         (MENU_PADDING + 6.0) * s,
         ty,
         10.5 * s,

@@ -15,6 +15,7 @@ mod screenshot;
 mod text;
 mod thumbnail_cache;
 mod tray;
+mod usage;
 mod wallpaper;
 mod widgets;
 
@@ -287,6 +288,8 @@ fn main() -> anyhow::Result<()> {
         last_tray_count: 0,
         last_hyprctl_send: None,
         last_empty_click: None,
+        mode_was_open: false,
+        keyboard_state: 0,
         marquee: render::MarqueeState::default(),
         marquee_tick_tx,
         marquee_rate: 0,

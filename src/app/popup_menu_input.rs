@@ -105,7 +105,11 @@ impl App {
                 crate::power::poweroff();
                 self.close_menu(qh);
             }
-            menu::ButtonKind::CreatePalette | menu::ButtonKind::SavePalette => {}
+            // ----- el botón de carpeta de fondos vive en el panel de ajustes, no en
+            // este menú (acá no hace nada) -----
+            menu::ButtonKind::CreatePalette
+            | menu::ButtonKind::SavePalette
+            | menu::ButtonKind::WallpaperDir => {}
         }
     }
 

@@ -27,6 +27,8 @@ Uso:
                ~2px en y (admiten negativos) y hace un click IZQUIERDO. Sirve para
                encadenar dos clicks en la misma sesión de dispositivo, por ejemplo
                abrir el panel de ajustes y después clickear un control suyo.
+    --double   hace un DOBLE click: dos clicks separados ~80ms, dentro de los 400ms
+               que pide el dock para reconocer el gesto.
 
 Imprime el hit que devolvió la app (`-> Some(Battery)`, `-> None`, …), que es
 lo que permite saber dónde cayó el click sin adivinar.
@@ -126,7 +128,7 @@ def park_away(fd):
     time.sleep(2.0)  # > autohide_delay (1200ms) para que llegue a ocultarse
 
 
-def reveal_and_click(fd, log, extra, button, y_steps, then_dx=0, then_dy=0):
+def reveal_and_click(fd, log, extra, button, y_steps, then_dx=0, then_dy=0, double=False):
     """Se aleja, satisface la esquina, baja a la franja, barre hasta que el dock
     se revela, avanza `extra` pasos y clickea. Devuelve si detectó el reveal."""
     park_away(fd)
@@ -154,6 +156,15 @@ def reveal_and_click(fd, log, extra, button, y_steps, then_dx=0, then_dy=0):
     time.sleep(0.06)
     emit(fd, EV_KEY, button, 0)
     sync(fd)
+    if double:
+        # el dock reconoce el gesto si pasan menos de 400ms y el puntero se movió
+        # menos de 12px: el segundo click va pegado al primero, en el mismo punto
+        time.sleep(0.08)
+        emit(fd, EV_KEY, button, 1)
+        sync(fd)
+        time.sleep(0.03)
+        emit(fd, EV_KEY, button, 0)
+        sync(fd)
     time.sleep(0.5)
     # ----- segundo click opcional (izquierdo), tras desplazarse del primero -----
     if then_dx or then_dy:
@@ -183,6 +194,7 @@ def main():
     parser.add_argument("--y", type=int, default=8, dest="y_steps")
     parser.add_argument("--then-dx", type=int, default=0)
     parser.add_argument("--then-dy", type=int, default=0)
+    parser.add_argument("--double", action="store_true")
     args = parser.parse_args()
 
     fd = make_device()
@@ -196,6 +208,7 @@ def main():
             args.y_steps,
             args.then_dx,
             args.then_dy,
+            args.double,
         )
     finally:
         os.close(fd)

@@ -21,6 +21,22 @@ impl App {
         if self.first_configure {
             return;
         }
+        self.enforce_keyboard();
+        // ----- se cerró el último modo que usaba la superficie: el estado del
+        // puntero quedó viejo (lo capturó el modo, no el dock) y con `pointer_pos`
+        // en `Some` el dock no se oculta nunca más. Se refresca como una salida: si
+        // el cursor sigue sobre la franja, el compositor manda Enter/Motion y el
+        // dock se queda. Cubre los tres cierres que no lo hacían (selector de
+        // fondos, portapapeles y búsqueda) sin parchear cada uno. -----
+        let mode_open = self.autohide_force_visible();
+        if self.mode_was_open && !mode_open {
+            self.dock.set_pointer(None);
+            self.ptr_left_at = None;
+            self.last_ptr_event = Some(std::time::Instant::now());
+            self.autohide_armed = false;
+            self.arm_autohide();
+        }
+        self.mode_was_open = mode_open;
         // ----- autohide: revelar si un modo necesita la superficie -----
         if self.dock.config.settings.autohide && !self.dock_visible && self.autohide_force_visible()
         {

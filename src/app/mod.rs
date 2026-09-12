@@ -224,6 +224,8 @@ pub(crate) struct WallpaperMode {
 }
 
 pub(crate) struct AppSearchMode {
+    /// Qué lista muestra: las apps instaladas o las ventanas abiertas.
+    list: SearchList,
     query: String,
     all_entries: Vec<DesktopEntry>,
     filtered: Vec<DesktopEntry>,
@@ -241,6 +243,81 @@ pub(crate) struct AppSearchMode {
     panel_w: f32,
     panel_h: f32,
     is_vertical: bool,
+}
+
+/// Qué lista muestra el panel de búsqueda. Es lo que permite que el cambiador de
+/// ventanas reuse el mismo panel, el mismo render y el mismo matching que el
+/// launcher, en vez de ser otro modo aparte.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SearchList {
+    Apps,
+    Windows,
+}
+
+/// Los modos que se apilan sobre el dock. Shift+←/→ cicla entre ellos: es el
+/// equivalente a los modos de rofi, reusando lo que ya existe (el launcher, el
+/// portapapeles y el selector de fondos ya eran modos propios).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum OverlayMode {
+    Apps,
+    Clipboard,
+    Wallpaper,
+    Windows,
+}
+
+pub(crate) const OVERLAY_ORDER: [OverlayMode; 4] = [
+    OverlayMode::Apps,
+    OverlayMode::Clipboard,
+    OverlayMode::Wallpaper,
+    OverlayMode::Windows,
+];
+
+impl App {
+    /// Qué modo del overlay está abierto, si hay alguno.
+    pub(crate) fn current_overlay(&self) -> Option<OverlayMode> {
+        if let Some(m) = self.app_search_mode.as_ref() {
+            return Some(match m.list {
+                SearchList::Apps => OverlayMode::Apps,
+                SearchList::Windows => OverlayMode::Windows,
+            });
+        }
+        if self.clipboard_mode.is_some() {
+            return Some(OverlayMode::Clipboard);
+        }
+        if self.wallpaper_mode.is_some() {
+            return Some(OverlayMode::Wallpaper);
+        }
+        None
+    }
+
+    /// Pasa al modo siguiente (`dir = 1`) o anterior (`dir = -1`). Cierra el actual
+    /// por su propio camino —así restaura el tamaño y libera caché— y abre el que
+    /// sigue. Devuelve false si no había ningún modo abierto: en ese caso
+    /// Shift+flecha no tiene que hacer nada.
+    pub(crate) fn cycle_overlay(&mut self, dir: i32, qh: &QueueHandle<Self>) -> bool {
+        let Some(current) = self.current_overlay() else {
+            return false;
+        };
+        self.held_key = None;
+        let index = OVERLAY_ORDER
+            .iter()
+            .position(|m| *m == current)
+            .unwrap_or(0) as i32;
+        let next = OVERLAY_ORDER[(index + dir).rem_euclid(OVERLAY_ORDER.len() as i32) as usize];
+        log::debug!("overlay: {current:?} -> {next:?}");
+        match current {
+            OverlayMode::Apps | OverlayMode::Windows => self.close_app_search_mode(qh),
+            OverlayMode::Clipboard => self.close_clipboard_mode(qh),
+            OverlayMode::Wallpaper => self.close_wallpaper_mode(qh),
+        }
+        match next {
+            OverlayMode::Apps => self.open_app_search(qh),
+            OverlayMode::Clipboard => self.open_clipboard(qh),
+            OverlayMode::Wallpaper => self.open_wallpaper_picker(qh),
+            OverlayMode::Windows => self.open_windows_mode(qh),
+        }
+        true
+    }
 }
 
 pub(crate) struct OsdMode {
@@ -325,6 +402,14 @@ pub struct App {
     pub last_tray_count: usize,
     pub last_hyprctl_send: Option<std::time::Instant>,
     pub last_empty_click: Option<(std::time::Instant, f64, f64)>,
+    /// Si en el frame anterior había un modo que usa la superficie compartida.
+    /// Sirve para detectar el cierre del último modo y refrescar el estado del
+    /// puntero: el modo se quedó con los eventos, así que `pointer_pos` queda viejo
+    /// y con eso en `Some` el dock no se oculta nunca más. Se actualiza en `draw_ex`.
+    pub mode_was_open: bool,
+    /// Interactividad de teclado aplicada a la superficie (0=none, 1=on-demand,
+    /// 2=exclusive). Cachearla evita re-setearla en cada frame.
+    pub keyboard_state: u8,
     pub marquee: render::MarqueeState,
     pub marquee_tick_tx: std::sync::mpsc::Sender<u64>,
     pub marquee_rate: u64,

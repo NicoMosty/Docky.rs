@@ -10,6 +10,16 @@ impl App {
     }
 
     pub(super) fn open_app_search(&mut self, qh: &QueueHandle<Self>) {
+        self.open_search(SearchList::Apps, qh);
+    }
+
+    /// Cambiador de ventanas: es el mismo panel del launcher, pero la lista son las
+    /// ventanas abiertas de niri y Enter las enfoca en vez de lanzar algo.
+    pub(super) fn open_windows_mode(&mut self, qh: &QueueHandle<Self>) {
+        self.open_search(SearchList::Windows, qh);
+    }
+
+    fn open_search(&mut self, list: SearchList, qh: &QueueHandle<Self>) {
         self.wallpaper_mode = None;
         self.clipboard_mode = None;
         self.dock_menu_mode = None;
@@ -20,7 +30,10 @@ impl App {
         self.layer.set_layer(Layer::Top);
         self.menu = None;
 
-        let all_entries = desktop::list_all_desktop_entries();
+        let all_entries = match list {
+            SearchList::Apps => desktop::list_all_desktop_entries(),
+            SearchList::Windows => desktop::list_niri_windows(),
+        };
         let is_vertical = self.dock.is_vertical();
         let (controls, cross_fixed) = menu::build_app_search_controls();
         let (panel_w, panel_h) = if is_vertical {
@@ -42,6 +55,7 @@ impl App {
             .set_margin(margin.0, margin.1, margin.2, margin.3);
         self.layer.set_size(panel_w as u32, panel_h as u32);
         self.app_search_mode = Some(AppSearchMode {
+            list,
             query: String::new(),
             all_entries,
             filtered: Vec::new(),
@@ -64,11 +78,22 @@ impl App {
     }
 
     pub(super) fn close_app_search_mode(&mut self, qh: &QueueHandle<Self>) {
-        if let Some(m) = self.app_search_mode.as_mut() {
-            m.closing = true;
-            m.target_anim = 0.0;
+        // ----- cierre inmediato: con la animación dependía del tick de frames, y en
+        // un cambio de modo (Shift+←/→) se cruzaba con el que entra. Mismo criterio
+        // que el panel de ajustes y el selector de fondos. -----
+        if self.app_search_mode.is_none() {
+            return;
         }
-        self.request_redraw(qh);
+        self.app_search_mode = None;
+        self.held_key = None;
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
+        let (w, h) = self.dock.base_size();
+        self.layer.set_size(w, h);
+        // ----- anotarlo: `sync_autohide_surfaces` nunca restaura el tamaño -----
+        self.applied_size = Some((w, h));
+        self.draw(qh);
+        trim_heap();
     }
 
     pub(super) fn refresh_app_search(&mut self, qh: &QueueHandle<Self>) {
@@ -76,33 +101,32 @@ impl App {
             return;
         };
         let query = m.query.to_lowercase();
-        let mut scored: Vec<(usize, u8)> = m
+        // ----- como rofi: primero la calidad del match (prefijo > inicio de palabra
+        // > contiene > difuso) y después lo que más usás. Con la caja vacía queda
+        // ordenado sólo por uso, que es lo que hace rofi. -----
+        let mut scored: Vec<(usize, u8, f64)> = m
             .all_entries
             .iter()
             .enumerate()
             .filter_map(|(i, e)| {
-                let name = e.name.to_lowercase();
-                if query.is_empty() || name.starts_with(&query) {
-                    Some((i, 0))
-                } else if name.contains(&query) {
-                    Some((i, 1))
-                } else {
-                    None
-                }
+                let tier = desktop::match_tier(e, &query)?;
+                Some((i, tier, crate::usage::score(&e.id)))
             })
             .collect();
         scored.sort_by(|a, b| {
-            a.1.cmp(&b.1).then_with(|| {
-                m.all_entries[a.0]
-                    .name
-                    .to_lowercase()
-                    .cmp(&m.all_entries[b.0].name.to_lowercase())
-            })
+            a.1.cmp(&b.1)
+                .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| {
+                    m.all_entries[a.0]
+                        .name
+                        .to_lowercase()
+                        .cmp(&m.all_entries[b.0].name.to_lowercase())
+                })
         });
         m.filtered = scored
             .into_iter()
             .take(menu::SEARCH_MAX_RESULTS)
-            .map(|(i, _)| m.all_entries[i].clone())
+            .map(|(i, _, _)| m.all_entries[i].clone())
             .collect();
         m.selected = 0;
         m.scroll_x = 0.0;
@@ -132,12 +156,31 @@ impl App {
     }
 
     pub(super) fn launch_search_result(&mut self, index: usize, qh: &QueueHandle<Self>) {
+        let list = self.app_search_mode.as_ref().map(|m| m.list);
         if let Some(entry) = self
             .app_search_mode
             .as_ref()
             .and_then(|m| m.filtered.get(index))
+            .cloned()
         {
-            launch_app(&entry.exec);
+            if list == Some(SearchList::Windows) {
+                // ----- en el cambiador de ventanas, Enter enfoca: el `id` de la
+                // entrada es el id de ventana de niri -----
+                if let Ok(id) = entry.id.parse::<u64>() {
+                    crate::widgets::niri_focus_window(id);
+                }
+            } else {
+                // ----- historial: es lo que después ordena la lista como rofi -----
+                crate::usage::record(&entry.id);
+                if entry.terminal {
+                    let term = std::env::var("TERMINAL").unwrap_or_else(|_| "kitty".to_string());
+                    let _ = std::process::Command::new(term)
+                        .args(["-e", "sh", "-c", &entry.exec])
+                        .spawn();
+                } else {
+                    launch_app(&entry.exec);
+                }
+            }
         }
         self.close_app_search_mode(qh);
     }

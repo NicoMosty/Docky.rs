@@ -401,7 +401,7 @@ fn read_workspaces() -> Vec<WorkspaceInfo> {
     }
 }
 
-fn niri_json(args: &[&str]) -> Option<serde_json::Value> {
+pub(crate) fn niri_json(args: &[&str]) -> Option<serde_json::Value> {
     let mut cmd = std::process::Command::new("niri");
     cmd.args(["msg", "--json"]).args(args);
     let out = run_with_timeout(cmd, Duration::from_millis(500))?;
@@ -409,6 +409,13 @@ fn niri_json(args: &[&str]) -> Option<serde_json::Value> {
         return None;
     }
     serde_json::from_slice(&out.stdout).ok()
+}
+
+/// Enfocar una ventana por id (niri). Lo usa el cambiador de ventanas.
+pub fn niri_focus_window(id: u64) {
+    let _ = std::process::Command::new("niri")
+        .args(["msg", "action", "focus-window", "--id", &id.to_string()])
+        .spawn();
 }
 
 fn read_workspaces_niri() -> Vec<WorkspaceInfo> {

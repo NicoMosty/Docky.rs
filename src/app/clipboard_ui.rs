@@ -54,12 +54,22 @@ impl App {
     }
 
     pub(super) fn close_clipboard_mode(&mut self, qh: &QueueHandle<Self>) {
-        if let Some(cm) = self.clipboard_mode.as_mut() {
-            cm.closing = true;
-            cm.target_anim = 0.0;
+        // ----- cierre inmediato, como el panel de ajustes y el selector de fondos:
+        // con la animación el cambio de modo (Shift+←/→) se cruzaba con el que
+        // entra, y el cierre dependía del tick de frames. -----
+        if self.clipboard_mode.is_none() {
+            return;
         }
+        self.clipboard_mode = None;
         self.held_key = None;
-        self.request_redraw(qh);
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
+        let (w, h) = self.dock.base_size();
+        self.layer.set_size(w, h);
+        // ----- anotarlo: `sync_autohide_surfaces` nunca restaura el tamaño -----
+        self.applied_size = Some((w, h));
+        self.draw(qh);
+        trim_heap();
     }
 
     pub(crate) fn refresh_clipboard_filter(&mut self, qh: &QueueHandle<Self>) {

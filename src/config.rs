@@ -164,6 +164,10 @@ pub struct DockSettings {
     pub text_dim_b: u8,
     pub accent_from_wallpaper: bool,
     pub last_wallpaper: String,
+    /// Carpeta que lista el selector de fondos. Vacío = la de fábrica
+    /// (`~/Pictures/Wallpapers`). Se elige desde el panel, en Appearance.
+    #[serde(default)]
+    pub wallpaper_dir: String,
     #[serde(default)]
     pub custom_theme: bool,
     #[serde(default = "default_matugen_scheme")]
@@ -228,6 +232,7 @@ impl Default for DockSettings {
             accent_from_wallpaper: false,
             custom_theme: false,
             last_wallpaper: String::new(),
+            wallpaper_dir: String::new(),
             matugen_scheme: default_matugen_scheme(),
             dock_font: "Adwaita Sans".to_string(),
             system_font: String::new(),

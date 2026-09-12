@@ -81,6 +81,7 @@ pub enum ButtonKind {
     Shutdown,
     CreatePalette,
     SavePalette,
+    WallpaperDir,
 }
 impl ButtonKind {
     pub fn label(self) -> &'static str {
@@ -96,6 +97,8 @@ impl ButtonKind {
             ButtonKind::Shutdown => "Shut Down",
             ButtonKind::CreatePalette => "Create Your Own Palette!",
             ButtonKind::SavePalette => "Save Palette",
+            // ----- el label real lo pone el render: muestra la carpeta elegida -----
+            ButtonKind::WallpaperDir => "Wallpaper Folder",
         }
     }
 

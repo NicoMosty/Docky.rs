@@ -147,6 +147,40 @@ impl App {
         self.request_redraw(qh);
     }
 
+    /// Invariante del teclado de la superficie compartida: la tiene SOLO mientras
+    /// hay un modo que la necesita (es lo que hace funcionar Escape en el panel) y
+    /// en OnDemand mientras hay un menú de iconos o del tray abierto. Se re-aplica
+    /// en cada frame: si un camino cierra un modo sin soltar el teclado, queda preso
+    /// y entonces NINGUNA tecla llega a ninguna aplicación. Con esto, cualquier
+    /// camino que se olvide se auto-corrige al siguiente frame.
+    pub(super) fn enforce_keyboard(&mut self) {
+        let exclusive = self.dock_menu_mode.is_some()
+            || self.app_search_mode.is_some()
+            || self.clipboard_mode.is_some()
+            || self.wallpaper_mode.is_some();
+        let on_demand = self.menu.is_some() || self.popup_mode.is_some();
+        // ----- idempotente (trampa 1): re-setear la interactividad en cada frame
+        // puede re-disparar el foco del teclado en el compositor y perder teclas. -----
+        let want: u8 = if exclusive {
+            2
+        } else if on_demand {
+            1
+        } else {
+            0
+        };
+        if want == self.keyboard_state {
+            return;
+        }
+        self.keyboard_state = want;
+        self.layer.set_keyboard_interactivity(if exclusive {
+            KeyboardInteractivity::Exclusive
+        } else if on_demand {
+            KeyboardInteractivity::OnDemand
+        } else {
+            KeyboardInteractivity::None
+        });
+    }
+
     pub(super) fn close_dock_menu(&mut self, qh: &QueueHandle<Self>) {
         // ----- cierre inmediato: la animación era de 20 frames (ANIM_STEP_CLOSE
         // = 0.05) y ese era el ~1s que tardaba en reaccionar después de Escape.
@@ -443,11 +477,31 @@ impl App {
     ) {
         match kind {
             menu::ButtonKind::AddApp => {
-                self.dock_menu_mode = None;
-                self.relayout_dock(qh);
+                // ----- cerrar por el camino único: suelta el teclado y refresca el
+                // autohide. Antes el modo se limpiaba a mano y quedaba
+                // KeyboardInteractivity::Exclusive con el estado del puntero viejo. -----
+                self.close_dock_menu(qh);
                 self.open_menu(menu::MenuScreen::AddApp, qh);
             }
             menu::ButtonKind::QuitDock => self.exit = true,
+            // ----- cicla la carpeta de fondos: el selector la usa al abrirse -----
+            menu::ButtonKind::WallpaperDir => {
+                let opts = crate::wallpaper::WALLPAPER_DIRS;
+                let cur = self.dock.config.settings.wallpaper_dir.clone();
+                let i = opts.iter().position(|d| *d == cur).unwrap_or(0);
+                self.dock.config.settings.wallpaper_dir = opts[(i + 1) % opts.len()].to_string();
+                let _ = self.dock.config.save();
+                log::debug!(
+                    "wallpaper: carpeta -> {}",
+                    self.dock.config.settings.wallpaper_dir
+                );
+                // ----- el label del botón sale de las settings: hay que rearmar -----
+                if let Some(dm) = self.dock_menu_mode.as_mut() {
+                    dm.controls =
+                        menu::build_category_controls(dm.category, &self.dock.config.settings);
+                }
+                self.request_redraw(qh);
+            }
             menu::ButtonKind::CreatePalette => self.open_custom_palette(qh),
             menu::ButtonKind::SavePalette => self.save_custom_palette(qh),
             menu::ButtonKind::Back => {

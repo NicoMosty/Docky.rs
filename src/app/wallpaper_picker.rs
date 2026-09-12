@@ -19,7 +19,7 @@ impl App {
         self.held_key = None;
         self.layer.set_layer(Layer::Top);
         self.menu = None;
-        let wallpapers = wallpaper::scan_wallpapers();
+        let wallpapers = wallpaper::scan_wallpapers(&self.dock.config.settings.wallpaper_dir);
         let is_vertical = self.dock.is_vertical();
         let dock_along = (if is_vertical {
             self.dock.base_size().1
@@ -167,11 +167,23 @@ impl App {
     }
 
     pub(super) fn close_wallpaper_mode(&mut self, qh: &QueueHandle<Self>) {
-        if let Some(wp) = self.wallpaper_mode.as_mut() {
-            wp.closing = true;
-            wp.target_anim = 0.0;
+        // ----- cierre inmediato, igual que el panel de ajustes: con la animación
+        // dependía del tick de frames, y si ese tick no corría Escape no cerraba
+        // nunca. -----
+        if self.wallpaper_mode.is_none() {
+            return;
         }
-        self.request_redraw(qh);
+        log::debug!("wallpaper: close");
+        self.wallpaper_mode = None;
+        self.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
+        let (w, h) = self.dock.base_size();
+        self.layer.set_size(w, h);
+        // ----- anotarlo: `sync_autohide_surfaces` nunca restaura el tamaño -----
+        self.applied_size = Some((w, h));
+        self.thumbnail_cache.clear();
+        self.draw(qh);
+        trim_heap();
     }
 
     pub(super) fn scroll_wallpaper_into_view(&mut self, index: usize, qh: &QueueHandle<Self>) {
@@ -203,6 +215,7 @@ impl App {
             return;
         };
         if keysym == Keysym::Escape {
+            log::debug!("wallpaper: Escape");
             self.close_wallpaper_mode(qh);
             return;
         }

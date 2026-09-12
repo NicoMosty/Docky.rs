@@ -1,92 +1,270 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct WallpaperEntry {
     pub path: PathBuf,
     pub name: String,
 }
 
-fn candidate_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join("Pictures").join("Wallpapers"));
-        dirs.push(home.join(".config/hypr/wallpapers"));
-        dirs.push(home.join("wallpapers"));
-        dirs.push(home.join("Pictures"));
+/// Carpetas de fondos que ofrece el selector, en orden. La primera es la de
+/// fábrica; el ajuste `wallpaper_dir` guarda la elegida y puede ser cualquier
+/// ruta (absoluta, o relativa al home).
+///
+/// A propósito son carpetas de fondos y no carpetas genéricas (Descargas,
+/// ~/Pictures): esas traen logos, bocetos y fotos sueltas que, como la lista se
+/// ordena por nombre, tapan los fondos de verdad — probado: el selector abría
+/// mostrando "A", "B", "C".
+pub const WALLPAPER_DIRS: [&str; 4] = [
+    "Pictures/Wallpapers",
+    "Imágenes/wallpaper",
+    "wallpapers",
+    ".config/hypr/wallpapers",
+];
+
+/// Resuelve la carpeta del ajuste: `~/` y las rutas relativas son al home.
+fn resolve_dir(dir: &str) -> PathBuf {
+    let dir = dir.trim();
+    if let Some(rest) = dir.strip_prefix("~/") {
+        return dirs::home_dir().unwrap_or_default().join(rest);
     }
-    dirs
+    let path = PathBuf::from(dir);
+    if path.is_absolute() {
+        path
+    } else {
+        dirs::home_dir().unwrap_or_default().join(path)
+    }
 }
 
-pub fn scan_wallpapers() -> Vec<WallpaperEntry> {
-    for dir in candidate_dirs() {
-        let Ok(read_dir) = std::fs::read_dir(&dir) else {
+/// Etiqueta corta de la carpeta, para mostrarla en el panel.
+pub fn dir_label(dir: &str) -> String {
+    let dir = if dir.trim().is_empty() {
+        WALLPAPER_DIRS[0]
+    } else {
+        dir.trim()
+    };
+    if dir.starts_with('/') {
+        dir.to_string()
+    } else {
+        format!("~/{dir}")
+    }
+}
+
+fn is_wallpaper_file(path: &std::path::Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| matches!(e.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp"))
+            .unwrap_or(false)
+}
+
+/// Junta las imágenes de TODAS las carpetas candidatas. Antes se quedaba con la
+/// primera no vacía, así que el resto de las carpetas no existía para el
+/// selector. Deduplica por ruta y ordena por nombre.
+pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<WallpaperEntry> {
+    let mut found: Vec<WallpaperEntry> = Vec::new();
+    for dir in dirs {
+        let Ok(read_dir) = std::fs::read_dir(dir) else {
             continue;
         };
-        let mut found = Vec::new();
         for entry in read_dir.flatten() {
             let path = entry.path();
-            let is_image = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| matches!(e.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp"))
-                .unwrap_or(false);
-            if is_image {
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("wallpaper")
-                    .to_string();
-                found.push(WallpaperEntry { path, name });
+            if !is_wallpaper_file(&path) || found.iter().any(|w| w.path == path) {
+                continue;
             }
-        }
-        if !found.is_empty() {
-            found.sort_by(|a, b| a.name.cmp(&b.name));
-            return found;
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("wallpaper")
+                .to_string();
+            found.push(WallpaperEntry { path, name });
         }
     }
-    Vec::new()
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    found
+}
+
+pub fn scan_wallpapers(configured: &str) -> Vec<WallpaperEntry> {
+    let dir = if configured.trim().is_empty() {
+        WALLPAPER_DIRS[0]
+    } else {
+        configured.trim()
+    };
+    scan_dirs(&[resolve_dir(dir)])
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::*;
+
+    /// Un fondo en una carpeta distinta a la primera tiene que aparecer igual: con
+    /// el escaneo viejo (se quedaba con la primera carpeta no vacía) este test
+    /// devolvía solo ["primero"].
+    #[test]
+    fn junta_varias_carpetas_ignora_no_imagenes_y_deduplica() {
+        let base = std::env::temp_dir().join(format!("dockyrs-scan-{}", std::process::id()));
+        let a = base.join("Wallpapers");
+        let b = base.join("Imágenes/wallpaper");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("primero.jpg"), b"x").unwrap();
+        std::fs::write(b.join("segundo.png"), b"x").unwrap();
+        std::fs::write(b.join("notas.txt"), b"x").unwrap();
+        std::fs::create_dir_all(b.join("subcarpeta.jpg")).unwrap();
+
+        let found = scan_dirs(&[a.clone(), b.clone(), b.clone()]);
+        let names: Vec<&str> = found.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, vec!["primero", "segundo"]);
+        assert!(found.iter().all(|w| w.path.is_file()));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// La carpeta de fábrica es la de Pictures/Wallpapers: sin ajuste, el selector
+    /// escanea esa y nada más.
+    #[test]
+    fn la_carpeta_por_defecto_es_pictures_wallpapers() {
+        assert_eq!(WALLPAPER_DIRS[0], "Pictures/Wallpapers");
+        assert_eq!(dir_label(""), "~/Pictures/Wallpapers");
+        assert_eq!(
+            resolve_dir("Pictures/Wallpapers"),
+            dirs::home_dir().unwrap().join("Pictures/Wallpapers")
+        );
+        // ----- una ruta absoluta se respeta tal cual -----
+        assert_eq!(dir_label("/tmp/fondos"), "/tmp/fondos");
+    }
 }
 
 pub fn suggested_dir() -> String {
-    candidate_dirs()
-        .into_iter()
-        .next()
-        .map(|p| {
-            p.to_string_lossy().replacen(
-                &dirs::home_dir()
-                    .map(|h| h.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                "~",
-                1,
-            )
-        })
-        .unwrap_or_else(|| "~/Pictures/Wallpapers".to_string())
+    dir_label("")
+}
+
+/// Archivo que usan los setups de swaybg + systemd: un path unit lo vigila y
+/// reinicia swaybg cuando cambia. es la única forma de cambiar el fondo cuando el
+/// programa no tiene IPC, que es el caso de swaybg.
+fn swaybg_path_file() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".config/wallpaper-path")
+}
+
+/// Qué programa pone el fondo, según la config del compositor. En niri no hay
+/// forma de preguntarlo: se busca un programa conocido en su config y, si no
+/// aparece, se decide por lo que está corriendo. Hace falta porque no hay interfaz
+/// común: swww/awww hablan por IPC y swaybg no tiene ninguna.
+fn wallpaper_program() -> Option<String> {
+    const KNOWN: [&str; 4] = ["swaybg", "awww", "swww", "hyprpaper"];
+    let home = dirs::home_dir()?;
+    let mut pending = vec![home.join(".config/niri"), home.join(".config/hypr")];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("kdl") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for prog in KNOWN {
+                // ----- ignorar las lineas comentadas -----
+                if text
+                    .lines()
+                    .any(|l| !l.trim_start().starts_with("//") && l.contains(prog))
+                {
+                    return Some(prog.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn is_running(prog: &str) -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-x", prog])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// swaybg no tiene IPC: los setups con systemd escriben la ruta en un archivo que
+/// un path unit vigila (y que reinicia swaybg y corre matugen). Si ese pipeline no
+/// está instalado, se reinicia swaybg a mano con la imagen nueva.
+fn apply_with_swaybg(path: &Path) {
+    let wrote = std::fs::write(swaybg_path_file(), path.to_string_lossy().as_bytes()).is_ok();
+    if wrote {
+        let ok = std::process::Command::new("systemctl")
+            .args(["user", "start", "wallpaper-change.service"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            return;
+        }
+    }
+    let _ = std::process::Command::new("pkill")
+        .args(["-x", "swaybg"])
+        .status();
+    let _ = std::process::Command::new("swaybg")
+        .args(["-i", &path.to_string_lossy(), "-m", "fill"])
+        .spawn();
+}
+
+fn apply_with_awww(path: &Path) {
+    let running = std::process::Command::new("awww")
+        .arg("query")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !running {
+        let _ = std::process::Command::new("awww-daemon").spawn();
+        std::thread::sleep(std::time::Duration::from_millis(700));
+    }
+    let _ = std::process::Command::new("awww")
+        .args([
+            "img",
+            &path.to_string_lossy(),
+            "--transition-type",
+            "grow",
+            "--transition-duration",
+            "1.0",
+        ])
+        .status();
 }
 
 pub fn apply_wallpaper(path: PathBuf) {
     std::thread::spawn(move || {
-        let running = std::process::Command::new("awww")
-            .arg("query")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !running {
-            let _ = std::process::Command::new("awww-daemon").spawn();
-            std::thread::sleep(std::time::Duration::from_millis(700));
+        let programa = wallpaper_program();
+        let usa_swaybg =
+            programa.as_deref() == Some("swaybg") || (programa.is_none() && is_running("swaybg"));
+        log::debug!(
+            "wallpaper: aplicando {} con {}",
+            path.display(),
+            if usa_swaybg { "swaybg" } else { "awww" }
+        );
+        if usa_swaybg {
+            apply_with_swaybg(&path);
+        } else {
+            apply_with_awww(&path);
         }
-        let _ = std::process::Command::new("awww")
-            .args([
-                "img",
-                &path.to_string_lossy(),
-                "--transition-type",
-                "grow",
-                "--transition-duration",
-                "1.0",
-            ])
-            .status();
     });
 }
 
 pub fn current_wallpaper_path() -> Option<PathBuf> {
+    // ----- setups con swaybg + path unit: la ruta vive en un archivo -----
+    if let Ok(text) = std::fs::read_to_string(swaybg_path_file()) {
+        let p = text.trim();
+        if !p.is_empty() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    // ----- swww / awww: por IPC -----
     let output = std::process::Command::new("awww")
         .arg("query")
         .output()

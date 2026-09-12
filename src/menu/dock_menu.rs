@@ -50,6 +50,19 @@ pub fn build_category_controls(category: MenuCategory, settings: &DockSettings) 
                 y,
                 height: FONT_DROPDOWN_H,
             });
+            y += FONT_DROPDOWN_H + ROW_GAP * 2.0;
+
+            controls.push(Control {
+                kind: ControlKind::Section("Wallpaper Folder"),
+                y,
+                height: SECTION_LABEL_HEIGHT,
+            });
+            y += SECTION_LABEL_HEIGHT;
+            controls.push(Control {
+                kind: ControlKind::Button(ButtonKind::WallpaperDir),
+                y,
+                height: BUTTON_HEIGHT,
+            });
         }
         MenuCategory::Colors => {
             controls.push(Control {

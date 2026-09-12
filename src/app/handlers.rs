@@ -308,6 +308,15 @@ impl KeyboardHandler for App {
             }
             return;
         }
+        // ----- Shift+←/→ cambia de modo del overlay (el equivalente a los modos de
+        // rofi): launcher -> portapapeles -> fondos -> ventanas. Va ANTES de armar
+        // `held_key`; si no, el auto-repeat de la flecha ciclaría un modo por frame. -----
+        if self.modifiers.shift && matches!(event.keysym, Keysym::Left | Keysym::Right) {
+            let dir = if event.keysym == Keysym::Right { 1 } else { -1 };
+            if self.cycle_overlay(dir, qh) {
+                return;
+            }
+        }
         self.held_key = matches!(
             event.keysym,
             Keysym::Left | Keysym::Right | Keysym::Up | Keysym::Down

@@ -214,15 +214,27 @@ impl App {
                                 _ => {}
                             }
                         }
+                        // ----- el doble click abre el selector de fondos SÓLO en la
+                        // banda central: en los extremos se dispara sin querer. No se
+                        // quita del todo porque es la única vía (no hay keybind). -----
+                        const WALLPAPER_BAND: f64 = 220.0;
+                        let (bw, bh) = self.dock.base_size();
+                        let (along, span) = if self.dock.is_vertical() {
+                            (y, bh as f64)
+                        } else {
+                            (x, bw as f64)
+                        };
+                        let en_centro = (along - span / 2.0).abs() <= WALLPAPER_BAND / 2.0;
                         let now = std::time::Instant::now();
-                        let is_double = self
-                            .last_empty_click
-                            .map(|(t, px, py)| {
-                                now.duration_since(t).as_millis() < 400
-                                    && (x - px).abs() < 12.0
-                                    && (y - py).abs() < 12.0
-                            })
-                            .unwrap_or(false);
+                        let is_double = en_centro
+                            && self
+                                .last_empty_click
+                                .map(|(t, px, py)| {
+                                    now.duration_since(t).as_millis() < 400
+                                        && (x - px).abs() < 12.0
+                                        && (y - py).abs() < 12.0
+                                })
+                                .unwrap_or(false);
                         if is_double {
                             self.last_empty_click = None;
                             self.open_wallpaper_picker(qh);
