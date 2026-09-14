@@ -1,7 +1,7 @@
 use crate::config::DockEdge;
 use crate::dock::Dock;
-use dockyrs_canvas::{IconCache, TextCache};
 use crate::widgets::{BatteryState, WidgetSnapshot};
+use dockyrs_canvas::{IconCache, TextCache};
 use std::time::Instant;
 use tiny_skia::{Color, Paint, Pixmap, Rect, Transform};
 
@@ -21,6 +21,8 @@ mod workspaces;
 pub use workspaces::*;
 mod syswidgets;
 use syswidgets::*;
+mod widget_spec;
+use widget_spec::*;
 
 const ICON_OVERSAMPLE: f32 = 1.0;
 const DATE_FONT_FAMILY: &str = "JetBrains Mono";
