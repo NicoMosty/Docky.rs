@@ -130,7 +130,7 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
      anchas: "MUTE" medía ~23px contra los 19 estimados y se salía de la pastilla.
      Las etiquetas del volumen usan otro factor (`volume_label_len`).
 
- 1. **La geometría de un widget que la calculan el reparto y el dibujo va en UNA
+12. **La geometría de un widget que la calculan el reparto y el dibujo va en UNA
    función** (`volume_content_len`, `VOLUME_ICON_*`), no duplicada: el ancho que
    reserva `widget_natural_len` y el content que centra `draw_icon_label` tienen
    que coincidir o el contenido se sale de la pastilla (le pasó al altavoz: medía
@@ -146,8 +146,56 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
   intercepta antes de la rama general (`if self.x_mode.is_some() { …; return; }`).
 - `src/app/draw.rs` — `draw_ex` elige el modo, `relayout_dock` fija el tamaño,
   `draw_icons` dibuja el dock normal.
+13. **La tabla de widgets: la exhaustividad del compilador pasó a ser un test.**
+   `src/render/widget_spec.rs` tiene `WIDGETS`, la única lista de widgets del
+   render: un `WidgetSpec` por widget con su `natural_len` y su `draw`. Antes había
+   dos `match` de 12 ramas (en `widget_natural_len` y en `draw_widgets`); ahora hay
+   `spec_for(kind)` y un `unreachable!` con el nombre si falta. Agregar un widget
+   son **4 lugares**: el enum, `WIDGETS`, `WIDGET_KIND_ORDER` y `widget_label` (los
+   dos últimos en `menu/widget_chips.rs`). Antes eran 16 sitios en 7 archivos
+   (medido con `KbdLayout`, commit `c458821`).
+   - **Lo que dejó de estar garantizado:** sin `match` no hay exhaustividad, así que
+     si el enum crece y la tabla no, nada avisa. Lo cubre
+     `render::layout::hit_layout_tests::la_tabla_cubre_todos_los_widgets_del_panel`,
+     que itera `WIDGET_KIND_ORDER` **y** exige que `WIDGETS` y el panel de ajustes
+     tengan el mismo tamaño. Los otros dos lados ya estaban cubiertos:
+     `widget_label` es un `match` sin `_`, así que sumar una variante es error de
+     compilación, y el `assert_eq!` de tamaños agarra la desincronización en los
+     dos sentidos.
+   - **El dibujo recibe el `WidgetRect` que produjo `layout_widgets`**, así que la
+     trampa 10 pasa a ser estructural en vez de sostenida por un test.
+   - **`WidgetSnapshot` no se toca.** Derivar `PartialEq` para colapsar
+     `refresh_sys`/`refresh_clock` obligaría a clonar el struct entero (12 campos
+     con `Vec` y `String`) cada 2 s sólo para comparar; el diff a mano compara los
+     campos que acaba de releer.
+   - **`Canvas` lleva DOS flags de animación**: `advance` (marquee de Media) y
+     `advance_ws` (animación de Workspaces). No son el mismo tick.
+   - Las funciones de `render/` **siguen** recibiendo `(zx, zy, zw, zh)` desarmado
+     (19 firmas, 152 líneas de plumbing). Unificarlas a `&WidgetRect` ahorra ~95
+     líneas pero toca ~57 sitios y no previene ningún fallo — la invariante ya vive
+     en el adaptador. Medido y descartado: no repetir el análisis.
+
+14. **El workspace: `cargo test` en la raíz NO testea el crate.**
+   Con `crates/dockyrs-canvas` como miembro, `cargo test --release` en la raíz corre
+   sólo el paquete raíz, así que los guards del crate quedan invisibles para el
+   comando que documenta este archivo. Lo arregla
+   `default-members = [".", "crates/dockyrs-canvas"]` en el `Cargo.toml` raíz. Dos
+   más del mismo commit: **NO** poner `panic = "abort"` en `[profile.release]`
+   (rompe `catch_unwind`, que es la red de seguridad del reexec A5/A6; `strip = true`
+   sí es seguro y baja 2,8 MB medidos), y el `*` de `[profile.dev.package]` **no
+   alcanza a los miembros del workspace**, así que el crate del raster se compila en
+   `opt-level = 1`.
+
+
 - `src/app/dock_menu.rs`, `dock_menu_input.rs` — panel de ajustes: `panel_layout`
   (reparto superficie/dock/panel), `panel_local` (traducción de coordenadas),
+- `src/render/widget_spec.rs` — la tabla `WIDGETS`: la única lista de widgets del
+  render, con la medida y el dibujo de cada uno (trampa 13).
+- `crates/dockyrs-canvas/` — raster por CPU sobre tiny-skia: texto (`text.rs`),
+  iconos (`icon_cache.rs`) y miniaturas (`thumbnail_cache.rs`). Sin GPU ni contexto
+  GL: el costo de rasterizar por CPU sólo se paga cuando hay algo que redibujar,
+  que es por qué el reposo está en el piso (1 tick de sistema cada 5 s).
+
   hit tests y el drag de widgets (`drop_widget_chip`).
 - `src/app/ws_flash.rs` — HUD de workspaces.
 - `src/app/volume_panel.rs` — panel de volumen: se abre en la superficie del popup
