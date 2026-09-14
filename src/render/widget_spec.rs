@@ -45,8 +45,11 @@ pub(super) struct Canvas<'a, 'b> {
     pub(super) bar_len: f32,
     /// Cual widget tiene el puntero encima, si alguno.
     pub(super) hovered: Option<crate::config::WidgetKind>,
-    /// `true` si este frame toca avanzar el marquee.
+    /// `true` si este frame toca avanzar el marquee de Media.
     pub(super) advance: bool,
+    /// `true` si este frame toca avanzar la animacion de Workspaces. Es un flag
+    /// distinto del de Media: el tick que los mueve no es el mismo.
+    pub(super) advance_ws: bool,
 }
 
 impl Canvas<'_, '_> {
@@ -66,13 +69,15 @@ pub(super) struct WidgetSpec {
     pub(super) draw: fn(&mut Canvas, &WidgetRect, &Ctx) -> bool,
 }
 
-/// ponytail: 6 de 12 migrados. El resto sigue en los dos `match` de
-/// `layout.rs`, que tienen una rama `unreachable!()` para los que ya estan aca:
-/// si un widget de esta tabla cayera hasta el `match`, es que el despacho de
-/// arriba se rompio y conviene que paniquee con el nombre. Cuando esten los 12,
-/// los dos `match` desaparecen y esto pasa a ser la unica lista -- y reemplaza
-/// tambien `WIDGET_KIND_ORDER` y `widget_label`, que repiten los 12 variantes a
-/// mano por tercera y cuarta vez.
+/// Los 12 widgets del enum, en el orden del enum. Es la unica lista: reemplazo
+/// el `match` de `widget_natural_len`, el `match` de `draw_widgets`,
+/// `WIDGET_KIND_ORDER` y el `match` de `widget_label`.
+///
+/// ponytail: los adaptadores de abajo todavia desarman el `WidgetRect` para
+/// llamar a las `draw_*_widget`, que siguen recibiendo `(zx, zy, zw, zh)`. Por
+/// eso este archivo es mas largo que los dos `match` que reemplaza: el
+/// boilerplate se movio, no desaparecio. Cobrarlo del todo pide cambiar esas 12
+/// firmas a `&WidgetRect`.
 pub(super) const WIDGETS: &[WidgetSpec] = &[
     WidgetSpec {
         kind: crate::config::WidgetKind::Clock,
@@ -80,14 +85,44 @@ pub(super) const WIDGETS: &[WidgetSpec] = &[
         draw: draw_clock,
     },
     WidgetSpec {
+        kind: crate::config::WidgetKind::Battery,
+        natural_len: len_battery,
+        draw: draw_battery,
+    },
+    WidgetSpec {
         kind: crate::config::WidgetKind::Media,
         natural_len: len_media,
         draw: draw_media,
     },
     WidgetSpec {
+        kind: crate::config::WidgetKind::PowerMenu,
+        natural_len: len_power,
+        draw: draw_power,
+    },
+    WidgetSpec {
+        kind: crate::config::WidgetKind::Bluetooth,
+        natural_len: len_bluetooth,
+        draw: draw_bluetooth,
+    },
+    WidgetSpec {
         kind: crate::config::WidgetKind::Tray,
         natural_len: len_tray,
         draw: draw_tray,
+    },
+    WidgetSpec {
+        kind: crate::config::WidgetKind::Workspaces,
+        natural_len: len_workspaces,
+        draw: draw_workspaces,
+    },
+    WidgetSpec {
+        kind: crate::config::WidgetKind::Cpu,
+        natural_len: len_cpu,
+        draw: draw_cpu,
+    },
+    WidgetSpec {
+        kind: crate::config::WidgetKind::Ram,
+        natural_len: len_ram,
+        draw: draw_ram,
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Network,
@@ -268,6 +303,164 @@ fn len_kblayout(cx: &Ctx) -> f32 {
 
 fn draw_kblayout(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
     draw_kblayout_widget(
+        canvas.pixmap,
+        canvas.text_cache,
+        cx.widgets,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+    );
+    false
+}
+
+// ----- bateria -----
+
+fn len_battery(cx: &Ctx) -> f32 {
+    let Some((pct, _)) = cx.widgets.battery else {
+        return 0.0;
+    };
+    let label = format!("{pct}%");
+    if cx.is_vertical {
+        let label_len = text_width_estimate_render(&label, 9.5 * cx.render_scale);
+        9.0 * cx.render_scale + 5.0 * cx.render_scale + label_len
+    } else {
+        // ----- el porcentaje va dentro del icono: solo el ancho de este -----
+        32.0 * cx.render_scale
+    }
+}
+
+fn draw_battery(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_battery_widget(
+        canvas.pixmap,
+        canvas.text_cache,
+        cx.widgets,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+    );
+    false
+}
+
+// ----- apagado -----
+
+fn len_power(cx: &Ctx) -> f32 {
+    14.0 * cx.render_scale
+}
+
+fn draw_power(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_power_widget(
+        canvas.pixmap,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+    );
+    false
+}
+
+// ----- bluetooth -----
+
+fn len_bluetooth(cx: &Ctx) -> f32 {
+    // ----- solo el icono: el estado se expresa con color, sin texto -----
+    16.0 * cx.render_scale
+}
+
+fn draw_bluetooth(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    let (powered, in_use) = match &cx.widgets.bluetooth {
+        Some(bt) => (bt.powered, bt.powered && bt.connected.is_some()),
+        None => (false, false),
+    };
+    draw_widget_button_bg(
+        canvas.pixmap,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        canvas.is_hovered(r),
+    );
+    draw_bluetooth_icon(
+        canvas.pixmap,
+        cx.render_scale,
+        r.x + r.w / 2.0,
+        r.y + r.h / 2.0,
+        powered,
+        in_use,
+        canvas.colors,
+    );
+    false
+}
+
+// ----- workspaces -----
+
+fn len_workspaces(cx: &Ctx) -> f32 {
+    workspaces_geometry(&cx.widgets.workspaces, cx.render_scale)
+}
+
+fn draw_workspaces(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_workspaces_widget(
+        canvas.pixmap,
+        &cx.widgets.workspaces,
+        canvas.marquee,
+        canvas.advance_ws,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+    );
+    false
+}
+
+// ----- cpu y ram -----
+
+fn len_cpu(cx: &Ctx) -> f32 {
+    percentage_widget_len(cx.widgets.cpu, cx.is_vertical, cx.render_scale)
+}
+
+fn draw_cpu(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_cpu_widget(
+        canvas.pixmap,
+        canvas.text_cache,
+        cx.widgets,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+    );
+    false
+}
+
+fn len_ram(cx: &Ctx) -> f32 {
+    let label = match cx.widgets.ram_gb {
+        Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),
+        None => match cx.widgets.ram {
+            Some(pct) => format!("{pct}%"),
+            None => return 0.0,
+        },
+    };
+    text_widget_len(&label, cx.is_vertical, cx.render_scale)
+}
+
+fn draw_ram(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_ram_widget(
         canvas.pixmap,
         canvas.text_cache,
         cx.widgets,

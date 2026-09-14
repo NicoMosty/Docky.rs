@@ -194,8 +194,7 @@ pub(super) fn widget_natural_len(
     cross_len: f32,
     render_scale: f32,
 ) -> f32 {
-    use crate::config::WidgetKind;
-    // ----- los ya migrados a la tabla; el resto sigue en el match de abajo -----
+    // ----- la tabla es la unica lista de widgets -----
     let cx = Ctx {
         widgets,
         settings,
@@ -204,52 +203,13 @@ pub(super) fn widget_natural_len(
         cross_len,
         tray_count,
     };
-    if let Some(spec) = spec_for(kind) {
-        return (spec.natural_len)(&cx);
-    }
-    match kind {
-        // ----- migrados a WIDGETS: llegar hasta acá significa que el despacho de
-        // arriba no los tomó, así que conviene que paniquee con el nombre en vez
-        // de medir cualquier cosa -----
-        WidgetKind::Clock
-        | WidgetKind::Media
-        | WidgetKind::Tray
-        | WidgetKind::Network
-        | WidgetKind::Volume
-        | WidgetKind::KbdLayout => {
-            unreachable!("{kind:?} ya está en WIDGETS y no debería llegar al match")
-        }
-        WidgetKind::Battery => {
-            let Some((pct, _)) = widgets.battery else {
-                return 0.0;
-            };
-            let label = format!("{pct}%");
-            if is_vertical {
-                let label_len = text_width_estimate_render(&label, 9.5 * render_scale);
-                9.0 * render_scale + 5.0 * render_scale + label_len
-            } else {
-                // ----- el porcentaje va dentro del icono: sólo el ancho de éste -----
-                32.0 * render_scale
-            }
-        }
-        WidgetKind::PowerMenu => 14.0 * render_scale,
-        WidgetKind::Bluetooth => {
-            // ----- sólo el icono: el estado se expresa con color, sin texto -----
-            16.0 * render_scale
-        }
-        WidgetKind::Workspaces => workspaces_geometry(&widgets.workspaces, render_scale),
-        WidgetKind::Cpu => percentage_widget_len(widgets.cpu, is_vertical, render_scale),
-        WidgetKind::Ram => {
-            let label = match widgets.ram_gb {
-                Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),
-                None => match widgets.ram {
-                    Some(pct) => format!("{pct}%"),
-                    None => return 0.0,
-                },
-            };
-            text_widget_len(&label, is_vertical, render_scale)
-        }
-    }
+    let Some(spec) = spec_for(kind) else {
+        // ----- si el enum crece sin entrada en la tabla, `WIDGETS` deja de estar
+        // completo. Antes lo garantizaba la exhaustividad del `match`; ahora lo
+        // garantiza el test `la_tabla_cubre_todos_los_widgets_del_panel` -----
+        unreachable!("{kind:?} no esta en WIDGETS (render/widget_spec.rs)")
+    };
+    (spec.natural_len)(&cx)
 }
 
 pub(super) fn text_widget_len(label: &str, is_vertical: bool, render_scale: f32) -> f32 {
@@ -313,125 +273,28 @@ pub(super) fn draw_widgets(
     };
     let mut animating = false;
     for r in layout_widgets(s, widgets, tray_count, is_vertical, w, h, render_scale) {
-        // ----- los ya migrados a la tabla -----
-        if let Some(spec) = spec_for(r.kind) {
-            let mut canvas = Canvas {
-                pixmap: &mut *pixmap,
-                text_cache: &mut *text_cache,
-                icon_cache: &mut *icon_cache,
-                marquee: &mut *marquee,
-                tray,
-                colors: &colors,
-                hovered: dock.hovered_widget,
-                advance,
-                bar_len: if is_vertical { h } else { w },
-            };
-            // ----- el `|=` es sólo por Media: es el único que anima -----
-            animating |= (spec.draw)(&mut canvas, &r, &cx);
-            continue;
-        }
-        match r.kind {
-            WidgetKind::Battery => draw_battery_widget(
-                pixmap,
-                text_cache,
-                widgets,
-                r.x,
-                r.y,
-                r.w,
-                r.h,
-                render_scale,
-                &colors,
-                is_vertical,
-            ),
-            WidgetKind::PowerMenu => draw_power_widget(
-                pixmap,
-                r.x,
-                r.y,
-                r.w,
-                r.h,
-                render_scale,
-                &colors,
-                is_vertical,
-            ),
-            WidgetKind::Bluetooth => {
-                // ----- sin etiqueta: el estado se expresa con el color del icono -----
-                let (powered, in_use) = match &widgets.bluetooth {
-                    Some(bt) => (bt.powered, bt.powered && bt.connected.is_some()),
-                    None => (false, false),
-                };
-                draw_widget_button_bg(
-                    pixmap,
-                    r.x,
-                    r.y,
-                    r.w,
-                    r.h,
-                    render_scale,
-                    &colors,
-                    dock.hovered_widget == Some(WidgetKind::Bluetooth),
-                );
-                draw_bluetooth_icon(
-                    pixmap,
-                    render_scale,
-                    r.x + r.w / 2.0,
-                    r.y + r.h / 2.0,
-                    powered,
-                    in_use,
-                    &colors,
-                );
-            }
-            WidgetKind::Workspaces => {
-                draw_workspaces_widget(
-                    pixmap,
-                    &widgets.workspaces,
-                    marquee,
-                    advance_ws,
-                    r.x,
-                    r.y,
-                    r.w,
-                    r.h,
-                    render_scale,
-                    &colors,
-                    is_vertical,
-                );
-            }
-            WidgetKind::Cpu => draw_cpu_widget(
-                pixmap,
-                text_cache,
-                widgets,
-                r.x,
-                r.y,
-                r.w,
-                r.h,
-                render_scale,
-                &colors,
-                is_vertical,
-            ),
-            WidgetKind::Ram => draw_ram_widget(
-                pixmap,
-                text_cache,
-                widgets,
-                r.x,
-                r.y,
-                r.w,
-                r.h,
-                render_scale,
-                &colors,
-                is_vertical,
-            ),
-            // ----- migrados a WIDGETS: llegar hasta acá significa que el
-            // despacho de arriba no los tomó, así que paniquea con el nombre -----
-            WidgetKind::Clock
-            | WidgetKind::Media
-            | WidgetKind::Tray
-            | WidgetKind::Network
-            | WidgetKind::Volume
-            | WidgetKind::KbdLayout => {
-                unreachable!(
-                    "{:?} ya está en WIDGETS y no debería llegar al match",
-                    r.kind
-                )
-            }
-        }
+        // ----- la tabla es la unica lista: si un widget del enum no esta ahi,
+        // `WIDGETS` quedo incompleto y conviene que paniquee con el nombre -----
+        let Some(spec) = spec_for(r.kind) else {
+            unreachable!(
+                "{:?} no esta en WIDGETS (render/widget_spec.rs)",
+                r.kind
+            )
+        };
+        let mut canvas = Canvas {
+            pixmap: &mut *pixmap,
+            text_cache: &mut *text_cache,
+            icon_cache: &mut *icon_cache,
+            marquee: &mut *marquee,
+            tray,
+            colors: &colors,
+            hovered: dock.hovered_widget,
+            advance,
+            advance_ws,
+            bar_len: if is_vertical { h } else { w },
+        };
+        // ----- el `|=` es por Media (marquee) y Workspaces (animacion) -----
+        animating |= (spec.draw)(&mut canvas, &r, &cx);
     }
     // ----- separadores sutiles entre zonas -----
     {
@@ -766,10 +629,11 @@ mod hit_layout_tests {
         assert_eq!(hit_scale(&sin_escala), 1.0);
     }
 
-    /// Cuando un widget se migra a la tabla hay que sacarlo del `match` (queda
-    /// `unreachable!`) y agregarlo a `WIDGETS`. Este test es lo que evita que
-    /// quede a medias: fija el ancho del migrado contra el valor que reservaba
-    /// la rama vieja del `match` y comprueba que el `match` ya no lo alcanza.
+    /// Fija el ancho de KbdLayout contra el valor que reservaba la rama vieja del
+    /// `match` (8.5 del texto mas 10 de padding). Si `len_kblayout` se despega, el
+    /// contenido se sale de la pastilla: la trampa 12 pide que el ancho del reparto
+    /// y el del dibujo salgan de la misma funcion, y ahora esa funcion es la de la
+    /// tabla.
     #[test]
     fn el_widget_migrado_a_la_tabla_mide_lo_mismo() {
         assert!(
@@ -793,29 +657,28 @@ mod hit_layout_tests {
         );
     }
 
-    /// El arm `unreachable!()` del `match` y `WIDGETS` tienen que listar el MISMO
-    /// conjunto. Estar en los dos lo ve el compilador (`unreachable pattern`),
-    /// pero estar en el arm y NO en la tabla no lo ve nadie: `spec_for` devuelve
-    /// `None`, cae al `match` y paniquea recien en runtime. Este test cubre ese
-    /// lado, que es el que el compilador no alcanza mientras dure la migracion.
+    /// `WIDGETS` tiene que cubrir TODOS los widgets del enum. Antes lo
+    /// garantizaba la exhaustividad de los dos `match`; ahora que no hay `match`,
+    /// es lo unico que evita que un widget exista en el enum y no se pueda medir
+    /// ni dibujar. Se itera `WIDGET_KIND_ORDER` (la lista del panel de ajustes,
+    /// que por construccion tiene que estar completa: si un widget no esta ahi el
+    /// usuario no lo puede agregar a la barra).
     #[test]
-    fn los_migrados_del_arm_estan_en_la_tabla() {
+    fn la_tabla_cubre_todos_los_widgets_del_panel() {
         let s = settings();
         let w = snapshot();
-        for kind in [
-            WidgetKind::Clock,
-            WidgetKind::Media,
-            WidgetKind::Tray,
-            WidgetKind::Network,
-            WidgetKind::Volume,
-            WidgetKind::KbdLayout,
-        ] {
+        for kind in crate::menu::WIDGET_KIND_ORDER {
             assert!(
                 spec_for(kind).is_some(),
-                "{kind:?} figura como migrado en el `match` pero no esta en WIDGETS"
+                "{kind:?} esta en el panel de ajustes pero no en WIDGETS"
             );
-            // Y medirlo no puede paniquear ni por tabla ni por `match`.
+            // Y medirlo no puede paniquear.
             let _ = widget_natural_len(kind, &s, &w, 1, false, CROSS, SCALE_DEL_BUG);
         }
+        assert_eq!(
+            WIDGETS.len(),
+            crate::menu::WIDGET_KIND_ORDER.len(),
+            "WIDGETS y el panel de ajustes no tienen el mismo tamano"
+        );
     }
 }
