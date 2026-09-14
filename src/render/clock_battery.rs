@@ -67,7 +67,7 @@ fn draw_battery_icon(
     }
 }
 
-pub(super) fn draw_clock_widget(
+pub(crate) fn draw_clock_widget(
     pixmap: &mut Pixmap,
     text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,
@@ -165,7 +165,7 @@ pub(super) fn draw_clock_widget(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_battery_widget(
+pub(crate) fn draw_battery_widget(
     pixmap: &mut Pixmap,
     text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,

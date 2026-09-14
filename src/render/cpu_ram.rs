@@ -127,7 +127,7 @@ pub(super) fn draw_labeled_widget(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_cpu_widget(
+pub(crate) fn draw_cpu_widget(
     pixmap: &mut Pixmap,
     text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,
@@ -184,7 +184,7 @@ pub(super) fn draw_percentage_widget(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_ram_widget(
+pub(crate) fn draw_ram_widget(
     pixmap: &mut Pixmap,
     text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,

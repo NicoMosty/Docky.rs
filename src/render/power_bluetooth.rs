@@ -42,7 +42,7 @@ pub(super) fn draw_power_icon(
     }
 }
 
-pub(super) fn draw_power_widget(
+pub(crate) fn draw_power_widget(
     pixmap: &mut Pixmap,
     zx: f32,
     zy: f32,
@@ -55,7 +55,7 @@ pub(super) fn draw_power_widget(
     draw_power_icon(pixmap, render_scale, zx + zw / 2.0, zy + zh / 2.0, colors);
 }
 
-pub(super) fn draw_bluetooth_icon(
+pub(crate) fn draw_bluetooth_icon(
     pixmap: &mut Pixmap,
     render_scale: f32,
     cx: f32,

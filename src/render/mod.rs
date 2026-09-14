@@ -10,22 +10,30 @@ pub use layout::*;
 mod tray;
 pub use tray::*;
 mod clock_battery;
-use clock_battery::*;
 mod media;
 pub use media::*;
 mod power_bluetooth;
-use power_bluetooth::*;
 mod cpu_ram;
-use cpu_ram::*;
 mod workspaces;
 pub use workspaces::*;
 mod syswidgets;
-use syswidgets::*;
-mod widget_spec;
-use widget_spec::*;
-// ----- lo que `app/` necesita para despachar clicks: la tabla y las acciones.
-// `spec_for` ya entra por el glob, pero como privado; esto lo hace `pub(crate)`. -----
-pub(crate) use widget_spec::{ClickCtx, WidgetAction, WidgetClick, spec_for};
+
+// ----- Lo que `crate::widget` (la tabla de widgets) necesita de aca adentro.
+//
+// La tabla vive en la raiz del crate porque `menu/` tiene que leer las etiquetas
+// y el orden, y `menu/` no importa `render/` (esa es la convencion: menu = logica
+// y geometria, sin dibujo). En vez de ensanchar 23 items repartidos en 8 archivos,
+// el ensanchado queda aca y se ve de un saque cual es la superficie que el resto
+// del crate puede tocar. Los que ya eran `pub` (MarqueeState, workspaces_geometry)
+// no figuran. -----
+pub(crate) use clock_battery::{draw_battery_widget, draw_clock_widget};
+pub(crate) use cpu_ram::{draw_cpu_widget, draw_ram_widget};
+pub(crate) use layout::{WidgetRect, percentage_widget_len, text_widget_len};
+pub(crate) use media::{draw_media_widget, media_ideal_len};
+pub(crate) use power_bluetooth::{draw_bluetooth_icon, draw_power_widget};
+pub(crate) use syswidgets::{draw_kblayout_widget, draw_network_widget, draw_volume_widget};
+pub(crate) use tray::{draw_tray_widget, tray_geometry};
+pub(crate) use workspaces::draw_workspaces_widget;
 
 const ICON_OVERSAMPLE: f32 = 1.0;
 const DATE_FONT_FAMILY: &str = "JetBrains Mono";
@@ -165,7 +173,7 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> tiny_skia::Path 
 // (accent al 30%, al 80% con el puntero encima). La comparten WiFi, volumen y
 // bluetooth para que los tres se lean igual. -----
 #[allow(clippy::too_many_arguments)]
-fn draw_widget_button_bg(
+pub(crate) fn draw_widget_button_bg(
     pixmap: &mut Pixmap,
     zx: f32,
     zy: f32,
@@ -219,7 +227,7 @@ fn volume_label_len(label: &str, size: f32) -> f32 {
 }
 
 /// Ancho que necesita el contenido del botón de volumen con esa etiqueta.
-fn volume_content_len(label: &str, render_scale: f32) -> f32 {
+pub(crate) fn volume_content_len(label: &str, render_scale: f32) -> f32 {
     VOLUME_ICON_R * 2.0 * render_scale
         + VOLUME_ICON_GAP * render_scale
         + volume_label_len(label, VOLUME_LABEL_PX * render_scale)
@@ -542,7 +550,7 @@ fn draw_text_rotated_family(
     pixmap.draw_pixmap(0, 0, glyphs.as_ref().as_ref(), &paint, transform, None);
 }
 
-fn text_width_estimate_render(text: &str, size: f32) -> f32 {
+pub(crate) fn text_width_estimate_render(text: &str, size: f32) -> f32 {
     text.chars().count() as f32 * size * 0.64
 }
 

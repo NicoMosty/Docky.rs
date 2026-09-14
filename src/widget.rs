@@ -10,7 +10,20 @@
 //! el reparto y el dibujo no pueden usar escalas distintas. Eso es lo que las
 //! trampas 10 y 12 de AGENTS.md piden y hoy sostienen a mano los tests.
 
-use super::*;
+use crate::config::WidgetKind;
+// ----- los tipos y las funciones de dibujo. `render/mod.rs` los re-exporta en un
+// solo bloque: la tabla vive en la raiz, pero el dibujo sigue siendo de `render/` -----
+use crate::render::{
+    MarqueeState, WidgetColors, WidgetRect, draw_battery_widget, draw_bluetooth_icon,
+    draw_clock_widget, draw_cpu_widget, draw_kblayout_widget, draw_media_widget,
+    draw_network_widget, draw_power_widget, draw_ram_widget, draw_tray_widget,
+    draw_volume_widget, draw_widget_button_bg, draw_workspaces_widget, media_ideal_len,
+    percentage_widget_len, text_widget_len, text_width_estimate_render, tray_geometry,
+    volume_content_len, workspaces_geometry,
+};
+use crate::widgets::WidgetSnapshot;
+use dockyrs_canvas::{IconCache, TextCache};
+use tiny_skia::Pixmap;
 
 /// Que se toco y donde. La rueda lleva la direccion porque el volumen la usa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +133,10 @@ impl Canvas<'_, '_> {
 }
 
 pub(crate) struct WidgetSpec {
-    pub(crate) kind: crate::config::WidgetKind,
+    pub(crate) kind: WidgetKind,
+    /// Nombre que muestra el panel de Ajustes. Vive aca y no en un `match`
+    /// aparte: era la ultima lista duplicada de los 12 variantes.
+    pub(crate) label: &'static str,
     /// Ancho que reserva el reparto. La llama `widget_natural_len`.
     pub(crate) natural_len: fn(&Ctx) -> f32,
     /// Dibuja dentro del `rect` que le dio el reparto. Devuelve `true` si el
@@ -142,81 +158,104 @@ pub(crate) struct WidgetSpec {
 /// firmas a `&WidgetRect`.
 pub(crate) const WIDGETS: &[WidgetSpec] = &[
     WidgetSpec {
-        kind: crate::config::WidgetKind::Clock,
+        kind: WidgetKind::Clock,
+        label: "Clock",
         natural_len: len_clock,
         draw: draw_clock,
         click: None,
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::Battery,
+        kind: WidgetKind::Battery,
+        label: "Battery",
         natural_len: len_battery,
         draw: draw_battery,
         click: None,
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::Media,
+        kind: WidgetKind::Media,
+        label: "Media Player",
         natural_len: len_media,
         draw: draw_media,
         click: Some(click_media),
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::PowerMenu,
+        kind: WidgetKind::PowerMenu,
+        label: "Power Menu",
         natural_len: len_power,
         draw: draw_power,
         click: Some(click_power),
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::Bluetooth,
+        kind: WidgetKind::Bluetooth,
+        label: "Bluetooth",
         natural_len: len_bluetooth,
         draw: draw_bluetooth,
         click: Some(click_bluetooth),
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::Tray,
+        kind: WidgetKind::Tray,
+        label: "System Tray",
         natural_len: len_tray,
         draw: draw_tray,
         click: Some(click_tray),
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::Workspaces,
+        kind: WidgetKind::Workspaces,
+        label: "Workspaces",
         natural_len: len_workspaces,
         draw: draw_workspaces,
         click: Some(click_workspaces),
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::Cpu,
+        kind: WidgetKind::Cpu,
+        label: "CPU",
         natural_len: len_cpu,
         draw: draw_cpu,
         click: None,
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::Ram,
+        kind: WidgetKind::Ram,
+        label: "RAM",
         natural_len: len_ram,
         draw: draw_ram,
         click: Some(click_ram),
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::Network,
+        kind: WidgetKind::Network,
+        label: "Network",
         natural_len: len_network,
         draw: draw_network,
         click: Some(click_network),
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::Volume,
+        kind: WidgetKind::Volume,
+        label: "Volume",
         natural_len: len_volume,
         draw: draw_volume,
         click: Some(click_volume),
     },
     WidgetSpec {
-        kind: crate::config::WidgetKind::KbdLayout,
+        kind: WidgetKind::KbdLayout,
+        label: "Keyboard Layout",
         natural_len: len_kblayout,
         draw: draw_kblayout,
         click: Some(click_kblayout),
     },
 ];
 
-pub(crate) fn spec_for(kind: crate::config::WidgetKind) -> Option<&'static WidgetSpec> {
+pub(crate) fn spec_for(kind: WidgetKind) -> Option<&'static WidgetSpec> {
     WIDGETS.iter().find(|s| s.kind == kind)
+}
+
+/// El orden en que los widgets aparecen en el panel de Ajustes: el de `WIDGETS`.
+/// Ya no hay una segunda lista que mantener sincronizada a mano.
+pub(crate) fn widget_kind_order() -> Vec<WidgetKind> {
+    WIDGETS.iter().map(|s| s.kind).collect()
+}
+
+/// Nombre que muestra Ajustes. Sale de la tabla, no de un `match` aparte.
+pub(crate) fn widget_label(kind: WidgetKind) -> &'static str {
+    spec_for(kind).map(|s| s.label).unwrap_or("?")
 }
 
 // ----- clicks -----

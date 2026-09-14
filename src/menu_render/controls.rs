@@ -8,7 +8,7 @@ pub(crate) fn draw_widget_chips(
     _y: f32,
 ) {
     use crate::menu::{
-        WIDGET_COL_GAP, WIDGET_GROUP_LABEL_H, WIDGET_KIND_ORDER, widget_chip_layout, widget_label,
+        WIDGET_COL_GAP, WIDGET_GROUP_LABEL_H, widget_chip_layout, widget_kind_order, widget_label,
     };
     let s = args.render_scale;
     let settings = &args.dock.config.settings;
@@ -44,7 +44,7 @@ pub(crate) fn draw_widget_chips(
     let accent_c = accent(settings);
     let on_accent = on_accent_hex(settings);
     let text_c = text_hex(settings);
-    for kind in WIDGET_KIND_ORDER {
+    for kind in widget_kind_order() {
         let Some(r) = layout.rects.iter().find(|r| r.kind == kind) else {
             continue;
         };

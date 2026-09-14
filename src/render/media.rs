@@ -147,7 +147,7 @@ pub(super) const MEDIA_MAX_TEXT_W: f32 = 22.0;
 pub(super) const MEDIA_WIDE_TEXT_W: f32 = 65.0;
 pub(super) const MEDIA_WIDE_THRESHOLD: f32 = 250.0;
 
-pub(super) fn media_ideal_len(is_vertical: bool, render_scale: f32, width_scale: f32) -> f32 {
+pub(crate) fn media_ideal_len(is_vertical: bool, render_scale: f32, width_scale: f32) -> f32 {
     if is_vertical {
         let side = 26.0 * render_scale;
         side + 12.0 * render_scale + 60.0 * render_scale * width_scale
@@ -359,7 +359,7 @@ pub fn media_toggle_hit(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_media_widget(
+pub(crate) fn draw_media_widget(
     pixmap: &mut Pixmap,
     icon_cache: &mut IconCache,
     text_cache: &mut TextCache,

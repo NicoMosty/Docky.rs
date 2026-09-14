@@ -32,7 +32,7 @@ fn first_center(count: usize, bar_len: f32, bar_start: f32, render_scale: f32) -
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_workspaces_widget(
+pub(crate) fn draw_workspaces_widget(
     pixmap: &mut Pixmap,
     workspaces: &[crate::widgets::WorkspaceInfo],
     marquee: &mut MarqueeState,

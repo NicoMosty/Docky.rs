@@ -260,7 +260,7 @@ fn draw_wifi_icon(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_volume_widget(
+pub(crate) fn draw_volume_widget(
     pixmap: &mut Pixmap,
     text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,
@@ -301,7 +301,7 @@ pub(super) fn draw_volume_widget(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_network_widget(
+pub(crate) fn draw_network_widget(
     pixmap: &mut Pixmap,
     _text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,
@@ -327,7 +327,7 @@ pub(super) fn draw_network_widget(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_kblayout_widget(
+pub(crate) fn draw_kblayout_widget(
     pixmap: &mut Pixmap,
     text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,

@@ -14,6 +14,7 @@ mod screenshot;
 mod tray;
 mod usage;
 mod wallpaper;
+mod widget;
 mod widgets;
 
 use app::App;

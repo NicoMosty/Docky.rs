@@ -1,12 +1,15 @@
 use super::*;
 
+// ----- la tabla de widgets vive en la raiz del crate (ver `src/widget.rs`) -----
+use crate::widget::{Canvas, Ctx, spec_for};
+
 pub(crate) struct WidgetRect {
-    pub(super) kind: crate::config::WidgetKind,
-    pub(super) slot: crate::config::WidgetSlot,
-    pub(super) x: f32,
-    pub(super) y: f32,
-    pub(super) w: f32,
-    pub(super) h: f32,
+    pub(crate) kind: crate::config::WidgetKind,
+    pub(crate) slot: crate::config::WidgetSlot,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) w: f32,
+    pub(crate) h: f32,
 }
 
 pub(super) const WIDGET_GAP: f32 = 6.0;
@@ -212,7 +215,7 @@ pub(super) fn widget_natural_len(
     (spec.natural_len)(&cx)
 }
 
-pub(super) fn text_widget_len(label: &str, is_vertical: bool, render_scale: f32) -> f32 {
+pub(crate) fn text_widget_len(label: &str, is_vertical: bool, render_scale: f32) -> f32 {
     let icon_side = 12.0 * render_scale;
     if is_vertical {
         icon_side + 5.0 * render_scale + text_width_estimate_render(label, 8.5 * render_scale)
@@ -220,7 +223,7 @@ pub(super) fn text_widget_len(label: &str, is_vertical: bool, render_scale: f32)
         icon_side + 6.0 * render_scale + text_width_estimate_render(label, 8.5 * render_scale)
     }
 }
-pub(super) fn percentage_widget_len(pct: Option<u8>, is_vertical: bool, render_scale: f32) -> f32 {
+pub(crate) fn percentage_widget_len(pct: Option<u8>, is_vertical: bool, render_scale: f32) -> f32 {
     let Some(pct) = pct else { return 0.0 };
     text_widget_len(&format!("{pct}%"), is_vertical, render_scale)
 }
@@ -505,6 +508,9 @@ mod hit_layout_tests {
     // así que el test fuerza el valor con el que apareció.
     use super::*;
     use crate::config::WidgetKind;
+    // ----- solo lo usa el test de aca abajo: a nivel de modulo el build sin
+    // tests lo marcaria `unused` (y el auto-fix lo borraria, rompiendo el test) -----
+    use crate::widget::WIDGETS;
     use crate::widgets::{BatteryState, KbLayout, NetworkInfo, WidgetSnapshot};
 
     const SCALE_DEL_BUG: f32 = 1.2166064;
@@ -654,28 +660,35 @@ mod hit_layout_tests {
         );
     }
 
-    /// `WIDGETS` tiene que cubrir TODOS los widgets del enum. Antes lo
-    /// garantizaba la exhaustividad de los dos `match`; ahora que no hay `match`,
-    /// es lo unico que evita que un widget exista en el enum y no se pueda medir
-    /// ni dibujar. Se itera `WIDGET_KIND_ORDER` (la lista del panel de ajustes,
-    /// que por construccion tiene que estar completa: si un widget no esta ahi el
-    /// usuario no lo puede agregar a la barra).
+    /// `WIDGETS` tiene que cubrir TODAS las variantes del enum. La lista de aca
+    /// abajo esta escrita A MANO a proposito: es el unico testigo independiente
+    /// que queda. Antes lo garantizaba la exhaustividad del `match` de
+    /// `widget_label`, y ese `match` desaparecio cuando la etiqueta paso a ser un
+    /// campo de la tabla (paso 2). Si el enum crece y no se agrega ni aca ni en
+    /// `WIDGETS`, el widget queda muerto: no rompe nada, pero no se puede poner
+    /// en la barra.
     #[test]
-    fn la_tabla_cubre_todos_los_widgets_del_panel() {
+    fn la_tabla_cubre_todas_las_variantes_del_enum() {
         let s = settings();
         let w = snapshot();
-        for kind in crate::menu::WIDGET_KIND_ORDER {
-            assert!(
-                spec_for(kind).is_some(),
-                "{kind:?} esta en el panel de ajustes pero no en WIDGETS"
-            );
+        for kind in [
+            WidgetKind::Clock,
+            WidgetKind::Battery,
+            WidgetKind::Media,
+            WidgetKind::PowerMenu,
+            WidgetKind::Bluetooth,
+            WidgetKind::Tray,
+            WidgetKind::Workspaces,
+            WidgetKind::Cpu,
+            WidgetKind::Ram,
+            WidgetKind::Network,
+            WidgetKind::Volume,
+            WidgetKind::KbdLayout,
+        ] {
+            assert!(spec_for(kind).is_some(), "{kind:?} falta en WIDGETS");
             // Y medirlo no puede paniquear.
             let _ = widget_natural_len(kind, &s, &w, 1, false, CROSS, SCALE_DEL_BUG);
         }
-        assert_eq!(
-            WIDGETS.len(),
-            crate::menu::WIDGET_KIND_ORDER.len(),
-            "WIDGETS y el panel de ajustes no tienen el mismo tamano"
-        );
+        assert_eq!(WIDGETS.len(), 12, "la tabla cambio de tamano");
     }
 }

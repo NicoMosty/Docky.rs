@@ -80,7 +80,7 @@ pub fn tray_icon_center(
         ))
     }
 }
-pub(super) fn tray_geometry(
+pub(crate) fn tray_geometry(
     tray_count: usize,
     is_vertical: bool,
     zw: f32,
@@ -95,7 +95,7 @@ pub(super) fn tray_geometry(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_tray_widget(
+pub(crate) fn draw_tray_widget(
     pixmap: &mut Pixmap,
     icon_cache: &mut IconCache,
     tray: &[crate::tray::TrayIcon],

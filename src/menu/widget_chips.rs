@@ -7,42 +7,14 @@ pub const WIDGET_COL_GAP: f32 = 10.0;
 pub const WIDGET_GROUP_LABEL_H: f32 = 16.0;
 pub const WIDGET_SECTION_GAP: f32 = 10.0;
 
-pub const WIDGET_KIND_ORDER: [WidgetKind; 12] = [
-    WidgetKind::Clock,
-    WidgetKind::Battery,
-    WidgetKind::Media,
-    WidgetKind::PowerMenu,
-    WidgetKind::Bluetooth,
-    WidgetKind::Tray,
-    WidgetKind::Workspaces,
-    WidgetKind::Cpu,
-    WidgetKind::Ram,
-    WidgetKind::Network,
-    WidgetKind::Volume,
-    WidgetKind::KbdLayout,
-];
-
-pub fn widget_label(kind: WidgetKind) -> &'static str {
-    match kind {
-        WidgetKind::Clock => "Clock",
-        WidgetKind::Battery => "Battery",
-        WidgetKind::Media => "Media Player",
-        WidgetKind::PowerMenu => "Power Menu",
-        WidgetKind::Bluetooth => "Bluetooth",
-        WidgetKind::Tray => "System Tray",
-        WidgetKind::Workspaces => "Workspaces",
-        WidgetKind::Cpu => "CPU",
-        WidgetKind::Ram => "RAM",
-        WidgetKind::Network => "Network",
-        WidgetKind::Volume => "Volume",
-        WidgetKind::KbdLayout => "Keyboard Layout",
-    }
-}
+// ----- La lista y las etiquetas salen de la tabla (`src/widget.rs`): antes eran
+// una tercera y una cuarta copia a mano de los 12 variantes. Se re-exportan para
+// que `menu_render` siga entrando por `crate::menu::…` -----
+pub(crate) use crate::widget::{widget_kind_order, widget_label};
 
 fn widget_available(settings: &DockSettings) -> Vec<WidgetKind> {
-    WIDGET_KIND_ORDER
-        .iter()
-        .copied()
+    widget_kind_order()
+        .into_iter()
         .filter(|k| !settings.widgets.iter().any(|p| p.kind == *k))
         .collect()
 }

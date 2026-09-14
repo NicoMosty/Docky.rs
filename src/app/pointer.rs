@@ -166,7 +166,7 @@ impl App {
                                 tray_count,
                                 x,
                                 y,
-                                render::WidgetClick::Left,
+                                crate::widget::WidgetClick::Left,
                                 kind,
                             );
                             if let Some(action) = accion {
@@ -222,7 +222,7 @@ impl App {
                                     tray_count,
                                     x,
                                     y,
-                                    render::WidgetClick::Right,
+                                    crate::widget::WidgetClick::Right,
                                     kind,
                                 )
                             });
@@ -268,7 +268,7 @@ impl App {
                         tray_count,
                         x,
                         y,
-                        render::WidgetClick::Wheel { up: subir },
+                        crate::widget::WidgetClick::Wheel { up: subir },
                         kind,
                     )
                 });
@@ -279,10 +279,6 @@ impl App {
             _ => {}
         }
     }
-}
-
-#[cfg(test)]
-mod wheel_tests {
 
     /// Ejecuta lo que la tabla de widgets decidió.
     ///
@@ -290,8 +286,8 @@ mod wheel_tests {
     /// la app, y está acá y no en la tabla porque varias acciones necesitan
     /// `&mut App` (abrir el menú de apagado, el panel de volumen, el menú del
     /// tray) o el estado del tray, que no vive en el widget.
-    fn run_widget_action(&mut self, action: render::WidgetAction, qh: &QueueHandle<App>) {
-        use render::WidgetAction as A;
+    fn run_widget_action(&mut self, action: crate::widget::WidgetAction, qh: &QueueHandle<App>) {
+        use crate::widget::WidgetAction as A;
         match action {
             A::MediaToggle => widgets::media_toggle(),
             A::OpenPowerMenu => self.open_power_menu(qh),
@@ -385,19 +381,23 @@ fn widget_action(
     tray_count: usize,
     x: f64,
     y: f64,
-    click: render::WidgetClick,
+    click: crate::widget::WidgetClick,
     kind: crate::config::WidgetKind,
-) -> Option<render::WidgetAction> {
-    let click_fn = render::spec_for(kind)?.click?;
+) -> Option<crate::widget::WidgetAction> {
+    let click_fn = crate::widget::spec_for(kind)?.click?;
     // ----- las tres sub-zonas se resuelven aca: asi las decisiones de la tabla
     // son puras (y testeables) y no dependen del `Dock` -----
-    let cx = render::ClickCtx {
+    let cx = crate::widget::ClickCtx {
         click,
         tray_index: render::tray_icon_hit(dock, widgets, tray_count, x, y),
         workspace_id: render::workspace_dot_hit(dock, widgets, tray_count, x, y),
         media_toggle: render::media_toggle_hit(dock, widgets, tray_count, x, y),
     };
     click_fn(&cx)
+}
+
+#[cfg(test)]
+mod wheel_tests {
     // ----- el signo del eje vertical es lo que se equivocó: sin este test la
     // rueda hacía lo contrario (arriba bajaba el volumen). -----
     use super::wheel_raise;
