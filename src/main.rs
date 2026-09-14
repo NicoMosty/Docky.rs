@@ -542,6 +542,7 @@ fn main() -> anyhow::Result<()> {
         }
         if sys_tick_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
             app.refresh_sys(&qh);
+            app.refresh_custom(&qh);
         }
         if tray_tick_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
             app.sync_tray_layout(&qh);

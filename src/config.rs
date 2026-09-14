@@ -46,6 +46,11 @@ pub enum WidgetKind {
     Network,
     Volume,
     KbdLayout,
+    /// Widget con script, direccionado por su posición en
+    /// `DockSettings.custom_widgets`. El payload es un índice, no una
+    /// identidad: todos los payloads usan la misma entrada genérica de la
+    /// tabla y dibujan su salida en caché.
+    Custom(u16),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +112,53 @@ fn default_true() -> bool {
 
 fn default_hide_delay() -> u64 {
     1200
+}
+
+fn default_custom_interval_ms() -> u64 {
+    30_000
+}
+
+fn default_custom_timeout_ms() -> u64 {
+    500
+}
+
+fn default_custom_max_chars() -> usize {
+    64
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomWidgetSource {
+    /// `false` (el default) significa que el comando nunca arranca, aunque un
+    /// `WidgetKind::Custom` apunte a esta fuente.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Comando de shell cuya primera línea de salida se vuelve el texto del widget.
+    #[serde(default)]
+    pub command: String,
+    /// Ritmo de sondeo. El tick de sistema de dos segundos es la granularidad
+    /// más fina disponible, así que un valor menor significa "en cada tick de
+    /// sistema".
+    #[serde(default = "default_custom_interval_ms")]
+    pub interval_ms: u64,
+    /// Techo de reloj por ejecución del proceso hijo.
+    #[serde(default = "default_custom_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Presupuesto de texto ya renderizado, contado en caracteres (no en bytes).
+    #[serde(default = "default_custom_max_chars")]
+    pub max_chars: usize,
+}
+
+impl Default for CustomWidgetSource {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: String::new(),
+            interval_ms: default_custom_interval_ms(),
+            timeout_ms: default_custom_timeout_ms(),
+            max_chars: default_custom_max_chars(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +249,11 @@ pub struct DockSettings {
     pub widgets: Vec<WidgetPlacement>,
     #[serde(default)]
     pub custom_palettes: Vec<CustomPalette>,
+    /// Fuentes de widgets con script, direccionadas por posición como
+    /// `WidgetKind::Custom(index)`. Vacío por defecto; a propósito no tiene
+    /// control en el panel de Ajustes en esta prueba mínima del framework.
+    #[serde(default)]
+    pub custom_widgets: Vec<CustomWidgetSource>,
 }
 
 impl Default for DockSettings {
@@ -255,6 +312,7 @@ impl Default for DockSettings {
             autohide_delay_ms: default_hide_delay(),
             widgets: default_widgets(),
             custom_palettes: Vec::new(),
+            custom_widgets: Vec::new(),
         }
     }
 }

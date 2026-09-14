@@ -16,7 +16,7 @@ use crate::config::WidgetKind;
 use crate::render::{
     MarqueeState, WidgetColors, WidgetRect, draw_battery_widget, draw_bluetooth_icon,
     draw_clock_widget, draw_cpu_widget, draw_kblayout_widget, draw_media_widget,
-    draw_network_widget, draw_power_widget, draw_ram_widget, draw_tray_widget,
+    draw_network_widget, draw_power_widget, draw_ram_widget, draw_text_widget, draw_tray_widget,
     draw_volume_widget, draw_widget_button_bg, draw_workspaces_widget, media_ideal_len,
     percentage_widget_len, text_widget_len, text_width_estimate_render, tray_geometry,
     volume_content_len, workspaces_geometry,
@@ -93,6 +93,7 @@ pub(crate) enum WidgetAction {
 /// `bar_len`, `colors` y `hovered` NO van aca porque no existen cuando se mide
 /// (el reparto no tiene paleta ni largo de barra): viven en `Canvas`.
 pub(crate) struct Ctx<'a> {
+    pub(super) kind: WidgetKind,
     pub(super) widgets: &'a WidgetSnapshot,
     pub(super) settings: &'a crate::config::DockSettings,
     /// Ya viene multiplicada por `widget_scale`, igual que en el dibujo.
@@ -147,9 +148,11 @@ pub(crate) struct WidgetSpec {
     pub(crate) click: Option<fn(&ClickCtx) -> Option<WidgetAction>>,
 }
 
-/// Los 12 widgets del enum, en el orden del enum. Es la unica lista: reemplazo
-/// el `match` de `widget_natural_len`, el `match` de `draw_widgets`,
-/// `WIDGET_KIND_ORDER` y el `match` de `widget_label`.
+/// Los 12 widgets fijos del enum más la entrada genérica para `Custom`. Esa
+/// entrada cubre todos los payloads: el índice vive en el `WidgetRect` que ya
+/// recibe el dibujo y en el `kind` que ahora lleva `Ctx` al medir. Es la unica
+/// lista: reemplaza el `match` de `widget_natural_len`, el `match` de
+/// `draw_widgets`, `WIDGET_KIND_ORDER` y el `match` de `widget_label`.
 ///
 /// ponytail: los adaptadores de abajo todavia desarman el `WidgetRect` para
 /// llamar a las `draw_*_widget`, que siguen recibiendo `(zx, zy, zw, zh)`. Por
@@ -241,16 +244,41 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
         draw: draw_kblayout,
         click: Some(click_kblayout),
     },
+    WidgetSpec {
+        kind: WidgetKind::Custom(0),
+        label: "Custom widget",
+        natural_len: len_custom,
+        draw: draw_custom,
+        click: None,
+    },
 ];
 
 pub(crate) fn spec_for(kind: WidgetKind) -> Option<&'static WidgetSpec> {
-    WIDGETS.iter().find(|s| s.kind == kind)
+    WIDGETS
+        .iter()
+        .find(|s| s.kind == kind)
+        .or_else(|| matches!(kind, WidgetKind::Custom(_)).then(custom_spec))
 }
 
-/// El orden en que los widgets aparecen en el panel de Ajustes: el de `WIDGETS`.
+/// La única entrada con payload: todos los `Custom(i)` comparten medida,
+/// dibujo y etiqueta, y el índice real viaja en el `kind` que ya reparte el
+/// layout.
+fn custom_spec() -> &'static WidgetSpec {
+    WIDGETS
+        .iter()
+        .find(|s| matches!(s.kind, WidgetKind::Custom(_)))
+        .expect("WIDGETS necesita una entrada Custom")
+}
+
+/// El orden en que los widgets aparecen en el panel de Ajustes: el de `WIDGETS`, sin la entrada
+/// genérica. Un `Custom(i)` se configura a mano en el JSON: su índice no se puede elegir en un chip.
 /// Ya no hay una segunda lista que mantener sincronizada a mano.
 pub(crate) fn widget_kind_order() -> Vec<WidgetKind> {
-    WIDGETS.iter().map(|s| s.kind).collect()
+    WIDGETS
+        .iter()
+        .filter(|s| !matches!(s.kind, WidgetKind::Custom(_)))
+        .map(|s| s.kind)
+        .collect()
 }
 
 /// Nombre que muestra Ajustes. Sale de la tabla, no de un `match` aparte.
@@ -510,6 +538,35 @@ fn draw_kblayout(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
     false
 }
 
+// ----- widget con script -----
+
+fn len_custom(cx: &Ctx) -> f32 {
+    let Some(text) = crate::widgets::custom_text_for(cx.settings, cx.widgets, cx.kind) else {
+        return 0.0;
+    };
+    text_widget_len(text, cx.is_vertical, cx.render_scale)
+}
+
+fn draw_custom(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    let Some(label) = crate::widgets::custom_text_for(cx.settings, cx.widgets, cx.kind) else {
+        return false;
+    };
+    draw_text_widget(
+        canvas.pixmap,
+        canvas.text_cache,
+        label,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+        canvas.is_hovered(r),
+    );
+    false
+}
+
 // ----- bateria -----
 
 fn len_battery(cx: &Ctx) -> f32 {
@@ -675,9 +732,9 @@ mod click_tests {
     // `app/pointer.rs` que no custodiaba ningun test: era el unico contrato de un
     // widget sin guard. -----
     use super::*;
+    use crate::config::WidgetKind;
     use WidgetAction as A;
     use WidgetClick::{Left, Right, Wheel};
-    use crate::config::WidgetKind;
 
     fn sin_zonas(click: WidgetClick) -> ClickCtx {
         ClickCtx {
@@ -704,7 +761,11 @@ mod click_tests {
             );
             assert_eq!(decidir(kind, &sin_zonas(Left)), None, "{kind:?}");
             assert_eq!(decidir(kind, &sin_zonas(Right)), None, "{kind:?}");
-            assert_eq!(decidir(kind, &sin_zonas(Wheel { up: true })), None, "{kind:?}");
+            assert_eq!(
+                decidir(kind, &sin_zonas(Wheel { up: true })),
+                None,
+                "{kind:?}"
+            );
         }
     }
 
@@ -759,7 +820,10 @@ mod click_tests {
             Some(A::MediaToggle)
         );
         // ----- Media tiene zonas anchas: estar sobre el widget no alcanza -----
-        assert_eq!(decidir(WidgetKind::Media, &con_zona(None, None, false)), None);
+        assert_eq!(
+            decidir(WidgetKind::Media, &con_zona(None, None, false)),
+            None
+        );
     }
 
     #[test]
@@ -802,7 +866,11 @@ mod click_tests {
             WidgetKind::Network,
             WidgetKind::Tray,
         ] {
-            assert_eq!(decidir(kind, &sin_zonas(Wheel { up: true })), None, "{kind:?}");
+            assert_eq!(
+                decidir(kind, &sin_zonas(Wheel { up: true })),
+                None,
+                "{kind:?}"
+            );
         }
     }
 }

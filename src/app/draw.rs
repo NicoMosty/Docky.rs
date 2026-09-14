@@ -480,6 +480,29 @@ impl App {
         self.request_redraw(qh);
     }
 
+    pub(crate) fn refresh_custom(&mut self, qh: &QueueHandle<Self>) {
+        // ----- el tick de sistema corre siempre, incluso oculto: un script
+        // externo no se lanza sin un `Custom` colocado ni con el dock oculto -----
+        let placed = self
+            .dock
+            .config
+            .settings
+            .widgets
+            .iter()
+            .any(|w| matches!(w.kind, crate::config::WidgetKind::Custom(_)));
+        if !placed || !self.dock_visible {
+            return;
+        }
+        let changed = self.widgets.refresh_custom(
+            &self.dock.config.settings.custom_widgets,
+            std::time::Instant::now(),
+        );
+        if changed {
+            self.sync_widget_bar_len();
+            self.relayout_dock(qh);
+        }
+    }
+
     pub(crate) fn refresh_sys(&mut self, qh: &QueueHandle<Self>) {
         let active = self.dock.config.settings.widgets.iter().any(|w| {
             matches!(

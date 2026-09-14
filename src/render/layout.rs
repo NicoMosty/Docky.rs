@@ -1,6 +1,7 @@
 use super::*;
 
 // ----- la tabla de widgets vive en la raiz del crate (ver `src/widget.rs`) -----
+use crate::config::WidgetKind;
 use crate::widget::{Canvas, Ctx, spec_for};
 
 pub(crate) struct WidgetRect {
@@ -199,6 +200,7 @@ pub(super) fn widget_natural_len(
 ) -> f32 {
     // ----- la tabla es la unica lista de widgets -----
     let cx = Ctx {
+        kind,
         widgets,
         settings,
         render_scale,
@@ -209,8 +211,8 @@ pub(super) fn widget_natural_len(
     let Some(spec) = spec_for(kind) else {
         // ----- si el enum crece sin entrada en la tabla, `WIDGETS` deja de estar
         // completo. Antes lo garantizaba la exhaustividad del `match`; ahora lo
-        // garantiza el test `la_tabla_cubre_todos_los_widgets_del_panel` -----
-        unreachable!("{kind:?} no esta en WIDGETS (render/widget_spec.rs)")
+        // garantiza el test `la_tabla_cubre_todas_las_variantes_del_enum` -----
+        unreachable!("{kind:?} no esta en WIDGETS (src/widget.rs)")
     };
     (spec.natural_len)(&cx)
 }
@@ -239,8 +241,6 @@ pub(super) fn draw_widgets(
     advance_ws: bool,
     render_scale: f32,
 ) -> bool {
-    use crate::config::WidgetKind;
-
     let s = &dock.config.settings;
     let (base_w, base_h) = dock.base_size();
     let w = base_w as f32 * render_scale;
@@ -266,20 +266,24 @@ pub(super) fn draw_widgets(
 
     let is_vertical = dock.is_vertical();
     let tray_count = tray.len();
-    let cx = Ctx {
-        widgets,
-        settings: s,
-        render_scale,
-        is_vertical,
-        cross_len: if is_vertical { w } else { h },
-        tray_count,
-    };
+    let cross_len = if is_vertical { w } else { h };
     let mut animating = false;
     for r in layout_widgets(s, widgets, tray_count, is_vertical, w, h, render_scale) {
+        // ----- el `kind` viaja en el contexto para que la entrada genérica
+        // `Custom` sepa qué texto en caché tiene que medir y dibujar -----
+        let cx = Ctx {
+            kind: r.kind,
+            widgets,
+            settings: s,
+            render_scale,
+            is_vertical,
+            cross_len,
+            tray_count,
+        };
         // ----- la tabla es la unica lista: si un widget del enum no esta ahi,
         // `WIDGETS` quedo incompleto y conviene que paniquee con el nombre -----
         let Some(spec) = spec_for(r.kind) else {
-            unreachable!("{:?} no esta en WIDGETS (render/widget_spec.rs)", r.kind)
+            unreachable!("{:?} no esta en WIDGETS (src/widget.rs)", r.kind)
         };
         let mut canvas = Canvas {
             pixmap: &mut *pixmap,
@@ -540,6 +544,8 @@ mod hit_layout_tests {
                 online: true,
             },
             kblayout: KbLayout { short: "EN".into() },
+            custom_texts: Vec::new(),
+            custom_last_polls: Vec::new(),
         }
     }
 
@@ -660,7 +666,8 @@ mod hit_layout_tests {
         );
     }
 
-    /// `WIDGETS` tiene que cubrir TODAS las variantes del enum. La lista de aca
+    /// `WIDGETS` tiene que cubrir TODAS las variantes fijas del enum y la entrada
+    /// genérica tiene que cubrir CUALQUIER payload `Custom`. La lista de aca
     /// abajo esta escrita A MANO a proposito: es el unico testigo independiente
     /// que queda. Antes lo garantizaba la exhaustividad del `match` de
     /// `widget_label`, y ese `match` desaparecio cuando la etiqueta paso a ser un
@@ -689,6 +696,31 @@ mod hit_layout_tests {
             // Y medirlo no puede paniquear.
             let _ = widget_natural_len(kind, &s, &w, 1, false, CROSS, SCALE_DEL_BUG);
         }
-        assert_eq!(WIDGETS.len(), 12, "la tabla cambio de tamano");
+        // ----- todos los payloads usan la misma entrada genérica -----
+        let generica = spec_for(WidgetKind::Custom(0)).expect("falta la entrada Custom");
+        for index in [0, 1, 42, u16::MAX] {
+            let kind = WidgetKind::Custom(index);
+            let spec = spec_for(kind).expect("falta el payload Custom");
+            assert!(
+                std::ptr::eq(spec, generica),
+                "{kind:?} no usa la entrada Custom"
+            );
+            let _ = widget_natural_len(kind, &s, &w, 1, false, CROSS, SCALE_DEL_BUG);
+        }
+        assert_eq!(WIDGETS.len(), 13, "la tabla cambio de tamano");
+        // ----- Ajustes sigue ofreciendo sólo los 12 fijos: el índice de un
+        // `Custom` se escribe a mano en el JSON -----
+        let orden = crate::widget::widget_kind_order();
+        assert_eq!(orden.len(), 12, "Ajustes cambio de tamano");
+        assert!(
+            !orden
+                .iter()
+                .any(|kind| matches!(kind, WidgetKind::Custom(_))),
+            "Ajustes no ofrece el widget genérico"
+        );
+        assert_eq!(
+            crate::widget::widget_label(WidgetKind::Custom(7)),
+            "Custom widget"
+        );
     }
 }

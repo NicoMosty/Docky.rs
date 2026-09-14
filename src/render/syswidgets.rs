@@ -352,3 +352,34 @@ pub(crate) fn draw_kblayout_widget(
         is_vertical,
     );
 }
+
+/// Pastilla genérica de texto para widgets con script: mismo fondo que el
+/// botón de WiFi y la misma etiqueta centrada que el layout de teclado.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_text_widget(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    label: &str,
+    zx: f32,
+    zy: f32,
+    zw: f32,
+    zh: f32,
+    render_scale: f32,
+    colors: &WidgetColors,
+    is_vertical: bool,
+    hovered: bool,
+) {
+    draw_widget_button_bg(pixmap, zx, zy, zw, zh, render_scale, colors, hovered);
+    draw_centered_label(
+        pixmap,
+        text_cache,
+        label,
+        zx,
+        zy,
+        zw,
+        zh,
+        render_scale,
+        colors,
+        is_vertical,
+    );
+}

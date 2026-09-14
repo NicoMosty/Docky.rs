@@ -12,8 +12,8 @@ pub use tray::*;
 mod clock_battery;
 mod media;
 pub use media::*;
-mod power_bluetooth;
 mod cpu_ram;
+mod power_bluetooth;
 mod workspaces;
 pub use workspaces::*;
 mod syswidgets;
@@ -31,7 +31,9 @@ pub(crate) use cpu_ram::{draw_cpu_widget, draw_ram_widget};
 pub(crate) use layout::{WidgetRect, percentage_widget_len, text_widget_len};
 pub(crate) use media::{draw_media_widget, media_ideal_len};
 pub(crate) use power_bluetooth::{draw_bluetooth_icon, draw_power_widget};
-pub(crate) use syswidgets::{draw_kblayout_widget, draw_network_widget, draw_volume_widget};
+pub(crate) use syswidgets::{
+    draw_kblayout_widget, draw_network_widget, draw_text_widget, draw_volume_widget,
+};
 pub(crate) use tray::{draw_tray_widget, tray_geometry};
 pub(crate) use workspaces::draw_workspaces_widget;
 

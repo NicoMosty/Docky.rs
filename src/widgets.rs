@@ -24,6 +24,117 @@ fn run_with_timeout(
     }
 }
 
+/// Ritmo mínimo de un widget con script. El tick de sistema de dos segundos es
+/// el que despierta el chequeo, así que un intervalo menor significa "en cada
+/// tick de sistema" en vez de arrancar otro temporizador con el dock oculto.
+pub fn custom_poll_interval(source: &crate::config::CustomWidgetSource) -> Duration {
+    Duration::from_millis(source.interval_ms.max(2_000))
+}
+
+/// Techo por ejecución de un widget con script. El bucle ya confía en procesos
+/// cortos; este techo es más estricto para que un script lento no domine un
+/// refresco de sistema.
+pub fn custom_command_timeout(source: &crate::config::CustomWidgetSource) -> Duration {
+    Duration::from_millis(source.timeout_ms.clamp(100, 500))
+}
+
+/// Presupuesto de texto de un widget personalizado, contado en caracteres
+/// Unicode (no en bytes) para que `max_chars` no parta un carácter multibyte.
+pub fn custom_text_limit(source: &crate::config::CustomWidgetSource) -> usize {
+    source.max_chars.clamp(1, 128)
+}
+
+/// Una fuente apagada o sin comando no tiene salida visible, aunque la caché
+/// todavía guarde una línea vieja. Se usa en la medición, el dibujo y el
+/// refresco para que los tres vean lo mismo.
+fn custom_source_active(source: &crate::config::CustomWidgetSource) -> bool {
+    source.enabled && !source.command.trim().is_empty()
+}
+
+/// Deja pasar una ejecución sólo si la fuente está activa y ya venció su
+/// intervalo. Quien llama también tiene que mirar colocación y visibilidad del
+/// dock; este helper no conoce ninguna de las dos.
+pub fn should_poll_custom(
+    source: &crate::config::CustomWidgetSource,
+    last_poll: Option<Instant>,
+    now: Instant,
+) -> bool {
+    if !custom_source_active(source) {
+        return false;
+    }
+    last_poll.is_none_or(|last| now.duration_since(last) >= custom_poll_interval(source))
+}
+
+/// Corre un comando de shell configurado por el usuario y normaliza su primera
+/// línea de salida. Lo que no se puede volver texto visible (fallo de arranque,
+/// subproceso matado, línea vacía, estado distinto de cero) conserva el valor
+/// anterior en caché.
+pub fn read_custom_text(source: &crate::config::CustomWidgetSource) -> Option<String> {
+    let command = source.command.trim();
+    if command.is_empty() {
+        return None;
+    }
+    let mut shell = std::process::Command::new("sh");
+    shell.arg("-c").arg(command);
+    let output = run_with_timeout(shell, custom_command_timeout(source))?;
+    if !output.status.success() {
+        return None;
+    }
+    clean_custom_text(
+        &String::from_utf8_lossy(&output.stdout),
+        custom_text_limit(source),
+    )
+}
+
+/// Normaliza una línea de salida igual para medir y dibujar. El mismo texto
+/// tiene que manejar las dos para que la pastilla nunca supere su ancho
+/// reservado.
+pub fn clean_custom_text(output: &str, max_chars: usize) -> Option<String> {
+    let line = output.lines().next().unwrap_or_default().trim();
+    if line.is_empty() {
+        return None;
+    }
+    let mut text = String::with_capacity(line.len().min(256));
+    for c in line.chars() {
+        if c == '\t' {
+            text.push(' ');
+        } else if !c.is_control() {
+            text.push(c);
+        }
+    }
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    let limit = max_chars.max(1);
+    if text.chars().count() > limit {
+        Some(text.chars().take(limit).collect())
+    } else {
+        Some(text)
+    }
+}
+
+/// Texto en caché por payload del widget. `None` significa que el widget no
+/// tiene salida visible ahora, incluso cuando su fuente quedó fuera de rango,
+/// está apagada o no trae comando.
+pub fn custom_text_for<'a>(
+    settings: &crate::config::DockSettings,
+    snapshot: &'a WidgetSnapshot,
+    kind: crate::config::WidgetKind,
+) -> Option<&'a str> {
+    let crate::config::WidgetKind::Custom(index) = kind else {
+        return None;
+    };
+    let source = settings.custom_widgets.get(usize::from(index))?;
+    if !custom_source_active(source) {
+        return None;
+    }
+    snapshot
+        .custom_texts
+        .get(usize::from(index))
+        .and_then(|text| text.as_deref())
+}
+
 pub struct MediaInfo {
     pub title: String,
     pub playing: bool,
@@ -86,6 +197,15 @@ pub struct WidgetSnapshot {
     pub volume: Option<(u8, bool)>,
     pub network: NetworkInfo,
     pub kblayout: KbLayout,
+    /// Un texto opcional por widget personalizado con script, alineado por
+    /// posición con `DockSettings.custom_widgets`. Guardar sólo la línea ya
+    /// renderizada (no la salida cruda del proceso) acota la memoria al
+    /// presupuesto de texto configurado.
+    pub custom_texts: Vec<Option<String>>,
+    /// Último intento de sondeo por widget personalizado. Anotar el intento,
+    /// no sólo el éxito, hace que un comando que falla siempre espere su
+    /// intervalo antes de reintentar.
+    pub custom_last_polls: Vec<Option<Instant>>,
 }
 
 impl WidgetSnapshot {
@@ -103,6 +223,8 @@ impl WidgetSnapshot {
             volume: read_volume(),
             network: read_network(),
             kblayout: read_kblayout(),
+            custom_texts: Vec::new(),
+            custom_last_polls: Vec::new(),
         }
     }
 
@@ -153,6 +275,39 @@ impl WidgetSnapshot {
         let battery = read_battery();
         let changed = battery != self.battery;
         self.battery = battery;
+        changed
+    }
+
+    /// `true` si cambió algún texto visible (requiere relayout). Sincroniza las
+    /// cachés con la lista de fuentes y corre sólo las que están activas y
+    /// vencidas. Un comando que falla conserva su texto anterior pero anota el
+    /// intento, para que no reintente en cada tick.
+    pub fn refresh_custom(
+        &mut self,
+        sources: &[crate::config::CustomWidgetSource],
+        now: Instant,
+    ) -> bool {
+        self.custom_texts.resize(sources.len(), None);
+        self.custom_last_polls.resize(sources.len(), None);
+        let mut changed = false;
+        for (index, source) in sources.iter().enumerate() {
+            if !custom_source_active(source) {
+                if self.custom_texts[index].take().is_some() {
+                    changed = true;
+                }
+                continue;
+            }
+            if !should_poll_custom(source, self.custom_last_polls[index], now) {
+                continue;
+            }
+            self.custom_last_polls[index] = Some(now);
+            if let Some(text) = read_custom_text(source)
+                && self.custom_texts[index].as_deref() != Some(text.as_str())
+            {
+                self.custom_texts[index] = Some(text);
+                changed = true;
+            }
+        }
         changed
     }
 }
@@ -1114,5 +1269,99 @@ mod percent_decode_tests {
         let out = run_with_timeout(cmd, Duration::from_secs(5)).expect("debería salir");
         assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hola");
+    }
+}
+
+#[cfg(test)]
+mod custom_widget_tests {
+    use super::*;
+    use crate::config::{DockSettings, WidgetKind};
+
+    fn fuente(command: &str) -> crate::config::CustomWidgetSource {
+        crate::config::CustomWidgetSource {
+            enabled: true,
+            command: command.to_string(),
+            interval_ms: 30_000,
+            timeout_ms: 500,
+            max_chars: 64,
+        }
+    }
+
+    fn ajustes_con(fuentes: Vec<crate::config::CustomWidgetSource>) -> DockSettings {
+        DockSettings {
+            custom_widgets: fuentes,
+            ..Default::default()
+        }
+    }
+
+    fn instantanea(textos: Vec<Option<String>>) -> WidgetSnapshot {
+        let mut snapshot = WidgetSnapshot::refresh();
+        snapshot.custom_last_polls = vec![None; textos.len()];
+        snapshot.custom_texts = textos;
+        snapshot
+    }
+
+    #[test]
+    fn normaliza_la_primera_linea_para_medir_y_dibujar() {
+        assert_eq!(
+            clean_custom_text("  hola\tmundo\u{7}\nsegunda", 64).as_deref(),
+            Some("hola mundo")
+        );
+        assert_eq!(clean_custom_text("abcdef", 3).as_deref(), Some("abc"));
+        // ----- el presupuesto es en caracteres, no en bytes -----
+        assert_eq!(clean_custom_text("áéí", 2).as_deref(), Some("áé"));
+        assert_eq!(clean_custom_text("   \nsegunda", 64), None);
+        assert_eq!(custom_text_limit(&fuente("echo hola")), 64);
+    }
+
+    #[test]
+    fn la_fuente_apagada_o_sin_comando_no_muestra_texto() {
+        let mut apagada = fuente("printf 'hola\\n'");
+        apagada.enabled = false;
+        let ajustes = ajustes_con(vec![apagada]);
+        let snapshot = instantanea(vec![Some("viejo".to_string())]);
+        assert_eq!(
+            custom_text_for(&ajustes, &snapshot, WidgetKind::Custom(0)),
+            None
+        );
+        assert_eq!(
+            custom_text_for(&ajustes, &snapshot, WidgetKind::Clock),
+            None
+        );
+        assert_eq!(
+            custom_text_for(&ajustes, &snapshot, WidgetKind::Custom(7)),
+            None
+        );
+    }
+
+    #[test]
+    fn respeta_el_intervalo_y_conserva_el_texto_si_falla() {
+        let ajustes = ajustes_con(vec![fuente("printf '  hola\\nsegunda\\n'")]);
+        let mut snapshot = instantanea(Vec::new());
+        let ahora = Instant::now();
+        assert!(snapshot.refresh_custom(&ajustes.custom_widgets, ahora));
+        assert_eq!(snapshot.custom_texts, [Some("hola".to_string())]);
+        assert_eq!(snapshot.custom_last_polls, [Some(ahora)]);
+        // ----- el intervalo de 30s todavía no venció -----
+        assert!(!snapshot.refresh_custom(&ajustes.custom_widgets, ahora));
+
+        let ajustes = ajustes_con(vec![fuente("exit 3")]);
+        let mut snapshot = instantanea(vec![Some("viejo".to_string())]);
+        assert!(!snapshot.refresh_custom(&ajustes.custom_widgets, ahora));
+        assert_eq!(snapshot.custom_texts, [Some("viejo".to_string())]);
+        assert_eq!(snapshot.custom_last_polls, [Some(ahora)]);
+    }
+
+    #[test]
+    fn una_fuente_inactiva_limpia_su_cache_sin_correr_nada() {
+        let mut fuente = fuente("exit 3");
+        fuente.enabled = false;
+        let ajustes = ajustes_con(vec![fuente]);
+        let mut snapshot = instantanea(vec![Some("viejo".to_string())]);
+        // ----- si corriera `exit 3`, anotaría el intento y conservaría el
+        // texto; al limpiar sin tocar `last_polls` prueba que no corrió -----
+        assert!(snapshot.refresh_custom(&ajustes.custom_widgets, Instant::now()));
+        assert_eq!(snapshot.custom_texts, [None]);
+        assert_eq!(snapshot.custom_last_polls, [None]);
     }
 }
