@@ -5,8 +5,6 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-calloop = "0.14.4"
-calloop-wayland-source = "0.4.1"
 dirs = "6.0.0"
 env_logger = "0.11.11"
 freedesktop-icons = "0.4.0"
@@ -33,3 +31,11 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# ----- el binario salia de 14.2 MB con la tabla de simbolos adentro y
+# `strip` solo baja 2.75 MB (medido: 14194920 -> 11311696 bytes). -----
+# OJO: NO poner `panic = "abort"`. Es el truco obvio para bajar binario y
+# rompe `catch_unwind`, que es la red de seguridad del reexec (A5/A6):
+# sin unwinding el dock muere de una en vez de relanzarse.
+[profile.release]
+strip = true
