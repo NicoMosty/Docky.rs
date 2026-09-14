@@ -5,15 +5,12 @@ mod config;
 mod desktop;
 mod dock;
 mod icon_browser;
-mod icon_cache;
 mod ipc;
 mod menu;
 mod menu_render;
 mod power;
 mod render;
 mod screenshot;
-mod text;
-mod thumbnail_cache;
 mod tray;
 mod usage;
 mod wallpaper;
@@ -22,7 +19,7 @@ mod widgets;
 use app::App;
 use config::Config;
 use dock::Dock;
-use icon_cache::IconCache;
+use dockyrs_canvas::{IconCache, TextCache, ThumbnailCache};
 use smithay_client_toolkit::{
     compositor::CompositorState,
     output::OutputState,
@@ -34,8 +31,6 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, slot::SlotPool},
 };
-use text::TextCache;
-use thumbnail_cache::ThumbnailCache;
 use wayland_client::{Connection, QueueHandle, globals::registry_queue_init, protocol::wl_output};
 
 pub const ICON_THEME: &str = "WhiteSur";
@@ -288,7 +283,7 @@ fn main() -> anyhow::Result<()> {
         qh.clone(),
     );
 
-    let available_fonts = std::rc::Rc::new(text::list_font_families());
+    let available_fonts = std::rc::Rc::new(dockyrs_canvas::list_font_families());
     let mut text_cache = TextCache::new();
     text_cache.set_default_family(&dock.config.settings.dock_font);
 

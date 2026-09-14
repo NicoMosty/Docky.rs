@@ -1,5 +1,6 @@
-/target
+target/
 .pi/tasks/
+.pi/delegate/
 
 # Python (scripts/)
 __pycache__/

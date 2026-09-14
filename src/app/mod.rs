@@ -3,12 +3,11 @@ use crate::desktop::{self, DesktopEntry};
 use crate::dock;
 use crate::dock::Dock;
 use crate::icon_browser;
-use crate::icon_cache::IconCache;
+use dockyrs_canvas::IconCache;
 use crate::menu;
 use crate::menu_render;
 use crate::render;
-use crate::text::TextCache;
-use crate::thumbnail_cache::ThumbnailCache;
+use dockyrs_canvas::{TextCache, ThumbnailCache};
 use crate::wallpaper::{self, WallpaperEntry};
 use crate::widgets;
 use smithay_client_toolkit::{

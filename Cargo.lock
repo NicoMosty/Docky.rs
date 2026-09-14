@@ -460,21 +460,30 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
+ "dockyrs-canvas",
  "env_logger",
- "freedesktop-icons",
  "image",
  "inotify",
  "libc",
  "log",
- "resvg",
  "serde",
  "serde_json",
  "smithay-client-toolkit",
  "tiny-skia",
- "usvg",
  "wayland-client",
  "wayland-protocols-wlr",
  "zbus",
+]
+
+[[package]]
+name = "dockyrs-canvas"
+version = "0.1.0"
+dependencies = [
+ "freedesktop-icons",
+ "image",
+ "resvg",
+ "tiny-skia",
+ "usvg",
 ]
 
 [[package]]

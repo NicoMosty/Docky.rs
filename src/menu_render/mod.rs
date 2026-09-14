@@ -1,12 +1,11 @@
 use crate::desktop::DesktopEntry;
 use crate::dock::Dock;
-use crate::icon_cache::IconCache;
+use dockyrs_canvas::IconCache;
 use crate::menu::{
     ButtonKind, Control, ControlKind, HitTarget, MENU_PADDING, MenuScreen, OsdKind, STEP_BTN_SIZE,
     WALLPAPER_BACK_ZONE_W, WALLPAPER_GAP, WALLPAPER_PADDING, WallpaperHit,
 };
-use crate::text::TextCache;
-use crate::thumbnail_cache::ThumbnailCache;
+use dockyrs_canvas::{TextCache, ThumbnailCache};
 use crate::wallpaper::WallpaperEntry;
 use tiny_skia::{Paint, Pixmap, Rect, Transform};
 mod app_search;

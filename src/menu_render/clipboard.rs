@@ -4,7 +4,7 @@ use tiny_skia::{Pixmap, PixmapPaint, Transform};
 
 use crate::clipboard::{ClipboardEntry, ScaledPreview};
 use crate::config::DockSettings;
-use crate::text::TextCache;
+use dockyrs_canvas::TextCache;
 
 use super::{
     centered_text_y, draw_text, fill_rrect, menu_radius, panel_bg, rounded_rect_path,

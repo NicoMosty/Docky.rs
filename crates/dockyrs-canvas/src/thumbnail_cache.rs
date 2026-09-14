@@ -3,8 +3,16 @@ use std::path::Path;
 use std::rc::Rc;
 use tiny_skia::{Pixmap, Transform};
 
+use crate::rounded_rect_path;
+
 pub struct ThumbnailCache {
     cache: HashMap<(String, u32, u32), Option<Rc<Pixmap>>>,
+}
+
+impl Default for ThumbnailCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ThumbnailCache {
@@ -72,22 +80,6 @@ pub fn load(path: &Path, w: u32, h: u32, radius: f32) -> Option<Pixmap> {
         Some(&mask),
     );
     Some(clipped)
-}
-
-fn rounded_rect_path(w: f32, h: f32, r: f32) -> tiny_skia::Path {
-    let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
-    let mut pb = tiny_skia::PathBuilder::new();
-    pb.move_to(r, 0.0);
-    pb.line_to(w - r, 0.0);
-    pb.quad_to(w, 0.0, w, r);
-    pb.line_to(w, h - r);
-    pb.quad_to(w, h, w - r, h);
-    pb.line_to(r, h);
-    pb.quad_to(0.0, h, 0.0, h - r);
-    pb.line_to(0.0, r);
-    pb.quad_to(0.0, 0.0, r, 0.0);
-    pb.close();
-    pb.finish().unwrap()
 }
 
 #[cfg(test)]

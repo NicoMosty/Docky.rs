@@ -108,6 +108,12 @@ pub struct TextCache {
     key_buf: String,
 }
 
+impl Default for TextCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TextCache {
     pub fn new() -> Self {
         Self {

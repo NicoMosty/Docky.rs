@@ -1,7 +1,6 @@
 use crate::config::DockEdge;
 use crate::dock::Dock;
-use crate::icon_cache::IconCache;
-use crate::text::TextCache;
+use dockyrs_canvas::{IconCache, TextCache};
 use crate::widgets::{BatteryState, WidgetSnapshot};
 use std::time::Instant;
 use tiny_skia::{Color, Paint, Pixmap, Rect, Transform};

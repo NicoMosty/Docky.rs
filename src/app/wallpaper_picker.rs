@@ -56,7 +56,7 @@ impl App {
         let (result_tx, thumb_result_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             while let Ok((path, w, h)) = request_rx.recv() {
-                let pixmap = crate::thumbnail_cache::load(&path, w, h, thumb_radius);
+                let pixmap = dockyrs_canvas::load_thumbnail(&path, w, h, thumb_radius);
                 if result_tx.send((path, w, h, pixmap)).is_err() {
                     return;
                 }

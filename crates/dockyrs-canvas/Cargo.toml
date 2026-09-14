@@ -1,0 +1,16 @@
+[package]
+name = "dockyrs-canvas"
+version = "0.1.0"
+edition = "2024"
+
+# ----- raster por CPU, sin GPU ni contexto GL: esto es lo que hace que el
+# consumo en reposo sea el piso (1 tick de sistema cada 5 s). Si algun dia se
+# cambia tiny-skia por un backend acelerado, el ahorro de CPU en reposo se
+# pierde: el costo de rasterizar por CPU solo se paga cuando hay algo que
+# redibujar. -----
+[dependencies]
+freedesktop-icons = "0.4.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+resvg = "0.48.1"
+tiny-skia = "0.12.0"
+usvg = "0.48.1"
