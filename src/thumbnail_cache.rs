@@ -32,25 +32,16 @@ impl ThumbnailCache {
 
 // ----- baked corners -----
 pub fn load(path: &Path, w: u32, h: u32, radius: f32) -> Option<Pixmap> {
-    let img = image::open(path).ok()?.into_rgba8();
-    let (iw, ih) = (img.width(), img.height());
-    let target_ratio = w as f32 / h as f32;
-    let src_ratio = iw as f32 / ih as f32;
-    let (cw, ch) = if src_ratio > target_ratio {
-        (
-            ((ih as f32 * target_ratio).round() as u32).min(iw).max(1),
-            ih,
-        )
-    } else {
-        (
-            iw,
-            ((iw as f32 / target_ratio).round() as u32).min(ih).max(1),
-        )
-    };
-    let cx = (iw - cw) / 2;
-    let cy = (ih - ch) / 2;
-    let cropped = image::imageops::crop_imm(&img, cx, cy, cw, ch).to_image();
-    let resized = image::imageops::resize(&cropped, w, h, image::imageops::FilterType::Triangle);
+    // ----- `resize_to_fill` = escalar para cubrir + recorte centrado. Antes esto
+    // se hacia a mano con `crop_imm(..).to_image()`, que copiaba la imagen
+    // ENTERA a resolucion completa: un fondo 4K (33 MB decodificado) pasaba a
+    // ~66 MB de pico para terminar mostrando 200x112 px. Medido: abrir el
+    // selector con 5 fondos costaba 45 MB de RSS. Mismo criterio que
+    // `clipboard/history.rs` y `screenshot/encode.rs`, que ya lo usaban. -----
+    let resized = image::open(path)
+        .ok()?
+        .resize_to_fill(w, h, image::imageops::FilterType::Triangle)
+        .into_rgba8();
 
     let mut pixmap = Pixmap::new(w, h)?;
     let dst = pixmap.data_mut();
@@ -97,4 +88,52 @@ fn rounded_rect_path(w: f32, h: f32, r: f32) -> tiny_skia::Path {
     pb.quad_to(0.0, 0.0, r, 0.0);
     pb.close();
     pb.finish().unwrap()
+}
+
+#[cfg(test)]
+mod thumbnail_tests {
+    use super::*;
+
+    /// PNG temporal de `w`x`h` con tres bandas verticales R/V/A.
+    fn bandas(nombre: &str, w: u32, h: u32) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("dockyrs-thumb-{nombre}.png"));
+        let img = image::RgbaImage::from_fn(w, h, |x, _| match x * 3 / w {
+            0 => image::Rgba([255, 0, 0, 255]),
+            1 => image::Rgba([0, 255, 0, 255]),
+            _ => image::Rgba([0, 0, 255, 255]),
+        });
+        img.save(&path).unwrap();
+        path
+    }
+
+    fn pixel(p: &Pixmap, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * p.width() + x) * 4) as usize;
+        let d = p.data();
+        [d[i], d[i + 1], d[i + 2], d[i + 3]]
+    }
+
+    /// 400x100 (4:1) -> 50x50 (1:1) tiene que RECORTAR el centro (queda la banda
+    /// verde), no aplastar la imagen entera. Si se vuelve a un resize sin
+    /// recorte, el centro sale con las tres bandas y este test cae.
+    #[test]
+    fn recorta_al_centro_en_vez_de_aplastar() {
+        let path = bandas("4a1", 400, 100);
+        let p = load(&path, 50, 50, 0.0).expect("no cargo el png de prueba");
+        assert_eq!((p.width(), p.height()), (50, 50));
+        let [r, g, b, _] = pixel(&p, 25, 25);
+        assert!(
+            g > 200 && r < 60 && b < 60,
+            "centro = {r},{g},{b}; esperaba verde (recorte centrado)"
+        );
+    }
+
+    /// El radio tiene que dejar las esquinas transparentes y el centro opaco.
+    #[test]
+    fn las_esquinas_quedan_transparentes() {
+        let path = bandas("radio", 200, 200);
+        let p = load(&path, 40, 40, 12.0).expect("no cargo el png de prueba");
+        assert_eq!(pixel(&p, 0, 0)[3], 0, "esquina sup-izq transparente");
+        assert_eq!(pixel(&p, 39, 39)[3], 0, "esquina inf-der transparente");
+        assert_eq!(pixel(&p, 20, 20)[3], 255, "el centro opaco");
+    }
 }
