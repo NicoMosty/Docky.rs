@@ -35,7 +35,7 @@ impl App {
             SearchList::Windows => desktop::list_niri_windows(),
         };
         let is_vertical = self.dock.is_vertical();
-        let (controls, cross_fixed) = menu::build_app_search_controls();
+        let (controls, cross_fixed) = menu::build_app_search_controls(is_vertical);
         let (panel_w, panel_h) = if is_vertical {
             let dock_thickness = self.dock.thickness() as f32;
             (
@@ -188,6 +188,9 @@ impl App {
     pub(super) fn draw_app_search_mode(&mut self, qh: &QueueHandle<Self>) {
         let scale = self.output_scale.max(1) as f32;
         let transparency = self.dock.config.settings.transparency;
+        // ----- la banda marca el modo: launcher y ventanas son la misma lista y se
+        // distinguen sólo por la pestaña encendida -----
+        let tabs = self.current_overlay().map(OverlayMode::tab_index);
         let Some(m) = self.app_search_mode.as_mut() else {
             return;
         };
@@ -229,6 +232,9 @@ impl App {
             custom_name_focused: false,
             custom_panel_blend: None,
             tray_items: &[],
+            overlay_tabs: tabs,
+            volume_rows: &[],
+            volume_devices: &[],
         };
         let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
         if eased >= 0.999 {

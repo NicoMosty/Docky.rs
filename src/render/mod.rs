@@ -157,6 +157,71 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> tiny_skia::Path 
     pb.finish().unwrap()
 }
 
+// ----- Fondo de botón de la barra: la pastilla redondeada que ya usaba el WiFi
+// (accent al 30%, al 80% con el puntero encima). La comparten WiFi, volumen y
+// bluetooth para que los tres se lean igual. -----
+#[allow(clippy::too_many_arguments)]
+fn draw_widget_button_bg(
+    pixmap: &mut Pixmap,
+    zx: f32,
+    zy: f32,
+    zw: f32,
+    zh: f32,
+    render_scale: f32,
+    colors: &WidgetColors,
+    hovered: bool,
+) {
+    let path = rounded_rect_path(zx + 1.0, zy + 1.0, zw - 2.0, zh - 2.0, 6.0 * render_scale);
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(
+        colors.accent.0,
+        colors.accent.1,
+        colors.accent.2,
+        if hovered { 80 } else { 30 },
+    );
+    paint.anti_alias = true;
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+}
+
+// ----- geometría del botón de volumen, en un solo lugar a propósito: la usan el
+// reparto de la barra (`widget_natural_len`, que fija su ancho) y el dibujo
+// (`draw_volume_widget`). Si divergen, el número queda descentrado o pisando el
+// borde de la pastilla — es el mismo tipo de bug que el de `hit_scale`. -----
+const VOLUME_ICON_R: f32 = 3.0;
+const VOLUME_ICON_GAP: f32 = 3.0;
+const VOLUME_LABEL_PX: f32 = 8.5;
+const VOLUME_PAD: f32 = 2.0;
+
+/// Ancho del texto del botón de volumen.
+///
+/// `text_width_estimate_render` usa 0.56 em/char, que anda bien para los dígitos
+/// pero subestima ~20% las mayúsculas anchas (M, U, W): "MUTE" medía ~23px contra
+/// los 19 que estimaba y se salía de la pastilla. Por eso acá las etiquetas con
+/// letras pagan un factor más grande, y sólo las de puros dígitos se quedan con el
+/// estimador general (así el botón normal no se ensancha de gusto).
+fn volume_label_len(label: &str, size: f32) -> f32 {
+    let per_char = if label.chars().all(|c| c.is_ascii_digit()) {
+        0.56
+    } else {
+        0.70
+    };
+    label.chars().count() as f32 * size * per_char
+}
+
+/// Ancho que necesita el contenido del botón de volumen con esa etiqueta.
+fn volume_content_len(label: &str, render_scale: f32) -> f32 {
+    VOLUME_ICON_R * 2.0 * render_scale
+        + VOLUME_ICON_GAP * render_scale
+        + volume_label_len(label, VOLUME_LABEL_PX * render_scale)
+        + VOLUME_PAD * 2.0 * render_scale
+}
+
 // ----- esquinas redondeadas solo en el lado opuesto al borde anclado -----
 fn edge_rounded_rect_path(
     x: f32,

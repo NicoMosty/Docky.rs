@@ -1,5 +1,26 @@
 use super::*;
 
+// ----- la superficie del popup ocupa todo el ancho del dock (hace falta para
+// poder centrar el recuadro sobre el icono sin conocer el offset real de la
+// superficie en pantalla), pero la input region se limita al recuadro del menú:
+// si no, una banda invisible del ancho del dock se tragaba los clicks y el
+// puntero nunca llegaba a la ventana de abajo. -----
+pub(super) fn popup_input_region(
+    compositor: &CompositorState,
+    box_x: f32,
+    box_y: f32,
+    content_height: f32,
+) -> Option<Region> {
+    let region = Region::new(compositor).ok()?;
+    region.add(
+        box_x.round() as i32,
+        box_y.round() as i32,
+        menu::MENU_WIDTH.round() as i32,
+        content_height.round() as i32,
+    );
+    Some(region)
+}
+
 impl App {
     pub(super) fn open_power_menu(&mut self, qh: &QueueHandle<Self>) {
         let (controls, content_height) = menu::build_controls(menu::MenuScreen::PowerMenu, 0, 0);
@@ -23,31 +44,74 @@ impl App {
     }
 
     pub(super) fn open_tray_menu(&mut self, idx: usize, qh: &QueueHandle<Self>) {
-        let item = self.tray.lock().unwrap().get(idx).cloned();
-        let Some(item) = item else { return };
-        let Some(menu_path) = item.menu_path.clone() else {
+        let icons = self.tray.lock().unwrap();
+        let Some(item) = icons.get(idx).cloned() else {
+            log::debug!("tray: menu idx={idx} fuera de rango (len={})", icons.len());
             return;
         };
-        let items = crate::tray::fetch_menu(&item.service, &menu_path, 0);
+        drop(icons);
+        let tray_count = self.tray.lock().unwrap().len();
+        let center = render::tray_icon_center(&self.dock, &self.widgets, tray_count, idx);
+        self.open_tray_menu_for(item.service, item.path, item.menu_path, center, qh);
+    }
+
+    // ----- menú de un item por service/path (no por índice): sirve también para
+    // los items filtrados del tray visible, como wifi y bluetooth. -----
+    pub(super) fn open_tray_menu_for(
+        &mut self,
+        service: String,
+        path: String,
+        menu_path: Option<String>,
+        center: Option<(f32, f32)>,
+        qh: &QueueHandle<Self>,
+    ) {
+        let Some(menu_path) = menu_path else {
+            // ----- sin menú D-Bus: que haga lo del click izquierdo, antes no
+            // pasaba nada y el click derecho parecía roto -----
+            log::debug!("tray: {service} sin Menu, activate como izquierdo");
+            crate::tray::activate(service, path);
+            return;
+        };
+        let items = crate::tray::fetch_menu(&service, &menu_path, 0);
         if items.is_empty() {
+            log::debug!("tray: {service} menú vacío, activate como izquierdo");
+            crate::tray::activate(service, path);
             return;
         }
         let (controls, content_height) = menu::build_tray_menu_controls(&items, false);
-        let tray_count = self.tray.lock().unwrap().len();
-        let center = render::tray_icon_center(&self.dock, &self.widgets, tray_count, idx);
         self.create_popup_surface(
             menu::MenuScreen::TrayMenu,
             controls,
             content_height,
             items,
-            item.service,
+            service,
             menu_path,
             center,
             qh,
         );
     }
 
-    fn popup_geometry(
+    // ----- click derecho sobre un widget de la izquierda (Network/Bluetooth):
+    // abre el menú del item correspondiente del StatusNotifier aunque esté
+    // ignorado en el tray visible. Devuelve false si no hay item con menú, para
+    // que el que llama pueda caer en la acción del click izquierdo. -----
+    pub(super) fn open_widget_tray_menu(
+        &mut self,
+        kind: crate::config::WidgetKind,
+        matches: impl Fn(&str) -> bool,
+        qh: &QueueHandle<Self>,
+    ) -> bool {
+        let Some((service, path, menu_path)) = crate::tray::find_menu(matches) else {
+            log::debug!("tray: {kind:?} sin item StatusNotifier, acción por defecto");
+            return false;
+        };
+        let tray_count = self.tray.lock().unwrap().len();
+        let center = render::widget_center(&self.dock, &self.widgets, tray_count, kind);
+        self.open_tray_menu_for(service, path, Some(menu_path), center, qh);
+        true
+    }
+
+    pub(super) fn popup_geometry(
         &self,
         content_height: f32,
         center: Option<(f32, f32)>,
@@ -89,12 +153,18 @@ impl App {
         let center = self.popup_mode.as_ref().and_then(|p| p.center);
         let (surface_w, surface_h, box_x, box_y) = self.popup_geometry(content_height, center);
         let (anchor, margin) = self.popup_anchor_margin();
+        let region = popup_input_region(&self.compositor, box_x, box_y, content_height);
         let Some(p) = self.popup_mode.as_mut() else {
             return;
         };
         p.layer.set_anchor(anchor);
         p.layer.set_margin(margin.0, margin.1, margin.2, margin.3);
         p.layer.set_size(surface_w as u32, surface_h as u32);
+        if let Some(region) = &region {
+            p.layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
+        }
         p.tray_items = items;
         p.controls = controls;
         p.content_height = content_height;
@@ -110,7 +180,7 @@ impl App {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn create_popup_surface(
+    pub(super) fn create_popup_surface(
         &mut self,
         screen: menu::MenuScreen,
         controls: Vec<menu::Control>,
@@ -140,6 +210,11 @@ impl App {
         layer.set_size(surface_w as u32, surface_h as u32);
         layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         layer.set_exclusive_zone(-1);
+        if let Some(region) = popup_input_region(&self.compositor, box_x, box_y, content_height) {
+            layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
+        }
         layer.commit();
 
         let pool_size = (surface_w as usize * surface_h as usize * 16).max(65536);
@@ -167,6 +242,11 @@ impl App {
             surface_h,
             box_x,
             box_y,
+            popup_hovered: false,
+            volume_rows: Vec::new(),
+            volume_devices: Vec::new(),
+            volume_drag: None,
+            volume_apply_at: None,
         });
     }
 
@@ -225,6 +305,9 @@ impl App {
             custom_name_focused: false,
             custom_panel_blend: None,
             tray_items: &p.tray_items,
+            volume_rows: &p.volume_rows,
+            volume_devices: &p.volume_devices,
+            overlay_tabs: None,
         };
         // ----- el contenido se renderiza UNA vez por apertura/cambio de estado:
         // rehacerlo en cada frame de la animación saturaba el hilo principal y
@@ -301,10 +384,15 @@ impl App {
         surface.frame(qh, surface.clone());
         p.awaiting_frame = true;
         log::debug!(
-            "popup: t={} anim={linear:.2} cache={} frame={}ms",
+            "popup: t={} anim={linear:.2} cache={} frame={}ms surface=({},{}) box=({},{}) center={:?}",
             crate::app::hdbg_ms(),
             if reuse { "reuse" } else { "render" },
-            t0.elapsed().as_millis()
+            t0.elapsed().as_millis(),
+            p.surface_w,
+            p.surface_h,
+            p.box_x,
+            p.box_y,
+            p.center
         );
         surface.commit();
     }
@@ -352,6 +440,15 @@ impl App {
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 let (x, y) = event.position;
+                // ----- mientras el puntero esté en el popup, salir del dock no lo
+                // cierra: el salto del icono al menú pasa por Leave+Enter en el
+                // mismo lote de eventos -----
+                if let Some(p) = self.popup_mode.as_mut() {
+                    p.popup_hovered = true;
+                }
+                // ----- arrastre de una barra del panel de volumen: manda el
+                // arrastre, no el hover, pero el hover se recalcula igual -----
+                let _ = self.volume_panel_drag(x as f32, qh);
                 // ----- sólo se toca el contenido si cambia la fila bajo el puntero:
                 // antes se re-renderizaba el panel entero en CADA movimiento -----
                 let changed = if let Some(p) = self.popup_mode.as_mut() {
@@ -377,20 +474,31 @@ impl App {
                 }
             }
             PointerEventKind::Leave { .. } => {
+                // ----- el cierre lo decide el tick del autohide (`autohide_timeout`),
+                // que sí sabe si el puntero sigue en el dock: cerrarlo acá no
+                // alcanzaba porque al irse lejos del dock el popup no recibe
+                // ningún Leave y quedaba abierto esperando el próximo click. -----
                 let had_hover = self
                     .popup_mode
                     .as_ref()
                     .is_some_and(|p| p.hovered.is_some());
                 if let Some(p) = self.popup_mode.as_mut() {
+                    p.popup_hovered = false;
                     p.hovered = None;
                     p.content_dirty = true;
                 }
                 if had_hover {
                     self.request_popup_redraw(qh);
                 }
+                // ----- decidir el cierre en el tick del autohide: acá todavía no
+                // se sabe si el puntero fue al dock o se fue lejos -----
+                self.arm_popup_tick();
             }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
                 let (x, y) = event.position;
+                if self.volume_panel_press(x as f32, y as f32, qh) {
+                    return;
+                }
                 let hit = self.popup_mode.as_ref().and_then(|p| {
                     menu::hit_test(
                         &p.controls,
@@ -401,6 +509,10 @@ impl App {
                     )
                 });
                 self.handle_popup_click(hit, qh);
+            }
+            PointerEventKind::Release { button, .. } if button == BTN_LEFT => {
+                let (x, _) = event.position;
+                self.volume_panel_release(x as f32, qh);
             }
             _ => {}
         }

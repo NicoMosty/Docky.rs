@@ -76,27 +76,56 @@ pub(super) fn draw_bluetooth_icon(
     let mut paint = Paint::default();
     paint.set_color_rgba8(r, g, b, alpha);
     paint.anti_alias = true;
-    // ----- mismo trazo que los arcos del icono de wifi -----
-    let stroke = tiny_skia::Stroke {
-        width: 1.6 * render_scale,
-        line_cap: tiny_skia::LineCap::Round,
-        line_join: tiny_skia::LineJoin::Round,
-        ..Default::default()
-    };
+    // ----- logo original de Bluetooth: la runa "Hagall" (ᚼ) ligada con
+    // "Bjarkan" (ᛒ), o sea el tallo vertical con los dos triángulos. Se rellena
+    // el contorno (con los dos huecos en even-odd), que es como está diseñado:
+    // dibujarlo a trazo da la forma de rayo que tenía antes. -----
     let s = 7.0 * render_scale;
+    // caja del glifo original (viewBox 24, alto útil 20 centrado)
+    let k = s / 10.0;
+    let px = |v: f32| cx + (v - 11.355) * k;
+    let py = |v: f32| cy + (v - 12.0) * k;
     let mut pb = tiny_skia::PathBuilder::new();
-    pb.move_to(cx, cy - s);
-    pb.line_to(cx + s * 0.62, cy - s * 0.38);
-    pb.line_to(cx - s * 0.62, cy + s * 0.38);
-    pb.line_to(cx, cy + s);
-    pb.line_to(cx, cy - s);
-    pb.move_to(cx - s * 0.62, cy - s * 0.38);
-    pb.line_to(cx + s * 0.62, cy + s * 0.38);
+    pb.move_to(px(17.71), py(7.71));
+    pb.line_to(px(12.0), py(2.0));
+    pb.line_to(px(11.0), py(2.0));
+    pb.line_to(px(11.0), py(9.59));
+    pb.line_to(px(6.41), py(5.0));
+    pb.line_to(px(5.0), py(6.41));
+    pb.line_to(px(10.59), py(12.0));
+    pb.line_to(px(5.0), py(17.59));
+    pb.line_to(px(6.41), py(19.0));
+    pb.line_to(px(11.0), py(14.41));
+    pb.line_to(px(11.0), py(22.0));
+    pb.line_to(px(12.0), py(22.0));
+    pb.line_to(px(17.71), py(16.29));
+    pb.line_to(px(13.41), py(12.0));
+    pb.close();
+    // huecos (los dos triángulos claros)
+    pb.move_to(px(13.0), py(5.83));
+    pb.line_to(px(14.88), py(7.71));
+    pb.line_to(px(13.0), py(9.59));
+    pb.close();
+    pb.move_to(px(14.88), py(16.29));
+    pb.line_to(px(13.0), py(18.17));
+    pb.line_to(px(13.0), py(14.41));
+    pb.close();
     if let Some(path) = pb.finish() {
-        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::EvenOdd,
+            Transform::identity(),
+            None,
+        );
     }
     // ----- apagado: barra diagonal, para que se lea sin la palabra "Off" -----
     if !powered {
+        let stroke = tiny_skia::Stroke {
+            width: 1.6 * render_scale,
+            line_cap: tiny_skia::LineCap::Round,
+            ..Default::default()
+        };
         let mut slash = Paint::default();
         slash.set_color_rgba8(255, 69, 58, 215);
         slash.anti_alias = true;

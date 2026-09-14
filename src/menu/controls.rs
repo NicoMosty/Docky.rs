@@ -11,8 +11,10 @@ pub(super) const LAYOUT_SETTINGS: [SettingId; 8] = [
     SettingId::AutohideDelay,
 ];
 
-pub(super) const APPEARANCE_SETTINGS: [SettingId; 9] = [
+pub(super) const APPEARANCE_SETTINGS: [SettingId; 11] = [
     SettingId::BorderWidth,
+    SettingId::MenuCornerRadius,
+    SettingId::MenuBorderWidth,
     SettingId::Transparency,
     SettingId::BlurEnabled,
     SettingId::BlurPasses,
@@ -151,6 +153,9 @@ pub fn build_controls(screen: MenuScreen, list_count: usize, scroll: usize) -> (
         }
         // ----- see tray menu builder -----
         MenuScreen::TrayMenu => {}
+        // ----- el panel de volumen arma sus filas en `build_volume_controls`:
+        // dependen de lo que esté sonando, no de un contador de items -----
+        MenuScreen::VolumePanel => {}
     }
 
     y += MENU_PADDING;

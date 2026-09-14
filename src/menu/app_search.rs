@@ -8,13 +8,14 @@ pub const APP_CARD_ICON: f32 = 46.0;
 pub const APP_CARD_ROW_H: f32 = 78.0;
 pub const APP_SEARCH_VERTICAL_VISIBLE: f32 = 5.0;
 
-pub fn build_app_search_controls() -> (Vec<Control>, f32) {
+pub fn build_app_search_controls(is_vertical: bool) -> (Vec<Control>, f32) {
+    let top = MENU_PADDING + overlay_tabs_h(is_vertical);
     let controls = vec![Control {
         kind: ControlKind::SearchBox,
-        y: MENU_PADDING,
+        y: top,
         height: SEARCH_BOX_HEIGHT,
     }];
-    let fixed_h = MENU_PADDING + SEARCH_BOX_HEIGHT + ROW_GAP + APP_CARD_ROW_H + MENU_PADDING;
+    let fixed_h = top + SEARCH_BOX_HEIGHT + ROW_GAP + APP_CARD_ROW_H + MENU_PADDING;
     (controls, fixed_h)
 }
 
@@ -23,13 +24,15 @@ pub fn app_search_vertical_cross(dock_thickness: f32) -> f32 {
 }
 
 // ----- fixed viewport -----
+/// Alto del panel vertical: arranca donde arranca el contenido, así la banda de
+/// pestañas (apilada, más alta) le come el lugar que ocupa.
 pub fn app_search_vertical_along() -> f32 {
     let content = APP_SEARCH_VERTICAL_VISIBLE * (APP_CARD_W + APP_CARD_GAP) - APP_CARD_GAP;
-    MENU_PADDING + SEARCH_BOX_HEIGHT + ROW_GAP + content + MENU_PADDING
+    app_search_strip_y(true) + content + MENU_PADDING
 }
 
-pub fn app_search_strip_y() -> f32 {
-    MENU_PADDING + SEARCH_BOX_HEIGHT + ROW_GAP
+pub fn app_search_strip_y(is_vertical: bool) -> f32 {
+    MENU_PADDING + overlay_tabs_h(is_vertical) + SEARCH_BOX_HEIGHT + ROW_GAP
 }
 
 pub fn app_search_strip_content_len(count: usize) -> f32 {
@@ -46,7 +49,7 @@ pub fn app_search_card_along(index: usize) -> f32 {
 
 pub fn app_search_viewport_along(panel_w: f32, panel_h: f32, is_vertical: bool) -> f32 {
     if is_vertical {
-        panel_h - app_search_strip_y()
+        panel_h - app_search_strip_y(true)
     } else {
         panel_w
     }
@@ -61,7 +64,7 @@ pub fn app_search_strip_hit_test(
     x: f32,
     y: f32,
 ) -> Option<usize> {
-    let row_y = app_search_strip_y();
+    let row_y = app_search_strip_y(is_vertical);
     let local_along = if is_vertical {
         if x < 0.0 || x > panel_w || y < row_y || y > panel_h {
             return None;

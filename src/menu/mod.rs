@@ -24,6 +24,8 @@ mod wallpaper_picker;
 pub use wallpaper_picker::*;
 mod align_picker;
 pub use align_picker::*;
+mod volume_panel;
+pub use volume_panel::*;
 
 pub const MENU_WIDTH: f32 = 230.0;
 pub const MENU_PADDING: f32 = 10.0;
@@ -63,6 +65,22 @@ pub const NOTIFICATION_GROWTH_W: f32 = 60.0;
 pub const NOTIFICATION_GROWTH_H: f32 = 24.0;
 pub const NOTIFICATION_BODY_MAX_LINES: usize = 8;
 pub const APP_SEARCH_WIDTH_GROWTH: f32 = 180.0;
+
+/// Barra de pestañas compartida por los modos del overlay. El orden es el de
+/// `OVERLAY_ORDER` (Shift+←/→ cicla) y cada panel la dibuja arriba de su
+/// contenido: es la única señal de en qué mini-app estás.
+pub const OVERLAY_TABS: [&str; 4] = ["Apps", "Clipboard", "Wallpapers", "Windows"];
+pub const OVERLAY_TABS_H: f32 = 26.0;
+
+/// Cuánto corre la banda al contenido. En un panel vertical (angosto) las cuatro
+/// etiquetas no entran en una fila, así que se apilan y la banda crece.
+pub fn overlay_tabs_h(is_vertical: bool) -> f32 {
+    if is_vertical {
+        OVERLAY_TABS_H * OVERLAY_TABS.len() as f32
+    } else {
+        OVERLAY_TABS_H
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OsdKind {
     Volume,
@@ -120,6 +138,8 @@ pub enum MenuScreen {
     WallpaperPicker,
     PowerMenu,
     TrayMenu,
+    /// Panel de volumen: salida + un stream por app + selector de salida.
+    VolumePanel,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuCategory {
@@ -184,6 +204,10 @@ pub enum ControlKind {
     TrayItem(usize),
     TraySeparator,
     AlignPicker,
+    // ----- panel de volumen: fila de la salida o de un stream, y dispositivo de
+    // salida del selector (los datos vienen en `DrawArgs`, no de los ajustes) -----
+    VolumeRow(usize),
+    VolumeDevice(usize),
 }
 #[derive(Clone, Copy)]
 pub struct Control {
@@ -251,6 +275,9 @@ pub enum HitTarget {
     DeleteCustomPalette(usize),
     TrayItem(usize),
     Align(crate::config::DockAlign),
+    VolumeMute(usize),
+    VolumeTrack(usize),
+    VolumeDevice(usize),
 }
 pub const DOCK_MENU_LEFT_COL_W: f32 = 120.0;
 pub const DOCK_MENU_DIVIDER_W: f32 = 1.0;
@@ -316,6 +343,7 @@ pub fn hit_test(
             ControlKind::AlignPicker => {
                 align_hit_test(c.y, panel_width, x, y).map(HitTarget::Align)
             }
+            ControlKind::VolumeRow(_) | ControlKind::VolumeDevice(_) => volume_hit_test(c, x, y),
             ControlKind::Section(_)
             | ControlKind::Note(_)
             | ControlKind::IconHeader(_)

@@ -137,6 +137,9 @@ impl App {
             custom_name_focused: false,
             custom_panel_blend: None,
             tray_items: &[],
+            overlay_tabs: None,
+            volume_rows: &[],
+            volume_devices: &[],
         };
 
         if !menu.closing && linear >= 0.999 {

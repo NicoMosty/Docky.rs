@@ -1,5 +1,12 @@
 use super::*;
 
+/// Índice del icono del tray para una coordenada a lo largo del bloque. Los
+/// huecos entre iconos caen al más cercano: antes un click en el hueco no
+/// devolvía nada y el click derecho sobre el tray parecía roto.
+fn nearest_tray_index(rel: f32, per: f32, count: usize) -> usize {
+    ((rel.max(0.0) / per).floor() as usize).min(count - 1)
+}
+
 pub fn tray_icon_hit(
     dock: &Dock,
     widgets: &WidgetSnapshot,
@@ -10,42 +17,31 @@ pub fn tray_icon_hit(
     if tray_count == 0 {
         return None;
     }
-    let (base_w, base_h) = dock.base_size();
     let is_vertical = dock.is_vertical();
-    let rects = layout_widgets(
-        &dock.config.settings,
-        widgets,
-        tray_count,
-        is_vertical,
-        base_w as f32,
-        base_h as f32,
-        1.0,
-    );
+    let rects = hit_layout(dock, widgets, tray_count);
     let r = rects
         .into_iter()
         .find(|r| r.kind == crate::config::WidgetKind::Tray)?;
-    let (icon_side, per, content_len) = tray_geometry(tray_count, is_vertical, r.w, r.h, 1.0);
+    let (_, per, content_len) = tray_geometry(
+        tray_count,
+        is_vertical,
+        r.w,
+        r.h,
+        hit_scale(&dock.config.settings),
+    );
     let (xf, yf) = (x as f32, y as f32);
     if is_vertical {
         if xf < r.x || xf >= r.x + r.w {
             return None;
         }
         let block_start = r.y + (r.h - content_len) / 2.0;
-        let rel = yf - block_start;
-        let idx = (rel / per).floor();
-        (idx >= 0.0 && rel - idx * per <= icon_side)
-            .then_some(idx as usize)
-            .filter(|&i| i < tray_count)
+        Some(nearest_tray_index(yf - block_start, per, tray_count))
     } else {
         if yf < r.y || yf >= r.y + r.h {
             return None;
         }
         let block_start = r.x + (r.w - content_len) / 2.0;
-        let rel = xf - block_start;
-        let idx = (rel / per).floor();
-        (idx >= 0.0 && rel - idx * per <= icon_side)
-            .then_some(idx as usize)
-            .filter(|&i| i < tray_count)
+        Some(nearest_tray_index(xf - block_start, per, tray_count))
     }
 }
 
@@ -58,21 +54,18 @@ pub fn tray_icon_center(
     if idx >= tray_count {
         return None;
     }
-    let (base_w, base_h) = dock.base_size();
     let is_vertical = dock.is_vertical();
-    let rects = layout_widgets(
-        &dock.config.settings,
-        widgets,
-        tray_count,
-        is_vertical,
-        base_w as f32,
-        base_h as f32,
-        1.0,
-    );
+    let rects = hit_layout(dock, widgets, tray_count);
     let r = rects
         .into_iter()
         .find(|r| r.kind == crate::config::WidgetKind::Tray)?;
-    let (icon_side, per, content_len) = tray_geometry(tray_count, is_vertical, r.w, r.h, 1.0);
+    let (icon_side, per, content_len) = tray_geometry(
+        tray_count,
+        is_vertical,
+        r.w,
+        r.h,
+        hit_scale(&dock.config.settings),
+    );
     if is_vertical {
         let block_start = r.y + (r.h - content_len) / 2.0;
         Some((
@@ -174,4 +167,36 @@ pub(super) fn draw_tray_icon(
         return;
     }
     draw_placeholder(pixmap, &item.service, cx, cy, icon_side);
+}
+
+#[cfg(test)]
+mod tray_hit_tests {
+    use super::nearest_tray_index;
+
+    const ICON: f32 = 16.0;
+    const PER: f32 = ICON + 10.0;
+
+    #[test]
+    fn dentro_de_cada_icono() {
+        // centro del icono 0, 1 y 2
+        assert_eq!(nearest_tray_index(0.0, PER, 3), 0);
+        assert_eq!(nearest_tray_index(PER + 8.0, PER, 3), 1);
+        assert_eq!(nearest_tray_index(PER * 2.0 + ICON - 0.1, PER, 3), 2);
+    }
+
+    #[test]
+    fn el_hueco_cae_al_icono_mas_cercano() {
+        // 24 está en el hueco entre el icono 0 (0..16) y el 1 (26..42):
+        // antes devolvía None y el click se perdía
+        assert_eq!(nearest_tray_index(24.0, PER, 3), 0);
+        // 27 también es hueco; cae al 1 porque ya pasó el inicio de su celda
+        assert_eq!(nearest_tray_index(27.0, PER, 3), 1);
+        // y por izquierda del bloque, al primero
+        assert_eq!(nearest_tray_index(-5.0, PER, 3), 0);
+    }
+
+    #[test]
+    fn el_extremo_derecho_no_se_pasa() {
+        assert_eq!(nearest_tray_index(PER * 5.0, PER, 3), 2);
+    }
 }

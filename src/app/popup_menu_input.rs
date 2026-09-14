@@ -52,7 +52,11 @@ impl App {
             | Some(HitTarget::PaletteMode(_))
             | Some(HitTarget::PanelBlend(_))
             | Some(HitTarget::DeleteCustomPalette(_))
-            | Some(HitTarget::Align(_)) => {}
+            | Some(HitTarget::Align(_))
+            // ----- el panel de volumen vive en el popup, no en este menú -----
+            | Some(HitTarget::VolumeMute(_))
+            | Some(HitTarget::VolumeTrack(_))
+            | Some(HitTarget::VolumeDevice(_)) => {}
             None => {}
         }
     }

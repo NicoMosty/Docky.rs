@@ -1,5 +1,31 @@
 use super::*;
 
+/// La rueda sobre el widget de volumen: `Some(true)` = subir, `None` = no hacer
+/// nada (fin de scroll o sin movimiento).
+///
+/// OJO con el signo: en `wl_pointer` el eje vertical es **positivo hacia abajo**,
+/// así que `discrete` negativo es rueda hacia ARRIBA. Se verificó contra la app
+/// (`pointer.py --scroll up` manda REL_WHEEL +1 y llega como `discrete = -1`): con
+/// el signo al revés la rueda hacía lo contrario. Y ojo con `f64::signum` para
+/// descartar el cero: `signum(+0.0)` es `1.0`, no `0.0`.
+fn wheel_raise(scroll: &smithay_client_toolkit::seat::pointer::AxisScroll) -> Option<bool> {
+    if scroll.stop {
+        return None;
+    }
+    let pasos = if scroll.discrete != 0 {
+        scroll.discrete
+    } else if scroll.absolute == 0.0 {
+        0
+    } else if scroll.absolute > 0.0 {
+        // ponytail: touchpad sin pasos discretos -> un paso por evento, sin
+        // acumular. Si molesta, acumular `absolute` acá.
+        1
+    } else {
+        -1
+    };
+    (pasos != 0).then_some(pasos < 0)
+}
+
 impl App {
     pub(super) fn handle_dock_pointer_event(
         &mut self,
@@ -98,6 +124,11 @@ impl App {
                 self.ptr_left_at = Some(std::time::Instant::now());
                 log::debug!("autohide:{} leave (franja)", crate::app::hdbg_ms());
                 self.arm_autohide_after(super::draw::LEAVE_HIDE_MS);
+                // ----- si hay un menú abierto, necesita su propio tick para cerrarse
+                // (el autohide no lo agenda cuando está desactivado) -----
+                if self.popup_mode.is_some() {
+                    self.arm_popup_tick();
+                }
                 self.request_redraw(qh);
             }
             PointerEventKind::Press { button, .. } => {
@@ -126,6 +157,9 @@ impl App {
                         if let Some(kind) =
                             render::widget_hit_test(&self.dock, &self.widgets, tray_count, x, y)
                         {
+                            // ----- mismo log que el click derecho: es lo que deja
+                            // ubicar un widget por su log en vez de adivinar -----
+                            log::debug!("dock: click ({x:.0},{y:.0}) -> {kind:?}");
                             match kind {
                                 crate::config::WidgetKind::Media => {
                                     if render::media_toggle_hit(
@@ -140,9 +174,9 @@ impl App {
                                     return;
                                 }
                                 crate::config::WidgetKind::PowerMenu => {
-                                    if !widgets::open_power_external() {
-                                        self.open_power_menu(qh);
-                                    }
+                                    // ----- menú nativo del dock (popup): el fallback
+                                    // a rofi se eliminó, este es el único camino -----
+                                    self.open_power_menu(qh);
                                     return;
                                 }
                                 crate::config::WidgetKind::Bluetooth => {
@@ -204,7 +238,11 @@ impl App {
                                     return;
                                 }
                                 crate::config::WidgetKind::Volume => {
-                                    widgets::open_volume_control();
+                                    // ----- click = panel de volumen (salida, un
+                                    // stream por app y selector de salida); la
+                                    // rueda sube/baja y el click derecho abre
+                                    // pavucontrol -----
+                                    self.open_volume_panel(qh);
                                     return;
                                 }
                                 crate::config::WidgetKind::KbdLayout => {
@@ -255,22 +293,64 @@ impl App {
                                 y,
                             );
                             log::debug!("dock: click derecho ({x:.0},{y:.0}) -> {hit:?}");
-                            if matches!(hit, Some(crate::config::WidgetKind::Tray)) {
-                                if let Some(idx) = render::tray_icon_hit(
-                                    &self.dock,
-                                    &self.widgets,
-                                    tray_count,
-                                    x,
-                                    y,
-                                ) {
-                                    self.open_tray_menu(idx, qh);
+                            match hit {
+                                Some(crate::config::WidgetKind::Tray) => {
+                                    if let Some(idx) = render::tray_icon_hit(
+                                        &self.dock,
+                                        &self.widgets,
+                                        tray_count,
+                                        x,
+                                        y,
+                                    ) {
+                                        self.open_tray_menu(idx, qh);
+                                    }
                                 }
-                            } else if matches!(hit, Some(crate::config::WidgetKind::Workspaces)) {
-                                // ----- ajustes: SÓLO con click derecho sobre el
-                                // indicador de workspaces. Antes se abría en cualquier
-                                // punto sin icono ni tray: reloj, huecos entre zonas,
-                                // o encima de cualquier widget. -----
-                                self.open_dock_menu(qh);
+                                // ----- wifi y bluetooth salen del tray visible, así
+                                // que su menú (nm-applet/blueman) se abre desde su
+                                // propio widget de la izquierda -----
+                                Some(crate::config::WidgetKind::Network) => {
+                                    if !self.open_widget_tray_menu(
+                                        crate::config::WidgetKind::Network,
+                                        |s| s.contains("nm_applet"),
+                                        qh,
+                                    ) {
+                                        // ----- sin nm-applet registrado: que haga lo
+                                        // del click izquierdo en vez de nada -----
+                                        widgets::open_network_settings();
+                                    }
+                                }
+                                Some(crate::config::WidgetKind::Bluetooth) => {
+                                    let abierto = self.open_widget_tray_menu(
+                                        crate::config::WidgetKind::Bluetooth,
+                                        |s| {
+                                            let s = s.to_lowercase();
+                                            s.contains("blueman") || s.contains("bluetooth")
+                                        },
+                                        qh,
+                                    );
+                                    if !abierto {
+                                        let powered = self
+                                            .widgets
+                                            .bluetooth
+                                            .as_ref()
+                                            .map(|b| b.powered)
+                                            .unwrap_or(false);
+                                        widgets::open_bluetooth_manager(true, powered);
+                                    }
+                                }
+                                Some(crate::config::WidgetKind::Volume) => {
+                                    // ----- click derecho: el control externo (lo que
+                                    // antes hacía el click izquierdo) -----
+                                    widgets::open_volume_control();
+                                }
+                                Some(crate::config::WidgetKind::Workspaces) => {
+                                    // ----- ajustes: SÓLO con click derecho sobre el
+                                    // indicador de workspaces. Antes se abría en cualquier
+                                    // punto sin icono ni tray: reloj, huecos entre zonas,
+                                    // o encima de cualquier widget. -----
+                                    self.open_dock_menu(qh);
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -283,14 +363,70 @@ impl App {
                     if let Err(err) = self.dock.config.save() {
                         log::warn!("failed to save dock config: {err}");
                     }
-                } else if let Some(idx) = self.press_icon_index {
-                    launch_app(&self.dock.icons[idx].app.exec);
+                } else if let Some(idx) = self.press_icon_index
+                    && let Some(icon) = self.dock.icons.get(idx)
+                {
+                    // ----- `get`, no `[idx]`: el índice es del press y entre
+                    // press y release un drag puede haber sacado el icono -----
+                    launch_app(&icon.app.exec);
                 }
                 self.press_pos = None;
                 self.press_icon_index = None;
                 self.request_redraw(qh);
             }
+            // ----- rueda: volumen en pasos del 5% si el puntero está sobre el
+            // widget de volumen. Es la única interacción por rueda de la barra. -----
+            PointerEventKind::Axis { vertical, .. } => {
+                let Some(subir) = wheel_raise(&vertical) else {
+                    return;
+                };
+                let (x, y) = event.position;
+                let tray_count = self.tray.lock().unwrap().len();
+                let hit = render::widget_hit_test(&self.dock, &self.widgets, tray_count, x, y);
+                log::debug!("dock: rueda ({x:.0},{y:.0}) subir={subir} -> {hit:?}");
+                if hit == Some(crate::config::WidgetKind::Volume) {
+                    widgets::volume_step(subir);
+                    // ----- releer ya: el tick de sistema corre cada 2s y si no el
+                    // número quedaría viejo hasta el próximo -----
+                    self.refresh_sys(qh);
+                }
+            }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    // ----- el signo del eje vertical es lo que se equivocó: sin este test la
+    // rueda hacía lo contrario (arriba bajaba el volumen). -----
+    use super::wheel_raise;
+    use smithay_client_toolkit::seat::pointer::AxisScroll;
+
+    fn axis(absolute: f64, discrete: i32, stop: bool) -> AxisScroll {
+        AxisScroll {
+            absolute,
+            discrete,
+            stop,
+        }
+    }
+
+    #[test]
+    fn rueda_arriba_sube_y_abajo_baja() {
+        // REL_WHEEL +1 (arriba) llega como discrete = -1, medido en la app
+        assert_eq!(wheel_raise(&axis(-1.0, -1, false)), Some(true));
+        assert_eq!(wheel_raise(&axis(1.0, 1, false)), Some(false));
+    }
+
+    #[test]
+    fn touchpad_sin_pasos_discretos_usa_el_signo_del_absoluto() {
+        assert_eq!(wheel_raise(&axis(-2.0, 0, false)), Some(true));
+        assert_eq!(wheel_raise(&axis(2.0, 0, false)), Some(false));
+    }
+
+    #[test]
+    fn el_fin_de_scroll_y_el_cero_no_hacen_nada() {
+        assert_eq!(wheel_raise(&axis(0.0, 0, true)), None);
+        assert_eq!(wheel_raise(&axis(0.0, 0, false)), None);
     }
 }

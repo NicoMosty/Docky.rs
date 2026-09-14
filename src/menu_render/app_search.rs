@@ -14,7 +14,7 @@ pub fn draw_app_search(
     let settings = &args.dock.config.settings;
 
     let bg = panel_bg(settings);
-    let path = rounded_rect_path(0.0, 0.0, w, h, settings.corner_radius * s);
+    let path = rounded_rect_path(0.0, 0.0, w, h, menu_radius(settings, s));
     let mut paint = Paint::default();
     paint.set_color_rgba8(bg.0, bg.1, bg.2, bg.3);
     paint.anti_alias = true;
@@ -25,6 +25,7 @@ pub fn draw_app_search(
         Transform::identity(),
         None,
     );
+    stroke_menu_border(pixmap, &path, settings, s);
 
     draw_control_rows(pixmap, icon_cache, text_cache, args.controls, args);
     draw_app_search_strip(
@@ -35,6 +36,17 @@ pub fn draw_app_search(
         highlight_x,
         content_anim,
     );
+    if let Some(index) = args.overlay_tabs {
+        draw_overlay_tabs(
+            pixmap,
+            text_cache,
+            settings,
+            args.panel_width,
+            s,
+            index,
+            args.dock.is_vertical(),
+        );
+    }
 }
 
 pub(crate) fn draw_app_search_strip(
@@ -79,7 +91,7 @@ pub(crate) fn draw_app_search_strip_horizontal(
     };
     let s = args.render_scale;
     let settings = &args.dock.config.settings;
-    let row_y = app_search_strip_y() * s;
+    let row_y = app_search_strip_y(false) * s;
     let row_h = APP_CARD_ROW_H * s;
     let viewport_w = args.panel_width * s;
     let scroll = args.wallpaper_scroll_x * s;
@@ -187,7 +199,7 @@ pub(crate) fn draw_app_search_strip_vertical(
     };
     let s = args.render_scale;
     let settings = &args.dock.config.settings;
-    let row_y0 = app_search_strip_y() * s;
+    let row_y0 = app_search_strip_y(true) * s;
     let panel_w_px = args.panel_width * s;
     let card_w = (panel_w_px - MENU_PADDING * 2.0 * s).max(1.0);
     let card_h = APP_CARD_W * s;

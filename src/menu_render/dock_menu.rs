@@ -38,7 +38,7 @@ pub fn draw_dock_menu(
     let settings = &args.dock.config.settings;
 
     let bg = panel_bg(settings);
-    let path = rounded_rect_path(0.0, 0.0, w, h, settings.corner_radius * s);
+    let path = rounded_rect_path(0.0, 0.0, w, h, menu_radius(settings, s));
     let mut paint = Paint::default();
     paint.set_color_rgba8(bg.0, bg.1, bg.2, bg.3);
     paint.anti_alias = true;
@@ -49,6 +49,7 @@ pub fn draw_dock_menu(
         Transform::identity(),
         None,
     );
+    stroke_menu_border(pixmap, &path, settings, s);
 
     let default_color = text_hex(settings);
     let selected_color = on_accent_hex(settings);
@@ -131,6 +132,9 @@ pub fn draw_dock_menu(
         custom_name_focused: args.custom_name_focused,
         custom_panel_blend: args.custom_panel_blend,
         tray_items: &[],
+        overlay_tabs: None,
+        volume_rows: &[],
+        volume_devices: &[],
     };
     draw_control_rows(
         &mut right_pixmap,

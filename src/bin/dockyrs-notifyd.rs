@@ -54,7 +54,12 @@ impl Notifications {
     }
 
     fn get_server_information(&self) -> (&str, &str, &str, &str) {
-        ("dockyrs-notifyd", "dockyrs", env!("CARGO_PKG_VERSION"), "1.2")
+        (
+            "dockyrs-notifyd",
+            "dockyrs",
+            env!("CARGO_PKG_VERSION"),
+            "1.2",
+        )
     }
 }
 
@@ -66,13 +71,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ----- claim the name every launch -----
     let flags = RequestNameFlags::ReplaceExisting | RequestNameFlags::AllowReplacement;
-    if conn.request_name_with_flags("org.freedesktop.Notifications", flags)? != RequestNameReply::PrimaryOwner {
+    if conn.request_name_with_flags("org.freedesktop.Notifications", flags)?
+        != RequestNameReply::PrimaryOwner
+    {
         let hush = || std::process::Stdio::null();
         for daemon in ["dunst", "mako", "swaync", "fnott", "wired"] {
             let _ = std::process::Command::new("systemctl")
                 .args(["--user", "stop", &format!("{daemon}.service")])
-                .stdout(hush()).stderr(hush()).status();
-            let _ = std::process::Command::new("pkill").args(["-x", daemon]).stderr(hush()).status();
+                .stdout(hush())
+                .stderr(hush())
+                .status();
+            let _ = std::process::Command::new("pkill")
+                .args(["-x", daemon])
+                .stderr(hush())
+                .status();
         }
         conn.request_name_with_flags("org.freedesktop.Notifications", flags)?;
     }

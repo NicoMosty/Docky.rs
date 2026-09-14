@@ -28,6 +28,44 @@ pub struct TrayMenuItem {
 
 pub type TrayState = Arc<Mutex<Vec<TrayIcon>>>;
 
+// ----- el tray visible ignora wifi y bluetooth: ya tienen sus widgets propios
+// (Network/Bluetooth) y en el tray solo duplican ruido. Se mira icon_name
+// ("nm-signal-75", "blueman-tray") y path (".../nm_applet", "/org/blueman/sni")
+// porque el service suele ser un nombre único (:1.20) que no dice nada. -----
+fn tray_ignored(icon: &TrayIcon) -> bool {
+    let name = icon.icon_name.to_lowercase();
+    let path = icon.path.to_lowercase();
+    // ponytail: heurística por nombre, sin lista de configuración. El techo:
+    // cualquier app que use el prefijo "nm-" para OTRA cosa se filtra; si eso
+    // pasa, esto es lo primero que hay que tocar (ya hay tests en tray.rs).
+    name.starts_with("nm-")
+        || name.contains("blueman")
+        || name.contains("bluetooth")
+        || name.contains("blueberry")
+        || path.contains("nm_applet")
+        || path.contains("blueman")
+        || path.contains("bluetooth")
+}
+
+// ----- menú de un item aunque esté filtrado del tray visible: los widgets de
+// la izquierda abren por acá los menús de nm-applet/blueman con click derecho.
+// Devuelve (service, path, menu_path). -----
+pub fn find_menu(matches: impl Fn(&str) -> bool) -> Option<(String, String, String)> {
+    let conn = tray_conn()?;
+    let proxy = zbus::blocking::proxy::Builder::<Proxy>::new(conn)
+        .destination(WATCHER_IFACE)
+        .and_then(|b| b.path(WATCHER_PATH))
+        .and_then(|b| b.interface(WATCHER_IFACE))
+        .map(|b| b.cache_properties(zbus::proxy::CacheProperties::No))
+        .and_then(|b| b.build())
+        .ok()?;
+    let raw: Vec<String> = proxy.get_property("RegisteredStatusNotifierItems").ok()?;
+    let raw_svc = raw.iter().find(|s| matches(s))?;
+    let icon = resolve_item(conn, raw_svc)?;
+    let menu_path = icon.menu_path?;
+    Some((icon.service, icon.path, menu_path))
+}
+
 // ----- race winner -----
 #[derive(Default)]
 struct Watcher {
@@ -320,6 +358,7 @@ pub fn spawn(
                 let icons: Vec<TrayIcon> = raw
                     .iter()
                     .filter_map(|raw_svc| resolve_item(&conn, raw_svc))
+                    .filter(|icon| !tray_ignored(icon))
                     .collect();
                 let fingerprint = fingerprint_icons(&icons);
                 *state.lock().unwrap() = icons;
@@ -332,4 +371,43 @@ pub fn spawn(
                 std::thread::sleep(Duration::from_millis(2000));
             }
         });
+}
+
+#[cfg(test)]
+mod tray_ignore_tests {
+    use super::*;
+
+    fn icon(icon_name: &str, path: &str) -> TrayIcon {
+        TrayIcon {
+            icon_name: icon_name.into(),
+            path: path.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ignorados_los_que_duplican_widgets() {
+        // los nombres reales que exponen nm-applet y blueman en este equipo
+        assert!(tray_ignored(&icon(
+            "nm-signal-75",
+            "/org/ayatana/NotificationItem/nm_applet"
+        )));
+        assert!(tray_ignored(&icon("blueman-tray", "/org/blueman/sni")));
+        // por nombre alcanza, aunque el path cambie
+        assert!(tray_ignored(&icon("nm-device-wired", "/x")));
+        assert!(tray_ignored(&icon("bluetooth-symbolic", "/x")));
+    }
+
+    #[test]
+    fn no_ignorados_los_demas() {
+        assert!(!tray_ignored(&icon(
+            "org.remmina.Remmina-status",
+            "/org/ayatana/NotificationItem/remmina_icon"
+        )));
+        assert!(!tray_ignored(&icon("telegram", "/StatusNotifierItem")));
+        // ojo: cualquier cosa con "nm-" adelante se filtra (nm-applet usa ese
+        // prefijo para todos sus iconos); si un día una app paga esa deuda,
+        // esto es lo que falla primero
+        assert!(!tray_ignored(&icon("network-wired", "/x")));
+    }
 }

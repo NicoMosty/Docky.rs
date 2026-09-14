@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::menu_render::{
-    CLIP_HEADER_H, CLIP_PANEL_W, CLIP_ROW_H, CLIP_VISIBLE_ROWS, ClipArgs, clip_panel_h,
+    CLIP_PANEL_W, CLIP_ROW_H, CLIP_VISIBLE_ROWS, ClipArgs, clip_content_y, clip_panel_h,
 };
 
 impl App {
@@ -245,10 +245,11 @@ impl App {
 
     fn clipboard_row_at(&self, _x: f32, y: f32) -> Option<usize> {
         let cm = self.clipboard_mode.as_ref()?;
-        if y < CLIP_HEADER_H {
+        let top = clip_content_y();
+        if y < top {
             return None;
         }
-        let pos = ((y - CLIP_HEADER_H + cm.scroll_y) / CLIP_ROW_H).floor() as usize;
+        let pos = ((y - top + cm.scroll_y) / CLIP_ROW_H).floor() as usize;
         (pos < cm.filtered.len()).then_some(pos)
     }
 
@@ -316,6 +317,7 @@ impl App {
     pub(super) fn draw_clipboard_mode(&mut self, qh: &QueueHandle<Self>) {
         let scale = self.output_scale.max(1) as f32;
         let transparency = self.dock.config.settings.transparency;
+        let tabs = self.current_overlay().map(OverlayMode::tab_index);
         let Some(cm) = self.clipboard_mode.as_mut() else {
             return;
         };
@@ -340,6 +342,7 @@ impl App {
             render_scale: scale,
             panel_w: cm.panel_w,
             panel_h: cm.panel_h,
+            overlay_tabs: tabs,
         };
         crate::menu_render::draw_clipboard(&mut content, &mut self.text_cache, args);
 

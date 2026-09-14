@@ -337,6 +337,25 @@ pub fn volume_toggle_mute() {
         .spawn();
 }
 
+/// Sube/baja el volumen en un paso (5%), recortando en 100% (`-l`). Devuelve si
+/// el proceso terminó bien: se espera a que termine, no como el mute, porque el
+/// número del widget se relee enseguida y con `spawn` llegaría viejo.
+pub fn volume_step(up: bool) -> bool {
+    std::process::Command::new("wpctl")
+        .args([
+            "set-volume",
+            "-l",
+            "1.0",
+            "@DEFAULT_AUDIO_SINK@",
+            if up { "5%+" } else { "5%-" },
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 fn home_script(path: &str) -> Option<std::path::PathBuf> {
     let p = dirs::home_dir()?.join(path);
     p.exists().then_some(p)
@@ -374,16 +393,210 @@ pub fn open_volume_control() {
     }
 }
 
-/// true si lanzó el rofi externo, false si debe abrir el menú interno
-pub fn open_power_external() -> bool {
-    if let Some(p) = home_script("Scripts/sh-scripts/rofi/rofi-powermenu.sh") {
-        spawn_script(p);
-        true
-    } else {
-        false
-    }
+// ===== panel de volumen (click izquierdo en el widget) =====
+//
+// Fila de la salida + una fila por app que esté sonando + selector de
+// dispositivo de salida. Los streams salen de `pactl -f json list sink-inputs`:
+// `wpctl status` sólo lista ids de nodo, sin volumen por stream ni forma estable
+// de agrupar el par de patas del mismo stream. La salida por defecto sigue con
+// wpctl, que es lo que ya mide el widget. Por debajo son los mismos valores
+// (PipeWire), así que lo que muestra uno coincide con lo que ajusta el otro.
+
+/// Qué ajusta una fila del panel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VolumeTarget {
+    /// Salida por defecto (wpctl).
+    Output,
+    /// Stream de una app, por índice de sink-input (pactl).
+    Stream(u32),
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub struct VolumeRow {
+    pub target: VolumeTarget,
+    pub label: String,
+    pub pct: u8,
+    pub muted: bool,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct AudioDevice {
+    pub name: String,
+    pub label: String,
+    pub default: bool,
+}
+
+/// Filas del panel: la salida primero y después un stream por app con audio.
+/// Si no hay `wpctl` ni `pactl` vuelve vacía y el panel no se abre.
+pub fn read_volume_rows() -> Vec<VolumeRow> {
+    let mut rows = Vec::new();
+    if let Some((pct, muted)) = read_volume() {
+        rows.push(VolumeRow {
+            target: VolumeTarget::Output,
+            label: "Output".to_string(),
+            pct,
+            muted,
+        });
+    }
+    let Some(json) = pactl_json(&["-f", "json", "list", "sink-inputs"]) else {
+        return rows;
+    };
+    rows.extend(parse_streams(&json));
+    rows
+}
+
+pub fn read_audio_devices() -> Vec<AudioDevice> {
+    let Some(sinks) = pactl_json(&["-f", "json", "list", "sinks"]) else {
+        return Vec::new();
+    };
+    let default = pactl_json(&["-f", "json", "info"])
+        .as_deref()
+        .and_then(parse_default_sink)
+        .unwrap_or_default();
+    parse_devices(&sinks, &default)
+}
+
+/// `ponytail:` sin timeout propio más allá de los 400ms de `run_with_timeout`:
+/// si pactl se cuelga el panel queda con las filas que ya tenía, sin trabar el
+/// hilo principal (que es lo que importa acá).
+fn pactl_json(args: &[&str]) -> Option<String> {
+    let mut cmd = std::process::Command::new("pactl");
+    cmd.args(args);
+    let out = run_with_timeout(cmd, Duration::from_millis(400))?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+pub fn parse_streams(json: &str) -> Vec<VolumeRow> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|it| {
+            let props = it.get("properties");
+            let name = props
+                .and_then(|p| p.get("application.name"))
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    props
+                        .and_then(|p| p.get("media.name"))
+                        .and_then(|v| v.as_str())
+                })
+                .unwrap_or("App");
+            Some(VolumeRow {
+                target: VolumeTarget::Stream(it.get("index")?.as_u64()? as u32),
+                label: short_label(name, 20),
+                pct: volume_percent(it.get("volume")),
+                muted: it.get("mute").and_then(|m| m.as_bool()).unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+pub fn parse_default_sink(info_json: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(info_json)
+        .ok()?
+        .get("default_sink_name")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+pub fn parse_devices(sinks_json: &str, default: &str) -> Vec<AudioDevice> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(sinks_json) else {
+        return Vec::new();
+    };
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|s| {
+                    let name = s.get("name")?.as_str()?.to_string();
+                    let label = s
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .map(|d| short_label(d, 22))
+                        .unwrap_or_else(|| short_label(&name, 22));
+                    Some(AudioDevice {
+                        default: name == default,
+                        name,
+                        label,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// El más alto de los canales: suelen ir juntos, y con el máximo una app con un
+/// canal en cero no queda mostrada como muda.
+fn volume_percent(volume: Option<&serde_json::Value>) -> u8 {
+    let Some(map) = volume.and_then(|v| v.as_object()) else {
+        return 0;
+    };
+    let top = map
+        .values()
+        .filter_map(|ch| {
+            if let Some(p) = ch.get("value_percent").and_then(|v| v.as_str())
+                && let Ok(n) = p.trim_end_matches('%').parse::<f32>()
+            {
+                return Some(n);
+            }
+            // ----- PA_VOLUME_NORM = 65536 = 100% -----
+            ch.get("value")
+                .and_then(|v| v.as_f64())
+                .map(|v| (v / 655.36) as f32)
+        })
+        .fold(f32::MIN, f32::max);
+    if top == f32::MIN {
+        return 0;
+    }
+    (top.round().clamp(0.0, 150.0)) as u8
+}
+
+fn short_label(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{cut}\u{2026}")
+}
+
+pub fn set_output_volume(pct: u8) {
+    spawn_quiet(
+        "wpctl",
+        &["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{pct}%")],
+    );
+}
+
+pub fn set_stream_volume(id: u32, pct: u8) {
+    let id = id.to_string();
+    spawn_quiet("pactl", &["set-sink-input-volume", &id, &format!("{pct}%")]);
+}
+
+pub fn toggle_stream_mute(id: u32) {
+    let id = id.to_string();
+    spawn_quiet("pactl", &["set-sink-input-mute", &id, "toggle"]);
+}
+
+pub fn set_default_sink(name: &str) {
+    spawn_quiet("pactl", &["set-default-sink", name]);
+}
+
+fn spawn_quiet(program: &str, args: &[&str]) {
+    let _ = std::process::Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// true si lanzó el rofi externo, false si debe abrir el menú interno
 fn hyprctl_json(args: &[&str]) -> Option<serde_json::Value> {
     let mut cmd = std::process::Command::new("hyprctl");
     cmd.args(args);
@@ -681,14 +894,27 @@ fn resolve_art_path(url: &str) -> Option<String> {
     None
 }
 
+/// Valor de un dígito hex, o `None` si el byte no lo es.
+fn hex_digit(byte: u8) -> Option<u8> {
+    (byte as char).to_digit(16).map(|d| d as u8)
+}
+
+/// El `%XX` se decodifica sobre BYTES, nunca con `&s[i+1..i+3]`: cortar un `str`
+/// en un límite que no es de char paniquea, así que un `artUrl` como `%€` mataba
+/// el dock (y el chequeo de índices no alcanza: `€` ocupa 3 bytes, o sea que
+/// `i + 2` está dentro de `bytes` pero en medio del char).
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
+        let hex = || {
+            let hi = bytes.get(i + 1).copied().and_then(hex_digit)?;
+            let lo = bytes.get(i + 2).copied().and_then(hex_digit)?;
+            Some(hi * 16 + lo)
+        };
         if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+            && let Some(byte) = hex()
         {
             out.push(byte);
             i += 3;
@@ -739,10 +965,12 @@ pub fn media_toggle() {
 
 // ----- percent and muted -----
 pub fn read_volume() -> Option<(u8, bool)> {
-    let out = std::process::Command::new("wpctl")
-        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("wpctl");
+    cmd.args(["get-volume", "@DEFAULT_AUDIO_SINK@"]);
+    // ----- con PipeWire caído `wpctl get-volume` se cuelga. Esto corre en el
+    // tick de 2s, así que sin timeout el dock se congelaba para siempre y no
+    // revivía ni con Escape. Mismo helper que el resto de las lecturas. -----
+    let out = run_with_timeout(cmd, Duration::from_millis(500))?;
     if !out.status.success() {
         return None;
     }
@@ -776,4 +1004,115 @@ pub fn read_brightness() -> Option<u8> {
         return None;
     }
     Some(((cur as f32 / max as f32) * 100.0).round() as u8)
+}
+
+#[cfg(test)]
+mod volume_panel_tests {
+    use super::*;
+
+    // ----- muestra real de `pactl -f json list sink-inputs` (recortada) -----
+    const INPUTS: &str = r#"[
+      {"index": 1731, "mute": false,
+       "volume": {"front-left": {"value": 65536, "value_percent": "100%"},
+                  "front-right": {"value": 32768, "value_percent": "50%"}},
+       "properties": {"application.name": "mpv", "media.name": "Front_Center.wav - mpv"}},
+      {"index": 1740, "mute": true,
+       "volume": {"mono": {"value": 13107, "value_percent": "20%"}},
+       "properties": {"media.name": "Un nombre largo de mas de veinte"}}
+    ]"#;
+
+    #[test]
+    fn streams_toman_el_canal_mas_alto_y_el_nombre_de_la_app() {
+        let rows = parse_streams(INPUTS);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].target, VolumeTarget::Stream(1731));
+        assert_eq!(rows[0].label, "mpv");
+        assert_eq!(rows[0].pct, 100); // el máximo de los dos canales
+        assert!(!rows[0].muted);
+        // sin application.name cae al media.name, recortado
+        assert_eq!(rows[1].target, VolumeTarget::Stream(1740));
+        assert_eq!(rows[1].pct, 20);
+        assert!(rows[1].muted);
+        assert_eq!(rows[1].label.chars().count(), 20);
+    }
+
+    #[test]
+    fn json_roto_no_paniquea() {
+        assert!(parse_streams("no soy json").is_empty());
+        assert!(parse_streams("{}").is_empty());
+        assert!(parse_devices("[]", "x").is_empty());
+        assert_eq!(parse_default_sink("{}"), None);
+    }
+
+    #[test]
+    fn el_dispositivo_marcado_es_el_que_manda_pactl() {
+        let sinks = r#"[{"name": "alsa_output.pci", "description": "Ryzen HD Audio"},
+                        {"name": "hdmi", "description": "HDMI/DP"}]"#;
+        let devs = parse_devices(sinks, "hdmi");
+        assert_eq!(devs.len(), 2);
+        assert!(!devs[0].default);
+        assert_eq!(devs[0].label, "Ryzen HD Audio");
+        assert!(devs[1].default);
+        assert_eq!(
+            parse_default_sink(r#"{"default_sink_name": "hdmi"}"#).as_deref(),
+            Some("hdmi")
+        );
+    }
+}
+
+#[cfg(test)]
+mod percent_decode_tests {
+    use super::*;
+
+    #[test]
+    fn decodifica_lo_que_tiene_que_decodificar() {
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("%2Ftmp%2Fx.png"), "/tmp/x.png");
+        assert_eq!(percent_decode("sin escapes"), "sin escapes");
+        assert_eq!(percent_decode("%41%42"), "AB");
+    }
+
+    #[test]
+    fn un_porcentaje_roto_no_paniquea() {
+        // ----- los casos que mataban el dock: `%` seguido de un char multibyte
+        // (cortar el `str` en `i+1..i+3` no era límite de char), `%` al final y
+        // `%` con dígitos no-hex. -----
+        for entrada in [
+            "%€", "a%€b", "%", "a%", "%zz", "%2", "%2€", "100%€", "%ff%€%", "%\u{ff}",
+        ] {
+            let salida = percent_decode(entrada);
+            assert!(
+                !salida.is_empty() || entrada.is_empty(),
+                "{entrada:?} se decodificó a algo vacío"
+            );
+        }
+        assert_eq!(percent_decode("%"), "%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+    }
+
+    #[test]
+    fn un_timeout_mata_al_hijo_colgado() {
+        // ----- lo que sostiene a1: `read_volume` corre en el tick de 2s, así que
+        // si `run_with_timeout` no matara al proceso colgado el dock se queda
+        // congelado. La firma que importa es "vuelve rápido con None". -----
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "sleep 5"]);
+        let start = std::time::Instant::now();
+        let out = run_with_timeout(cmd, Duration::from_millis(150));
+        assert!(out.is_none(), "un comando que se cuelga tiene que dar None");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "tardó {:?}: no está matando al hijo",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn un_comando_rapido_pasa_su_stdout() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "echo hola"]);
+        let out = run_with_timeout(cmd, Duration::from_secs(5)).expect("debería salir");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hola");
+    }
 }

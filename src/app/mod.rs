@@ -12,7 +12,7 @@ use crate::thumbnail_cache::ThumbnailCache;
 use crate::wallpaper::{self, WallpaperEntry};
 use crate::widgets;
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
+    compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_registry,
     delegate_seat, delegate_shm,
     output::{OutputHandler, OutputState},
@@ -57,6 +57,7 @@ mod pointer;
 mod popup_menu;
 mod popup_menu_input;
 mod screenshot;
+mod volume_panel;
 mod wallpaper_picker;
 mod ws_flash;
 use fonts::{apply_kitty_font, apply_system_gtk_font, apply_system_qt_font};
@@ -175,6 +176,15 @@ pub(crate) struct DockPopupMode {
     surface_h: f32,
     box_x: f32,
     box_y: f32,
+    // ----- el puntero está dentro del popup: mientras lo esté, salir del dock no
+    // lo cierra. Si no, moverse del icono al menú lo cerraría al pasar. -----
+    popup_hovered: bool,
+    // ----- panel de volumen (`MenuScreen::VolumePanel`): datos que dibuja
+    // `menu_render`, más el estado del arrastre de la barra -----
+    volume_rows: Vec<crate::widgets::VolumeRow>,
+    volume_devices: Vec<crate::widgets::AudioDevice>,
+    volume_drag: Option<usize>,
+    volume_apply_at: Option<std::time::Instant>,
 }
 
 pub(crate) struct DockMenuMode {
@@ -271,6 +281,14 @@ pub(crate) const OVERLAY_ORDER: [OverlayMode; 4] = [
     OverlayMode::Wallpaper,
     OverlayMode::Windows,
 ];
+
+impl OverlayMode {
+    /// Posición en la barra de pestañas: es la misma que en `OVERLAY_ORDER`, que es
+    /// lo que recorre Shift+←/→. El índice lo consume el dibujo de la banda.
+    pub(crate) fn tab_index(self) -> usize {
+        OVERLAY_ORDER.iter().position(|m| *m == self).unwrap_or(0)
+    }
+}
 
 impl App {
     /// Qué modo del overlay está abierto, si hay alguno.
@@ -482,4 +500,19 @@ fn repo_dir() -> std::path::PathBuf {
 
 pub(crate) fn trim_heap() {
     unsafe { libc::malloc_trim(0) };
+}
+
+#[cfg(test)]
+mod overlay_tabs_tests {
+    use super::OVERLAY_ORDER;
+    use crate::menu::OVERLAY_TABS;
+
+    /// La banda dibuja la pestaña `tab_index()` con el nombre de
+    /// `OVERLAY_TABS[tab_index()]`: si se reordena `OVERLAY_ORDER` sin tocar las
+    /// etiquetas, queda mintiendo (pestaña "Clipboard" con el launcher abierto).
+    #[test]
+    fn la_barra_sigue_el_orden_de_los_modos() {
+        assert_eq!(OVERLAY_ORDER.map(|m| m.tab_index()), [0, 1, 2, 3]);
+        assert_eq!(OVERLAY_TABS, ["Apps", "Clipboard", "Wallpapers", "Windows"]);
+    }
 }

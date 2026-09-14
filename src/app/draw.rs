@@ -99,16 +99,24 @@ impl App {
             return;
         }
         let stride = width * 4;
-        let (buffer, canvas) = self
-            .pool
-            .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
-            .expect("failed to create hidden shm buffer");
+        // ----- sin /dev/shm o sin fds `create_buffer` falla, y esto corre en CADA
+        // ocultado: paniquear acá mataba el dock estando invisible y no se
+        // recuperaba. Ante el fallo dejamos el buffer viejo puesto (la superficie
+        // sigue mapeada) en vez de morir. -----
+        let Ok((buffer, canvas)) =
+            self.pool
+                .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
+        else {
+            log::error!("no pude crear el buffer oculto ({width}x{height})");
+            return;
+        };
         canvas.fill(0);
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(self.output_scale.max(1));
-        buffer
-            .attach_to(surface)
-            .expect("failed to attach hidden buffer");
+        if let Err(err) = buffer.attach_to(surface) {
+            log::error!("no pude mapear el buffer oculto: {err}");
+            return;
+        }
         surface.damage_buffer(0, 0, width, height);
         surface.commit();
         self.awaiting_frame = false;
@@ -228,6 +236,31 @@ impl App {
         self.forces_dock_visible() || self.menu.is_some() || self.popup_mode.is_some()
     }
 
+    /// El puntero se fue del dock y no está en el menú: el menú se cierra. Mientras
+    /// `popup_hovered` sea true el salto icono -> menú está en curso y no se cierra.
+    fn popup_should_dismiss(&self) -> bool {
+        self.popup_mode.is_some()
+            && Self::popup_dismiss_due(
+                self.popup_mode.as_ref().is_some_and(|p| p.popup_hovered),
+                self.dock.pointer_pos.is_some(),
+                self.ptr_left_at.map(|t| t.elapsed().as_millis()),
+            )
+    }
+
+    // ----- con un popup abierto `draw_ex` no corre: el único tick es el del
+    // autohide. Se agenda a mano para que el cierre del menú no dependa de que el
+    // ocultado automático esté encendido. -----
+    pub(crate) fn arm_popup_tick(&mut self) {
+        let _ = self.autohide_hide_tx.send(LEAVE_HIDE_MS);
+    }
+
+    /// ¿Ya toca cerrar el menú? El puntero tiene que haberse ido del dock y no estar
+    /// dentro del menú, y tiene que haber pasado el plazo corto: si no, el salto
+    /// icono -> menú (Leave + Enter en el mismo lote de eventos) lo cerraría al pasar.
+    fn popup_dismiss_due(popup_hovered: bool, ptr_on_dock: bool, left_ms: Option<u128>) -> bool {
+        !popup_hovered && !ptr_on_dock && left_ms.is_some_and(|ms| ms >= LEAVE_HIDE_MS as u128)
+    }
+
     fn should_hide(&self) -> bool {
         // El foco del puntero se pierde (Leave) cuando el compositor reconfigura
         // la superficie, y en el borde exacto el hit-test oscila. Por eso no basta
@@ -313,7 +346,7 @@ impl App {
         self.sync_autohide_surfaces();
     }
 
-    pub(crate) fn autohide_timeout(&mut self, _qh: &QueueHandle<Self>) {
+    pub(crate) fn autohide_timeout(&mut self, qh: &QueueHandle<Self>) {
         self.autohide_armed = false;
         log::debug!(
             "autohide:{} timeout visible={} ptr={:?} down={} borrowed={} menu={} popup={}",
@@ -325,6 +358,12 @@ impl App {
             self.menu.is_some(),
             self.popup_mode.is_some()
         );
+        // ----- el menú se cierra cuando el puntero no está ni en el dock ni en él:
+        // antes se cerraba sólo con un click, y ese click lo consumía, así que el
+        // menú "no aparecía" a la primera y quedaba abierto para siempre. -----
+        if self.popup_should_dismiss() {
+            self.close_popup_mode(qh);
+        }
         if self.should_hide() {
             self.set_dock_visible(false);
             // ----- el contenido visible sigue enganchado: sustituirlo por transparente -----
@@ -453,6 +492,9 @@ impl App {
         if !active {
             return;
         }
+        // ----- el panel de volumen relee sus streams aunque el widget no haya
+        // cambiado: una app puede empezar o dejar de sonar sin que wpctl cambie -----
+        self.refresh_volume_panel(qh);
         if self.widgets.refresh_sys() {
             self.sync_widget_bar_len();
             self.relayout_dock(qh);
@@ -483,5 +525,36 @@ impl App {
             cross_len,
             widget_scale,
         );
+    }
+}
+
+#[cfg(test)]
+mod popup_dismiss_tests {
+    // ----- el cierre del menú costó dos rondas de depuración: este test fija el
+    // contrato del caso que lo rompía (el salto icono -> menú). -----
+    use super::App;
+
+    const PLAZO: u128 = 150;
+
+    #[test]
+    fn el_salto_icono_menu_no_lo_cierra() {
+        // Leave del dock + Enter en el menú en el mismo lote de eventos: ya no está
+        // en el dock pero sí en el menú, y así tiene que quedarse.
+        assert!(!App::popup_dismiss_due(true, false, Some(30_000)));
+        assert!(!App::popup_dismiss_due(true, false, None));
+    }
+
+    #[test]
+    fn irse_lejos_lo_cierra() {
+        assert!(App::popup_dismiss_due(false, false, Some(PLAZO)));
+        assert!(App::popup_dismiss_due(false, false, Some(2_000)));
+    }
+
+    #[test]
+    fn volver_al_dock_o_antes_del_plazo_no_lo_cierra() {
+        assert!(!App::popup_dismiss_due(false, true, Some(2_000)));
+        assert!(!App::popup_dismiss_due(false, false, Some(PLAZO - 1)));
+        // sin Leave registrado tampoco (el puntero nunca dejó el dock)
+        assert!(!App::popup_dismiss_due(false, false, None));
     }
 }

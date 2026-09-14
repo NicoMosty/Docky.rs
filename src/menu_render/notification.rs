@@ -16,7 +16,7 @@ pub fn draw_notification(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: 
     let settings = &args.dock.config.settings;
 
     let bg = panel_bg(settings);
-    let path = rounded_rect_path(0.0, 0.0, w, h, settings.corner_radius * s);
+    let path = rounded_rect_path(0.0, 0.0, w, h, menu_radius(settings, s));
     let mut paint = Paint::default();
     paint.set_color_rgba8(bg.0, bg.1, bg.2, bg.3);
     paint.anti_alias = true;
@@ -27,6 +27,7 @@ pub fn draw_notification(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: 
         Transform::identity(),
         None,
     );
+    stroke_menu_border(pixmap, &path, settings, s);
 
     let acc = accent(settings);
 

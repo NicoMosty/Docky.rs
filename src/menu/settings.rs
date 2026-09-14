@@ -10,6 +10,8 @@ pub enum SettingId {
     PosY,
     CornerRadius,
     BorderWidth,
+    MenuCornerRadius,
+    MenuBorderWidth,
     Transparency,
     BlurEnabled,
     BlurPasses,
@@ -35,6 +37,8 @@ impl SettingId {
             SettingId::PosY => "Position Y",
             SettingId::CornerRadius => "Dock Roundness",
             SettingId::BorderWidth => "Dock Border",
+            SettingId::MenuCornerRadius => "Menu Roundness",
+            SettingId::MenuBorderWidth => "Menu Border",
             SettingId::Transparency => "Transparency",
             SettingId::BlurEnabled => "Blur",
             SettingId::BlurPasses => "Blur Passes",
@@ -58,8 +62,8 @@ impl SettingId {
             SettingId::IconGap => (0.0, 40.0, 1.0),
             SettingId::WidthPadding => (0.0, 2400.0, 1.0),
             SettingId::PosY => (0.0, 80.0, 1.0),
-            SettingId::CornerRadius => (0.0, 40.0, 1.0),
-            SettingId::BorderWidth => (0.0, 5.0, 0.01),
+            SettingId::CornerRadius | SettingId::MenuCornerRadius => (0.0, 40.0, 1.0),
+            SettingId::BorderWidth | SettingId::MenuBorderWidth => (0.0, 5.0, 0.01),
             SettingId::Transparency => (0.0, 1.0, 0.01),
             SettingId::BlurPasses => (1.0, 8.0, 1.0),
             SettingId::BlurSize => (1.0, 20.0, 1.0),
@@ -95,6 +99,8 @@ impl SettingId {
             SettingId::PosY => s.pos_y as f32,
             SettingId::CornerRadius => s.corner_radius,
             SettingId::BorderWidth => s.border_width,
+            SettingId::MenuCornerRadius => s.menu_corner_radius,
+            SettingId::MenuBorderWidth => s.menu_border_width,
             SettingId::Transparency => s.transparency,
             SettingId::BlurEnabled => bool_f(s.blur_enabled),
             SettingId::BlurPasses => s.blur_passes as f32,
@@ -122,6 +128,8 @@ impl SettingId {
             SettingId::PosY => s.pos_y = clamped.round() as i32,
             SettingId::CornerRadius => s.corner_radius = clamped,
             SettingId::BorderWidth => s.border_width = clamped,
+            SettingId::MenuCornerRadius => s.menu_corner_radius = clamped,
+            SettingId::MenuBorderWidth => s.menu_border_width = clamped,
             SettingId::Transparency => s.transparency = clamped,
             SettingId::BlurEnabled => s.blur_enabled = clamped >= 0.5,
             SettingId::BlurPasses => s.blur_passes = clamped.round() as i32,
@@ -149,6 +157,7 @@ impl SettingId {
             | SettingId::WidthPadding
             | SettingId::PosY
             | SettingId::CornerRadius
+            | SettingId::MenuCornerRadius
             | SettingId::BlurSize => format!("{}px", self.get(s).round() as i32),
             SettingId::BlurPasses => format!("{}", self.get(s).round() as i32),
             SettingId::DockScale | SettingId::WidgetScale | SettingId::MediaWidthScale => {
@@ -158,7 +167,7 @@ impl SettingId {
                 format!("{}%", (self.get(s) * 100.0).round() as i32)
             }
             SettingId::BlurBrightness | SettingId::BlurContrast => format!("{:.2}", self.get(s)),
-            SettingId::BorderWidth => format!("{:.2}px", self.get(s)),
+            SettingId::BorderWidth | SettingId::MenuBorderWidth => format!("{:.2}px", self.get(s)),
             SettingId::AutohideDelay => format!("{}ms", self.get(s).round() as i32),
             SettingId::BlurEnabled
             | SettingId::BlurXray
@@ -213,4 +222,41 @@ impl SettingId {
 
 fn bool_f(b: bool) -> f32 {
     if b { 1.0 } else { 0.0 }
+}
+
+#[cfg(test)]
+mod menu_border_tests {
+    use super::*;
+    use crate::menu::controls::APPEARANCE_SETTINGS;
+
+    /// Los ajustes de borde de menús tienen que estar expuestos en el panel:
+    /// sin esto el setting existe pero el usuario no lo puede cambiar (pasó
+    /// con Menu Roundness, que estaba en SettingId pero fuera de la lista).
+    #[test]
+    fn los_ajustes_de_menu_estan_en_appearance() {
+        assert!(APPEARANCE_SETTINGS.contains(&SettingId::MenuCornerRadius));
+        assert!(APPEARANCE_SETTINGS.contains(&SettingId::MenuBorderWidth));
+    }
+
+    /// Roundtrip con clamp: el radio recorta a [0, 40], el borde a [0, 5].
+    #[test]
+    fn menu_roundness_y_border_con_clamp() {
+        let mut s = DockSettings::default();
+        SettingId::MenuCornerRadius.set(&mut s, 4.0);
+        assert_eq!(SettingId::MenuCornerRadius.get(&s), 4.0);
+        SettingId::MenuCornerRadius.set(&mut s, 99.0);
+        assert_eq!(SettingId::MenuCornerRadius.get(&s), 40.0);
+        SettingId::MenuBorderWidth.set(&mut s, 2.5);
+        assert_eq!(SettingId::MenuBorderWidth.get(&s), 2.5);
+        SettingId::MenuBorderWidth.set(&mut s, -1.0);
+        assert_eq!(SettingId::MenuBorderWidth.get(&s), 0.0);
+    }
+
+    /// Defaults que preservan el look actual: mismo radio que el dock, sin borde.
+    #[test]
+    fn defaults_iguales_al_dock() {
+        let s = DockSettings::default();
+        assert_eq!(s.menu_corner_radius, s.corner_radius);
+        assert_eq!(s.menu_border_width, 0.0);
+    }
 }

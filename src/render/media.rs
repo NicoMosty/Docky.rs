@@ -323,18 +323,13 @@ pub fn media_toggle_hit(
     if widgets.media.is_none() {
         return false;
     }
-    let widget_scale = dock.config.settings.widget_scale;
     let is_vertical = dock.is_vertical();
-    let (base_w, base_h) = dock.base_size();
-    let rects = layout_widgets(
-        &dock.config.settings,
-        widgets,
-        tray_count,
-        is_vertical,
-        base_w as f32,
-        base_h as f32,
-        widget_scale,
-    );
+    // ----- la misma escala que el resto de los hit tests: ver `hit_layout` -----
+    let widget_scale = hit_scale(&dock.config.settings);
+    // ----- `media_layout` espeja/clampa contra el largo de la barra, en las mismas
+    // unidades que el reparto: el ancho base lógico -----
+    let (base_w, _) = dock.base_size();
+    let rects = hit_layout(dock, widgets, tray_count);
     let Some(r) = rects
         .into_iter()
         .find(|r| r.kind == crate::config::WidgetKind::Media)

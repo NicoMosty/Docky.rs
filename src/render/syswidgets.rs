@@ -59,8 +59,8 @@ fn draw_icon_label(
     is_vertical: bool,
 ) {
     if is_vertical {
-        let label_len = text_width_estimate_render(label, 10.0 * render_scale);
-        let gap = 4.0 * render_scale;
+        let label_len = text_width_estimate_render(label, VOLUME_LABEL_PX * render_scale);
+        let gap = VOLUME_ICON_GAP * render_scale;
         let total = icon_r * 2.0 + gap + label_len;
         let block_start = zy + (zh - total) / 2.0;
         let cx = zx + zw / 2.0;
@@ -78,28 +78,37 @@ fn draw_icon_label(
             label,
             cx,
             block_start + icon_r * 2.0 + gap + label_len / 2.0,
-            10.0 * render_scale,
+            VOLUME_LABEL_PX * render_scale,
             colors.text_color,
             600,
         );
     } else {
-        let label_w = text_width_estimate_render(label, 10.0 * render_scale);
-        let gap = 4.0 * render_scale;
+        // ----- centrado con el ancho REAL del texto, no con la estimación: la
+        // estimación subestima un par de px y el contenido quedaba pegado al
+        // borde izquierdo de la pastilla (padding 1px izq / 4px der) -----
+        let Some(txt) = text_cache.get(
+            label,
+            VOLUME_LABEL_PX * render_scale,
+            colors.text_color,
+            600,
+        ) else {
+            return;
+        };
+        let label_w = txt.width() as f32;
+        let gap = VOLUME_ICON_GAP * render_scale;
         let content_w = icon_r * 2.0 + gap + label_w;
         let block_x = zx + (zw - content_w) / 2.0;
         let cy = zy + zh / 2.0;
         let icon_cx = block_x + icon_r;
         draw_icon(pixmap, render_scale, icon_cx, cy, colors, active);
-        if let Some(txt) = text_cache.get(label, 10.0 * render_scale, colors.text_color, 600) {
-            pixmap.draw_pixmap(
-                0,
-                0,
-                txt.as_ref().as_ref(),
-                &tiny_skia::PixmapPaint::default(),
-                Transform::from_translate(icon_cx + icon_r + gap, cy - txt.height() as f32 / 2.0),
-                None,
-            );
-        }
+        pixmap.draw_pixmap(
+            0,
+            0,
+            txt.as_ref().as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            Transform::from_translate(icon_cx + icon_r + gap, cy - txt.height() as f32 / 2.0),
+            None,
+        );
     }
 }
 
@@ -137,7 +146,12 @@ fn draw_speaker_icon(
 ) {
     // ----- altavoz compacto: caja + cono y UNA sola onda. Antes llevaba dos
     // ondas y era ~30% más ancho; así el espacio ahorrado rinde para el número -----
-    let s = 5.2 * render_scale;
+    // ----- `s` atado a VOLUME_ICON_R a propósito: el cuerpo llega a -0.95s y la
+    // onda a ~+0.85s, o sea que el icono mide ~1.8s de ancho y tiene que entrar en
+    // la caja de 2*VOLUME_ICON_R que le reservan el reparto y `draw_icon_label`. Con
+    // el s fijo viejo (5.2) medía ~10 unidades contra las 6 reservadas y se salía
+    // de la pastilla por la izquierda. -----
+    let s = VOLUME_ICON_R * render_scale;
     let alpha = if active { 230 } else { 110 };
     let mut paint = Paint::default();
     paint.set_color_rgba8(
@@ -257,20 +271,23 @@ pub(super) fn draw_volume_widget(
     render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    hovered: bool,
 ) {
     let Some((pct, muted)) = widgets.volume else {
         return;
     };
+    // ----- sin el "%": el número pelado alcanza y deja el botón compacto -----
     let label = if muted {
         "MUTE".to_string()
     } else {
-        format!("{pct}%")
+        pct.to_string()
     };
+    draw_widget_button_bg(pixmap, zx, zy, zw, zh, render_scale, colors, hovered);
     draw_icon_label(
         pixmap,
         text_cache,
         draw_speaker_icon,
-        4.7 * render_scale,
+        VOLUME_ICON_R * render_scale,
         !muted,
         &label,
         zx,
@@ -298,18 +315,7 @@ pub(super) fn draw_network_widget(
     hovered: bool,
 ) {
     // ----- botón solo-icono; el nombre va en pill flotante al hover -----
-    let bg_alpha = if hovered { 80 } else { 30 };
-    let path = rounded_rect_path(zx + 1.0, zy + 1.0, zw - 2.0, zh - 2.0, 6.0 * render_scale);
-    let mut paint = Paint::default();
-    paint.set_color_rgba8(colors.accent.0, colors.accent.1, colors.accent.2, bg_alpha);
-    paint.anti_alias = true;
-    pixmap.fill_path(
-        &path,
-        &paint,
-        tiny_skia::FillRule::Winding,
-        Transform::identity(),
-        None,
-    );
+    draw_widget_button_bg(pixmap, zx, zy, zw, zh, render_scale, colors, hovered);
     draw_wifi_icon(
         pixmap,
         render_scale,

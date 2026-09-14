@@ -30,6 +30,17 @@ Uso:
     --double   hace un DOBLE click: dos clicks separados ~80ms, dentro de los 400ms
                que pide el dock para reconocer el gesto.
 
+    --shift-arrow left|right [--times N]
+               en vez de clickear, teclea Shift+←/→ (N veces, default 1): es el ciclo
+               de modos del overlay, que sin esto no se puede ejercitar sin teclado.
+               Ej.: abrir el launcher por IPC y `--shift-arrow left` para caer en
+               "ventanas" (Apps -> Windows).
+
+    --scroll up|down [--times N]
+               en vez de clickear, gira la RUEDA sobre el punto alcanzado (default
+               N=1). Sirve para el volumen del dock (rueda = ±5% sobre el widget de
+               volumen). Necesita que el dock esté visible: el reveal se hace igual.
+
 Imprime el hit que devolvió la app (`-> Some(Battery)`, `-> None`, …), que es
 lo que permite saber dónde cayó el click sin adivinar.
 
@@ -57,10 +68,13 @@ EV_SYN, EV_KEY, EV_REL = 0, 1, 2
 SYN_REPORT = 0
 REL_X, REL_Y = 0, 1
 BTN_LEFT, BTN_RIGHT = 0x110, 0x111
+KEY_LEFTSHIFT, KEY_LEFT, KEY_RIGHT = 42, 105, 106
+REL_WHEEL = 8
 
 DEFAULT_LOG = "/tmp/menu.log"
 REVEAL_TAG = " reveal"
 HIT_TAG = "click derecho"
+OVERLAY_TAG = "overlay:"
 
 
 def emit(fd, etype, code, value):
@@ -99,6 +113,40 @@ def last_hit(path):
     return lines[-1].split(HIT_TAG, 1)[1].strip()
 
 
+def last_overlay(path):
+    try:
+        with open(path, "r", errors="replace") as fh:
+            lines = [line for line in fh if OVERLAY_TAG in line]
+    except OSError:
+        return None
+    return lines[-1].strip() if lines else None
+
+
+def make_keyboard(name=b"dockyrs-keys"):
+    """Teclado virtual: el otro id de producto, para no confundirlo con el puntero."""
+    fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
+    for code in (KEY_LEFTSHIFT, KEY_LEFT, KEY_RIGHT):
+        fcntl.ioctl(fd, UI_SET_KEYBIT, code)
+    buf = bytearray(struct.pack("4H80sI", 0x03, 0x1234, 0x5679, 1, name[:79], 0))
+    fcntl.ioctl(fd, UI_DEV_SETUP, buf)
+    fcntl.ioctl(fd, UI_DEV_CREATE)
+    return fd
+
+
+def tap_shift_arrow(fd, key, times):
+    """Shift+←/→ cicla el overlay; hace falta un modo abierto (teclado Exclusive)."""
+    for _ in range(times):
+        emit(fd, EV_KEY, KEY_LEFTSHIFT, 1)
+        emit(fd, EV_KEY, key, 1)
+        sync(fd)
+        time.sleep(0.05)
+        emit(fd, EV_KEY, key, 0)
+        emit(fd, EV_KEY, KEY_LEFTSHIFT, 0)
+        sync(fd)
+        time.sleep(0.45)
+
+
 def make_device(name=b"dockyrs-test"):
     """Crea el puntero virtual y devuelve su fd (cerrarlo lo destruye)."""
     fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
@@ -108,6 +156,7 @@ def make_device(name=b"dockyrs-test"):
         fcntl.ioctl(fd, UI_SET_KEYBIT, code)
     for code in (REL_X, REL_Y):
         fcntl.ioctl(fd, UI_SET_RELBIT, code)
+    fcntl.ioctl(fd, UI_SET_RELBIT, REL_WHEEL)
     buf = bytearray(struct.pack("4H80sI", 0x03, 0x1234, 0x5678, 1, name[:79], 0))
     fcntl.ioctl(fd, UI_DEV_SETUP, buf)
     fcntl.ioctl(fd, UI_DEV_CREATE)
@@ -128,9 +177,12 @@ def park_away(fd):
     time.sleep(2.0)  # > autohide_delay (1200ms) para que llegue a ocultarse
 
 
-def reveal_and_click(fd, log, extra, button, y_steps, then_dx=0, then_dy=0, double=False):
+def reveal_and_click(
+    fd, log, extra, button, y_steps, then_dx=0, then_dy=0, double=False, wheel=None, times=1
+):
     """Se aleja, satisface la esquina, baja a la franja, barre hasta que el dock
-    se revela, avanza `extra` pasos y clickea. Devuelve si detectó el reveal."""
+    se revela, avanza `extra` pasos y clickea (o gira la rueda si wheel).
+    Devuelve si detectó el reveal."""
     park_away(fd)
     for _ in range(25):
         rel(fd, -40, -40)
@@ -151,6 +203,14 @@ def reveal_and_click(fd, log, extra, button, y_steps, then_dx=0, then_dy=0, doub
         rel(fd, 3, 0)
         time.sleep(0.012)
     time.sleep(0.25)
+    if wheel is not None:
+        # ----- rueda en el punto alcanzado (REL_WHEEL: +1 arriba, -1 abajo) -----
+        for _ in range(times):
+            emit(fd, EV_REL, REL_WHEEL, 1 if wheel == "up" else -1)
+            sync(fd)
+            time.sleep(0.08)
+        time.sleep(0.4)
+        return revealed
     emit(fd, EV_KEY, button, 1)
     sync(fd)
     time.sleep(0.06)
@@ -195,7 +255,23 @@ def main():
     parser.add_argument("--then-dx", type=int, default=0)
     parser.add_argument("--then-dy", type=int, default=0)
     parser.add_argument("--double", action="store_true")
+    parser.add_argument("--shift-arrow", choices=("left", "right"))
+    parser.add_argument("--scroll", choices=("up", "down"))
+    parser.add_argument("--times", type=int, default=1)
     args = parser.parse_args()
+
+    if args.shift_arrow:
+        fd = make_keyboard()
+        try:
+            time.sleep(1.6)
+            tap_shift_arrow(
+                fd, KEY_LEFT if args.shift_arrow == "left" else KEY_RIGHT, args.times
+            )
+        finally:
+            os.close(fd)
+        time.sleep(0.4)
+        print(last_overlay(args.log) or "no hubo cambio de modo (¿hay algún modo abierto?)")
+        return 0
 
     fd = make_device()
     try:
@@ -209,6 +285,8 @@ def main():
             args.then_dx,
             args.then_dy,
             args.double,
+            args.scroll,
+            args.times,
         )
     finally:
         os.close(fd)

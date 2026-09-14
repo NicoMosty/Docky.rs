@@ -148,6 +148,15 @@ impl LayerShellHandler for App {
             return;
         }
         if layer.wl_surface() == self.layer.wl_surface() {
+            // ----- el tamaño que da el compositor y el que dibujamos: si no
+            // coinciden, el buffer se estira y los clicks caen corridos respecto
+            // a lo dibujado (el hit-test usa coordenadas locales del layout). -----
+            log::debug!(
+                "dock: configure new_size={:?} base={:?} applied={:?}",
+                configure.new_size,
+                self.dock.base_size(),
+                self.applied_size
+            );
             if self.first_configure {
                 self.first_configure = false;
             }

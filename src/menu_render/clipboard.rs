@@ -7,7 +7,8 @@ use crate::config::DockSettings;
 use crate::text::TextCache;
 
 use super::{
-    centered_text_y, draw_text, fill_rrect, panel_bg, rounded_rect_path, text_dim_hex, text_hex,
+    centered_text_y, draw_text, fill_rrect, menu_radius, panel_bg, rounded_rect_path,
+    stroke_menu_border, text_dim_hex, text_hex,
 };
 
 pub const CLIP_ROW_H: f32 = 54.0;
@@ -17,7 +18,13 @@ pub const CLIP_VISIBLE_ROWS: usize = 7;
 pub const CLIP_PANEL_W: f32 = 440.0;
 
 pub fn clip_panel_h() -> f32 {
-    CLIP_HEADER_H + CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32 + CLIP_PAD
+    clip_content_y() + CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32 + CLIP_PAD
+}
+
+/// Dónde arranca el contenido del portapapeles: la banda de pestañas arriba del
+/// encabezado. La usan el dibujo y el hit test, así que se mueven juntos.
+pub fn clip_content_y() -> f32 {
+    crate::menu::OVERLAY_TABS_H + CLIP_HEADER_H
 }
 
 pub struct ClipArgs<'a> {
@@ -32,6 +39,7 @@ pub struct ClipArgs<'a> {
     pub render_scale: f32,
     pub panel_w: f32,
     pub panel_h: f32,
+    pub overlay_tabs: Option<usize>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -42,7 +50,7 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
     let h = args.panel_h * s;
 
     let bg = panel_bg(settings);
-    let path = rounded_rect_path(0.0, 0.0, w, h, settings.corner_radius * s);
+    let path = rounded_rect_path(0.0, 0.0, w, h, menu_radius(settings, s));
     let mut paint = tiny_skia::Paint::default();
     paint.set_color_rgba8(bg.0, bg.1, bg.2, bg.3);
     paint.anti_alias = true;
@@ -53,21 +61,30 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
         Transform::identity(),
         None,
     );
+    stroke_menu_border(pixmap, &path, settings, s);
 
-    // ----- search box -----
+    // ----- banda de pestañas: es una caja ancha siempre, así que van en fila -----
+    if let Some(index) = args.overlay_tabs {
+        super::draw_overlay_tabs(pixmap, text_cache, settings, args.panel_w, s, index, false);
+    }
+
+    // ----- search box: vive en el encabezado, o sea debajo de la banda. Ojo,
+    // `clip_content_y()` es la PRIMERA fila, no el encabezado -----
+    let top = clip_content_y();
     let box_x = CLIP_PAD * s;
     let box_w = (args.panel_w - CLIP_PAD * 2.0) * s;
+    let box_y = crate::menu::OVERLAY_TABS_H + 5.0;
     let box_h = (CLIP_HEADER_H - 10.0) * s;
     fill_rrect(
         pixmap,
         box_x,
-        5.0 * s,
+        box_y * s,
         box_w,
         box_h,
         6.0 * s,
         super::track_bg(settings),
     );
-    let ty = 5.0 * s + centered_text_y(box_h / s, 9.5) * s;
+    let ty = box_y * s + centered_text_y(box_h / s, 9.5) * s;
     let (query_text, qcolor): (&str, String) = if args.query.is_empty() {
         ("Search clipboard\u{2026}", text_dim_hex(settings))
     } else {
@@ -95,7 +112,7 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
             text_cache,
             msg,
             CLIP_PAD * s,
-            (CLIP_HEADER_H + 24.0) * s,
+            (top + 24.0) * s,
             10.0 * s,
             &text_dim_hex(settings),
             400,
@@ -115,8 +132,8 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
         let Some(entry) = args.entries.get(entry_index) else {
             continue;
         };
-        let row_y = (CLIP_HEADER_H + pos as f32 * CLIP_ROW_H - args.scroll_y) * s;
-        if row_y + CLIP_ROW_H * s < CLIP_HEADER_H * s || row_y > h {
+        let row_y = (top + pos as f32 * CLIP_ROW_H - args.scroll_y) * s;
+        if row_y + CLIP_ROW_H * s < top * s || row_y > h {
             continue;
         }
         let selected = pos == args.selected;
@@ -212,11 +229,10 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
     let viewport = CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32;
     if total > viewport {
         let track_x = w - 4.0 * s;
-        let track_h = h - CLIP_HEADER_H * s - CLIP_PAD * s;
+        let track_h = h - top * s - CLIP_PAD * s;
         let thumb_h = (track_h * (viewport / total)).max(20.0 * s);
         let max_scroll = total - viewport;
-        let thumb_y =
-            CLIP_HEADER_H * s + (track_h - thumb_h) * (args.scroll_y / max_scroll).clamp(0.0, 1.0);
+        let thumb_y = top * s + (track_h - thumb_h) * (args.scroll_y / max_scroll).clamp(0.0, 1.0);
         fill_rrect(
             pixmap,
             track_x,

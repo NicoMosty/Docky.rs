@@ -28,10 +28,13 @@ impl App {
         }) as f32;
         let along = dock_along.max(WALLPAPER_PANEL_MIN_W);
         let cross = WALLPAPER_PANEL_H;
+        // ----- la banda de pestañas le come lugar al filmstrip y el panel crece
+        // con ella, en el eje que le toca a cada orientación -----
+        let band = menu::overlay_tabs_h(is_vertical);
         let (panel_w, panel_h) = if is_vertical {
-            (cross, along)
+            (cross, along + band)
         } else {
-            (along, cross)
+            (along, cross + band)
         };
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
@@ -194,7 +197,7 @@ impl App {
         let along = if wp.is_vertical { th } else { tw };
         let cx = index as f32 * (along + menu::WALLPAPER_GAP);
         let viewport_along = ((if wp.is_vertical {
-            wp.panel_h
+            wp.panel_h - menu::overlay_tabs_h(true)
         } else {
             wp.panel_w
         }) - menu::WALLPAPER_BACK_ZONE_W)
@@ -292,6 +295,9 @@ impl App {
             custom_name_focused: false,
             custom_panel_blend: None,
             tray_items: &[],
+            overlay_tabs: Some(OverlayMode::Wallpaper.tab_index()),
+            volume_rows: &[],
+            volume_devices: &[],
         };
         let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
         if eased >= 0.999 {

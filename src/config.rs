@@ -120,6 +120,14 @@ pub struct CustomPalette {
     pub is_light: bool,
 }
 
+fn default_menu_radius() -> f32 {
+    8.40339
+}
+
+fn default_menu_border() -> f32 {
+    0.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DockSettings {
@@ -134,6 +142,10 @@ pub struct DockSettings {
     pub width_padding: f32,
     pub corner_radius: f32,
     pub border_width: f32,
+    #[serde(default = "default_menu_radius")]
+    pub menu_corner_radius: f32,
+    #[serde(default = "default_menu_border")]
+    pub menu_border_width: f32,
     pub pos_y: i32,
     pub dock_align: DockAlign,
     pub transparency: f32,
@@ -201,6 +213,8 @@ impl Default for DockSettings {
             width_padding: 67.51996,
             corner_radius: 8.40339,
             border_width: 0.0,
+            menu_corner_radius: default_menu_radius(),
+            menu_border_width: default_menu_border(),
             pos_y: 0,
             dock_align: DockAlign::Middle,
             transparency: 1.0,

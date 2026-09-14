@@ -25,15 +25,17 @@ pub(crate) fn draw_wallpaper_filmstrip_horizontal(
     let panel_w = args.panel_width;
 
     let acc = accent(settings);
+    // ----- el contenido arranca abajo de la banda de pestañas -----
+    let band = crate::menu::OVERLAY_TABS_H;
     let back_hot = matches!(args.wallpaper_hovered, Some(WallpaperHit::Back));
     let back_color = if back_hot { acc.0 } else { 255 };
     if back_hot {
         fill_rrect(
             pixmap,
             0.0,
-            0.0,
+            band * s,
             WALLPAPER_BACK_ZONE_W * s,
-            panel_h * s,
+            (panel_h - band) * s,
             0.0,
             (acc.0, acc.1, acc.2, 60),
         );
@@ -47,7 +49,7 @@ pub(crate) fn draw_wallpaper_filmstrip_horizontal(
     );
     chevron.anti_alias = true;
     let ccx = WALLPAPER_BACK_ZONE_W * 0.5 * s;
-    let ccy = panel_h * 0.5 * s;
+    let ccy = (panel_h + band) * 0.5 * s;
     let arm = 5.0 * s;
     let mut pb = tiny_skia::PathBuilder::new();
     pb.move_to(ccx + arm * 0.4, ccy - arm);
@@ -70,7 +72,7 @@ pub(crate) fn draw_wallpaper_filmstrip_horizontal(
     }
 
     if args.wallpapers.is_empty() {
-        let ty = (panel_h * 0.5 - 6.0) * s;
+        let ty = ((panel_h + band) * 0.5 - 6.0) * s;
         let tx = (WALLPAPER_BACK_ZONE_W + 6.0) * s;
         let hint = format!("Add images to {}", crate::wallpaper::suggested_dir());
         draw_text(
@@ -90,7 +92,7 @@ pub(crate) fn draw_wallpaper_filmstrip_horizontal(
     let tw = tw_logical * s;
     let th = th_logical * s;
     let viewport_x0 = WALLPAPER_BACK_ZONE_W * s;
-    let ty = WALLPAPER_PADDING * s;
+    let ty = (band + WALLPAPER_PADDING) * s;
     let tw_i = tw.round().max(1.0) as u32;
     let th_i = th.round().max(1.0) as u32;
 
@@ -145,13 +147,15 @@ pub(crate) fn draw_wallpaper_filmstrip_vertical(
     let panel_w = args.panel_width;
 
     let acc = accent(settings);
+    // ----- en el panel vertical la banda se apila, así que es más alta -----
+    let band = crate::menu::overlay_tabs_h(true);
     let back_hot = matches!(args.wallpaper_hovered, Some(WallpaperHit::Back));
     let back_color = if back_hot { acc.0 } else { 255 };
     if back_hot {
         fill_rrect(
             pixmap,
             0.0,
-            0.0,
+            band * s,
             panel_w * s,
             WALLPAPER_BACK_ZONE_W * s,
             0.0,
@@ -167,7 +171,7 @@ pub(crate) fn draw_wallpaper_filmstrip_vertical(
     );
     chevron.anti_alias = true;
     let ccx = panel_w * 0.5 * s;
-    let ccy = WALLPAPER_BACK_ZONE_W * 0.5 * s;
+    let ccy = (band + WALLPAPER_BACK_ZONE_W * 0.5) * s;
     let arm = 5.0 * s;
     let mut pb = tiny_skia::PathBuilder::new();
     pb.move_to(ccx - arm, ccy + arm * 0.4);
@@ -190,7 +194,7 @@ pub(crate) fn draw_wallpaper_filmstrip_vertical(
     }
 
     if args.wallpapers.is_empty() {
-        let ty = (WALLPAPER_BACK_ZONE_W + 14.0) * s;
+        let ty = (band + WALLPAPER_BACK_ZONE_W + 14.0) * s;
         let tx = WALLPAPER_PADDING * s;
         let hint = format!("Add images to {}", crate::wallpaper::suggested_dir());
         draw_text(
@@ -209,7 +213,7 @@ pub(crate) fn draw_wallpaper_filmstrip_vertical(
     let (tw_logical, th_logical) = crate::menu::wallpaper_thumb_size(panel_w, panel_h, true);
     let tw = tw_logical * s;
     let th = th_logical * s;
-    let viewport_y0 = WALLPAPER_BACK_ZONE_W * s;
+    let viewport_y0 = (band + WALLPAPER_BACK_ZONE_W) * s;
     let tx = WALLPAPER_PADDING * s;
     let tw_i = tw.round().max(1.0) as u32;
     let th_i = th.round().max(1.0) as u32;

@@ -16,7 +16,9 @@ mod dock_menu;
 mod dropdowns;
 mod notification;
 mod osd;
+mod tabs;
 mod theme_picker;
+mod volume_panel;
 mod wallpaper;
 
 pub use app_search::*;
@@ -26,8 +28,34 @@ pub use dock_menu::*;
 use dropdowns::*;
 pub use notification::*;
 pub use osd::*;
+pub use tabs::*;
 use theme_picker::*;
+use volume_panel::*;
 use wallpaper::*;
+/// Radio de los menús desplegables (power, volumen, tray, ajustes…),
+/// independiente del redondeado del dock.
+pub(super) fn menu_radius(settings: &crate::config::DockSettings, s: f32) -> f32 {
+    settings.menu_corner_radius * s
+}
+
+/// Borde de los menús, independiente del borde del dock.
+pub(super) fn stroke_menu_border(
+    pixmap: &mut Pixmap,
+    path: &tiny_skia::Path,
+    settings: &crate::config::DockSettings,
+    s: f32,
+) {
+    if settings.menu_border_width > 0.0 {
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(settings.accent_r, settings.accent_g, settings.accent_b, 200);
+        paint.anti_alias = true;
+        let stroke = tiny_skia::Stroke {
+            width: settings.menu_border_width * s,
+            ..Default::default()
+        };
+        pixmap.stroke_path(path, &paint, &stroke, Transform::identity(), None);
+    }
+}
 fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> tiny_skia::Path {
     let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
     let mut pb = tiny_skia::PathBuilder::new();
@@ -271,6 +299,13 @@ pub struct DrawArgs<'a> {
     pub custom_name_focused: bool,
     pub custom_panel_blend: Option<u8>,
     pub tray_items: &'a [crate::tray::TrayMenuItem],
+    /// Filas del panel de volumen (salida + un stream por app) y los dispositivos
+    /// de salida del selector. Vacíos en todos los demás menús.
+    pub volume_rows: &'a [crate::widgets::VolumeRow],
+    pub volume_devices: &'a [crate::widgets::AudioDevice],
+    /// Modo del overlay (`OVERLAY_TABS`) en el que está el panel. `None` = sin
+    /// banda de pestañas (los menus que no son parte del ciclo de Shift+←/→).
+    pub overlay_tabs: Option<usize>,
 }
 pub fn draw_content(
     pixmap: &mut Pixmap,
@@ -287,16 +322,9 @@ pub fn draw_content(
 
     let bg = panel_bg(settings);
     let path = if is_wallpaper_picker {
-        rounded_rect_path(0.0, 0.0, w, h, settings.corner_radius * s)
+        rounded_rect_path(0.0, 0.0, w, h, menu_radius(settings, s))
     } else {
-        flat_side_rect_path(
-            0.0,
-            0.0,
-            w,
-            h,
-            settings.corner_radius * s,
-            settings.dock_edge,
-        )
+        flat_side_rect_path(0.0, 0.0, w, h, menu_radius(settings, s), settings.dock_edge)
     };
     let mut paint = Paint::default();
     paint.set_color_rgba8(bg.0, bg.1, bg.2, bg.3);
@@ -308,9 +336,21 @@ pub fn draw_content(
         Transform::identity(),
         None,
     );
+    stroke_menu_border(pixmap, &path, settings, s);
 
     if is_wallpaper_picker {
         draw_wallpaper_filmstrip(pixmap, thumb_cache, text_cache, args);
+        if let Some(index) = args.overlay_tabs {
+            draw_overlay_tabs(
+                pixmap,
+                text_cache,
+                settings,
+                args.panel_width,
+                s,
+                index,
+                args.dock.is_vertical(),
+            );
+        }
         return;
     }
 
@@ -430,6 +470,10 @@ fn draw_control_rows(
             ControlKind::TrayItem(i) => draw_tray_item(pixmap, text_cache, control, i, args, y),
             ControlKind::TraySeparator => draw_tray_separator(pixmap, control, args, y),
             ControlKind::AlignPicker => draw_align_picker(pixmap, text_cache, control, args, y),
+            ControlKind::VolumeRow(i) => draw_volume_row(pixmap, text_cache, control, i, args, y),
+            ControlKind::VolumeDevice(i) => {
+                draw_volume_device(pixmap, text_cache, control, i, args, y)
+            }
         }
     }
 }

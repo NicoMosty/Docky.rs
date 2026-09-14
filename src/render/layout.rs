@@ -247,15 +247,15 @@ pub(super) fn widget_natural_len(
         }
         WidgetKind::Network => 24.0 * render_scale,
         WidgetKind::Volume => {
+            // ----- botón compacto: símbolo chico + el número pelado (sin "%") y
+            // la pastilla gris del WiFi detrás. El ancho sale de la misma función
+            // que usa el dibujo -----
             let label = match widgets.volume {
                 Some((_, true)) => "MUTE".to_string(),
-                Some((pct, false)) => format!("{pct}%"),
+                Some((pct, false)) => pct.to_string(),
                 None => return 0.0,
             };
-            // ----- icono compacto (4.7) + hueco corto (4) y número grande (10) -----
-            9.4 * render_scale
-                + 4.0 * render_scale
-                + text_width_estimate_render(&label, 10.0 * render_scale)
+            volume_content_len(&label, render_scale)
         }
         WidgetKind::KbdLayout => {
             let w = text_width_estimate_render(&widgets.kblayout.short, 8.5 * render_scale);
@@ -381,6 +381,16 @@ pub(super) fn draw_widgets(
                     Some(bt) => (bt.powered, bt.powered && bt.connected.is_some()),
                     None => (false, false),
                 };
+                draw_widget_button_bg(
+                    pixmap,
+                    r.x,
+                    r.y,
+                    r.w,
+                    r.h,
+                    render_scale,
+                    &colors,
+                    dock.hovered_widget == Some(WidgetKind::Bluetooth),
+                );
                 draw_bluetooth_icon(
                     pixmap,
                     render_scale,
@@ -465,6 +475,7 @@ pub(super) fn draw_widgets(
                 render_scale,
                 &colors,
                 is_vertical,
+                dock.hovered_widget == Some(WidgetKind::Volume),
             ),
             WidgetKind::KbdLayout => draw_kblayout_widget(
                 pixmap,
@@ -615,6 +626,43 @@ fn draw_network_hover_pill(
     );
 }
 
+/// Escala con la que hay que repartir los widgets en un HIT TEST.
+///
+/// `draw_widgets` multiplica el `render_scale` por `widget_scale` antes de llamar
+/// a `layout_widgets`, y `base_size()` ya cuenta ese factor (viene de
+/// `widget_bar_natural_len(..., widget_scale)`). Los hit tests, en cambio, reciben
+/// coordenadas LÓGICAS del puntero (sin `output_scale`), así que les toca
+/// `widget_scale` pelado: con el `1.0` de antes los rects quedaban comprimidos
+/// hacia la izquierda — con `widget_scale=1.2` el click caía ~20px a la izquierda
+/// del icono de WiFi y ~45px a la izquierda de "EN" (y el menú del tray se abría
+/// corrido a la izquierda del icono, porque `widget_center` tenía lo mismo).
+pub(super) fn hit_scale(settings: &crate::config::DockSettings) -> f32 {
+    settings.widget_scale
+}
+
+/// Reparto de la barra en coordenadas LÓGICAS de la superficie, para hit tests.
+///
+/// Es la única forma de pedir el layout para un hit test: el bug de escala salió
+/// de tener cinco lugares llamando a `layout_widgets` con su propio `1.0`. Si
+/// necesitás el layout para decidir un click, usá esto y no `layout_widgets`
+/// directo (eso es cosa de `draw_widgets`, que pasa `render_scale * widget_scale`).
+pub(super) fn hit_layout(
+    dock: &Dock,
+    widgets: &WidgetSnapshot,
+    tray_count: usize,
+) -> Vec<WidgetRect> {
+    let (base_w, base_h) = dock.base_size();
+    layout_widgets(
+        &dock.config.settings,
+        widgets,
+        tray_count,
+        dock.is_vertical(),
+        base_w as f32,
+        base_h as f32,
+        hit_scale(&dock.config.settings),
+    )
+}
+
 pub fn widget_hit_test(
     dock: &Dock,
     widgets: &WidgetSnapshot,
@@ -622,17 +670,7 @@ pub fn widget_hit_test(
     x: f64,
     y: f64,
 ) -> Option<crate::config::WidgetKind> {
-    let (base_w, base_h) = dock.base_size();
-    let is_vertical = dock.is_vertical();
-    let rects = layout_widgets(
-        &dock.config.settings,
-        widgets,
-        tray_count,
-        is_vertical,
-        base_w as f32,
-        base_h as f32,
-        1.0,
-    );
+    let rects = hit_layout(dock, widgets, tray_count);
     let (xf, yf) = (x as f32, y as f32);
     rects
         .into_iter()
@@ -646,17 +684,143 @@ pub fn widget_center(
     tray_count: usize,
     kind: crate::config::WidgetKind,
 ) -> Option<(f32, f32)> {
-    let (base_w, base_h) = dock.base_size();
-    let is_vertical = dock.is_vertical();
-    let rects = layout_widgets(
-        &dock.config.settings,
-        widgets,
-        tray_count,
-        is_vertical,
-        base_w as f32,
-        base_h as f32,
-        1.0,
-    );
+    let rects = hit_layout(dock, widgets, tray_count);
     let r = rects.into_iter().find(|r| r.kind == kind)?;
     Some((r.x + r.w / 2.0, r.y + r.h / 2.0))
+}
+
+#[cfg(test)]
+mod hit_layout_tests {
+    // ----- El contrato que rompió todo: el reparto para un hit test tiene que usar
+    // la MISMA escala que el dibujo. `draw_widgets` calcula `render_scale *
+    // widget_scale` y `base_size()` mide la superficie con esa escala (vía
+    // `widget_bar_natural_len(..., widget_scale)`). Con otra escala los rects
+    // quedan corridos respecto de los iconos y el click cae sobre otro widget (o
+    // sobre nada): en el clúster izquierdo hacia la izquierda, y en el derecho
+    // —donde está el tray— hacia la derecha, porque ese bloque se ancla al borde.
+    //
+    // Con `widget_scale = 1.0` (el default de `DockSettings`) el bug es invisible,
+    // así que el test fuerza el valor con el que apareció.
+    use super::*;
+    use crate::config::WidgetKind;
+    use crate::widgets::{BatteryState, KbLayout, NetworkInfo, WidgetSnapshot};
+
+    const SCALE_DEL_BUG: f32 = 1.2166064;
+    const CROSS: f32 = 26.0;
+
+    fn settings() -> crate::config::DockSettings {
+        crate::config::DockSettings {
+            widget_scale: SCALE_DEL_BUG,
+            ..Default::default()
+        }
+    }
+
+    fn snapshot() -> WidgetSnapshot {
+        WidgetSnapshot {
+            time: "11:11".into(),
+            date: "11-Sept".into(),
+            battery: Some((50, BatteryState::Discharging)),
+            media: None,
+            bluetooth: None,
+            workspaces: Vec::new(),
+            cpu: None,
+            ram: None,
+            ram_gb: None,
+            volume: Some((50, false)),
+            network: NetworkInfo {
+                label: "wifi".into(),
+                online: true,
+            },
+            kblayout: KbLayout { short: "EN".into() },
+        }
+    }
+
+    /// Ancho de la superficie, medido como en `base_size()` para el caso sin
+    /// iconos de aplicaciones.
+    fn ancho_superficie(s: &crate::config::DockSettings, w: &WidgetSnapshot) -> f32 {
+        widget_bar_natural_len(s, w, 1, false, CROSS, s.widget_scale)
+            + s.width_padding * s.widget_scale * 2.0
+    }
+
+    /// Rect de un widget con una escala dada. Para el DIBUJO la escala es
+    /// `output_scale * widget_scale`, o sea `widget_scale` cuando la salida no
+    /// tiene escala.
+    fn rect(s: &crate::config::DockSettings, kind: WidgetKind, scale: f32) -> WidgetRect {
+        let w = snapshot();
+        let width = ancho_superficie(s, &w);
+        let mut all = layout_widgets(s, &w, 1, false, width, CROSS, scale);
+        let i = all
+            .iter()
+            .position(|r| r.kind == kind)
+            .expect("widget presente en la barra");
+        all.swap_remove(i)
+    }
+
+    #[test]
+    fn el_rect_del_hit_test_coincide_con_el_que_se_dibuja() {
+        let s = settings();
+        for kind in [
+            WidgetKind::PowerMenu,
+            WidgetKind::Network,
+            WidgetKind::Bluetooth,
+            WidgetKind::KbdLayout,
+            WidgetKind::Clock,
+        ] {
+            let dibujado = rect(&s, kind, SCALE_DEL_BUG);
+            let hiteado = rect(&s, kind, hit_scale(&s));
+            assert!(
+                (dibujado.x - hiteado.x).abs() < 0.01 && (dibujado.w - hiteado.w).abs() < 0.01,
+                "{kind:?}: el hit test reparte distinto que el dibujo \
+                 (x {} vs {}, w {} vs {})",
+                hiteado.x,
+                dibujado.x,
+                hiteado.w,
+                dibujado.w
+            );
+        }
+    }
+
+    #[test]
+    fn con_escala_1_los_rects_quedan_corridos_ese_era_el_bug() {
+        // Caracterización: el corrimiento es de decenas de px, no un redondeo.
+        // En el clúster izquierdo el rect se va a la izquierda del icono; en el
+        // derecho (tray/reloj) al revés, porque ese bloque se ancla al borde.
+        let s = settings();
+        for kind in [
+            WidgetKind::Network,
+            WidgetKind::Bluetooth,
+            WidgetKind::KbdLayout,
+        ] {
+            let bien = rect(&s, kind, hit_scale(&s));
+            let mal = rect(&s, kind, 1.0);
+            assert!(
+                bien.x - mal.x > 10.0,
+                "{kind:?}: con escala 1.0 el rect debería quedar a la izquierda del \
+                 icono; se corrió {} px (bien x={}, mal x={})",
+                bien.x - mal.x,
+                bien.x,
+                mal.x
+            );
+        }
+        let bien = rect(&s, WidgetKind::Clock, hit_scale(&s));
+        let mal = rect(&s, WidgetKind::Clock, 1.0);
+        assert!(
+            mal.x - bien.x > 10.0,
+            "el reloj (bloque anclado al borde derecho) debería correrse al revés: \
+             bien x={}, mal x={}",
+            bien.x,
+            mal.x
+        );
+    }
+
+    #[test]
+    fn hit_scale_es_la_misma_escala_que_usa_el_dibujo() {
+        // Si alguien agrega otro factor en `draw_widgets`, este test lo obliga a
+        // tocar `hit_scale` en el mismo commit.
+        let s = settings();
+        assert_eq!(hit_scale(&s), s.widget_scale);
+        let mut sin_escala = s.clone();
+        sin_escala.widget_scale = 1.0;
+        assert_eq!(hit_scale(&sin_escala), 1.0);
+    }
 }
