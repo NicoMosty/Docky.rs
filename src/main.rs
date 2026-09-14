@@ -106,6 +106,63 @@ fn create_dock_surfaces(
     layer
 }
 
+// ----- recuperación ante fallo fatal (AUDIT a5/a6) -----
+const REEXEC_ENV: &str = "DOCKYRS_REEXEC";
+/// Relanzamientos seguidos antes de rendirse.
+const MAX_REEXEC: u32 = 3;
+
+/// ¿Vale la pena relanzarse? Un fallo determinista (una config que paniquea al
+/// arrancar) no se arregla relanzando: sin este tope el dock gira en un crash
+/// loop, que es peor que morir una vez.
+fn puede_relanzar(previos: u32) -> bool {
+    previos < MAX_REEXEC
+}
+
+/// Qué binario relanzar. Prefiere `current_exe` sobre `argv[0]`: argv[0] puede ser
+/// RELATIVO (el arranque manual es `./target/release/dockyrs`) y `Command::new` lo
+/// resolvería contra el cwd del proceso, que ya no tiene por qué ser el del
+/// arranque — ahí la recuperación fallaría justo cuando más hace falta. El
+/// autostart de niri usa ruta absoluta, pero relaunch.sh y los arranques a mano no.
+fn binario_a_relanzar(argv: &[String]) -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .or_else(|| argv.first().map(std::path::PathBuf::from))
+}
+
+/// Relanza el dock con el mismo argv y sale. No vuelve nunca.
+///
+/// El fd de Wayland es CLOEXEC: al hacer exec el compositor da de baja las
+/// superficies viejas y la instancia nueva mapea las suyas. Sirve tanto para el
+/// error de protocolo de a6 como para un panic del loop (a5).
+fn reexec(argv: &[String], previos: u32) -> ! {
+    if !puede_relanzar(previos) {
+        log::error!("{previos} relanzamientos seguidos: salgo en vez de girar en bucle");
+        std::process::exit(1);
+    }
+    let Some(bin) = binario_a_relanzar(argv) else {
+        log::error!("no pude resolver la ruta del binario: no relanzo");
+        std::process::exit(1);
+    };
+    log::error!(
+        "relanzando el dock (intento {}) desde {}",
+        previos + 1,
+        bin.display()
+    );
+    // ----- stdin/out/err heredados: el hijo sigue escribiendo en el mismo log,
+    // que es justo donde uno mira cuando esto pasa -----
+    match std::process::Command::new(&bin)
+        .args(&argv[1..])
+        .env(REEXEC_ENV, (previos + 1).to_string())
+        .spawn()
+    {
+        Ok(_) => std::process::exit(0),
+        Err(err) => {
+            log::error!("no pude relanzar: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     unsafe { libc::mallopt(libc::M_ARENA_MAX, 1) };
     env_logger::init();
@@ -427,8 +484,32 @@ fn main() -> anyhow::Result<()> {
     // ----- estado inicial coherente del autohide -----
     app.sync_autohide_surfaces();
 
+    // ----- relanzarse en vez de desaparecer. El contador va por entorno para
+    // sobrevivir al exec y cortar el crash loop. -----
+    let argv: Vec<String> = std::env::args().collect();
+    let reexecs: u32 = std::env::var(REEXEC_ENV)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
     loop {
-        event_queue.blocking_dispatch(&mut app)?;
+        // ----- a6: un error de protocolo Wayland no se puede "seguir" (la
+        // conexión está muerta), así que la recuperación es relanzarse. El
+        // `catch_unwind` cubre además los panics del dispatch (dibujo y punteros),
+        // que corren todos por acá. Los panics de los drenajes de abajo no pasan
+        // por el guard y se arreglan en la fuente, que es donde importan. -----
+        let corrida = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            event_queue.blocking_dispatch(&mut app)
+        }));
+        match corrida {
+            // ----- `blocking_dispatch` devuelve la cantidad de eventos -----
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => {
+                log::error!("wayland: {err}");
+                reexec(&argv, reexecs);
+            }
+            Err(_) => reexec(&argv, reexecs),
+        }
         while let Ok(msg) = ipc_rx.try_recv() {
             match msg {
                 ipc::IpcMessage::ToggleSearch => app.toggle_app_search(&qh),
@@ -654,4 +735,38 @@ fn spawn_marquee_ticker(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod reexec_tests {
+    use super::*;
+
+    #[test]
+    fn el_crash_loop_se_corta() {
+        // ----- si el fallo es determinista, relanzar no lo arregla: el tope es lo
+        // que evita girar para siempre. -----
+        assert!(puede_relanzar(0));
+        assert!(puede_relanzar(MAX_REEXEC - 1));
+        assert!(!puede_relanzar(MAX_REEXEC));
+        assert!(!puede_relanzar(MAX_REEXEC + 5));
+    }
+
+    /// El guard del binario a relanzar. Si alguien vuelve a usar `argv[0]` a secas,
+    /// el primer assert ya no pasa (queda `Some("./target/…")`, relativo) y el
+    /// segundo tampoco, porque argv[0] relativo se resuelve contra el cwd.
+    #[test]
+    fn resuelve_el_binario_por_ruta_absoluta_no_por_argv0() {
+        let relativo = vec!["./target/release/dockyrs".to_string()];
+        let bin = binario_a_relanzar(&relativo).expect("tiene que resolver el binario");
+        assert!(
+            bin.is_absolute(),
+            "el binario a relanzar tiene que ser absoluto, no {}",
+            bin.display()
+        );
+        assert!(
+            bin.exists(),
+            "{} tiene que existir para poder relanzar",
+            bin.display()
+        );
+    }
 }
