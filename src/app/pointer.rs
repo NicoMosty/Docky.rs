@@ -160,96 +160,18 @@ impl App {
                             // ----- mismo log que el click derecho: es lo que deja
                             // ubicar un widget por su log en vez de adivinar -----
                             log::debug!("dock: click ({x:.0},{y:.0}) -> {kind:?}");
-                            match kind {
-                                crate::config::WidgetKind::Media => {
-                                    if render::media_toggle_hit(
-                                        &self.dock,
-                                        &self.widgets,
-                                        tray_count,
-                                        x,
-                                        y,
-                                    ) {
-                                        widgets::media_toggle();
-                                    }
-                                    return;
-                                }
-                                crate::config::WidgetKind::PowerMenu => {
-                                    // ----- menú nativo del dock (popup): el fallback
-                                    // a rofi se eliminó, este es el único camino -----
-                                    self.open_power_menu(qh);
-                                    return;
-                                }
-                                crate::config::WidgetKind::Bluetooth => {
-                                    if let Some(bt) = &self.widgets.bluetooth {
-                                        widgets::open_bluetooth_manager(true, bt.powered);
-                                    }
-                                    return;
-                                }
-                                crate::config::WidgetKind::Tray => {
-                                    if let Some(idx) = render::tray_icon_hit(
-                                        &self.dock,
-                                        &self.widgets,
-                                        tray_count,
-                                        x,
-                                        y,
-                                    ) {
-                                        let icons = self.tray.lock().unwrap();
-                                        if let Some(item) = icons.get(idx) {
-                                            crate::tray::activate(
-                                                item.service.clone(),
-                                                item.path.clone(),
-                                            );
-                                        }
-                                    }
-                                    return;
-                                }
-                                crate::config::WidgetKind::Workspaces => {
-                                    if let Some(id) = render::workspace_dot_hit(
-                                        &self.dock,
-                                        &self.widgets,
-                                        tray_count,
-                                        x,
-                                        y,
-                                    ) {
-                                        let output = self
-                                            .widgets
-                                            .workspaces
-                                            .iter()
-                                            .find(|w| w.id == id)
-                                            .map(|w| w.output.clone())
-                                            .unwrap_or_default();
-                                        let current = self
-                                            .widgets
-                                            .workspaces
-                                            .iter()
-                                            .find(|w| w.active)
-                                            .map(|w| w.output.clone())
-                                            .unwrap_or_default();
-                                        widgets::workspace_switch(id, &output, &current);
-                                    }
-                                    return;
-                                }
-                                crate::config::WidgetKind::Network => {
-                                    widgets::open_network_settings();
-                                    return;
-                                }
-                                crate::config::WidgetKind::Ram => {
-                                    widgets::open_system_monitor();
-                                    return;
-                                }
-                                crate::config::WidgetKind::Volume => {
-                                    // ----- click = panel de volumen (salida, un
-                                    // stream por app y selector de salida); la
-                                    // rueda sube/baja y el click derecho abre
-                                    // pavucontrol -----
-                                    self.open_volume_panel(qh);
-                                    return;
-                                }
-                                crate::config::WidgetKind::KbdLayout => {
-                                    widgets::kblayout_next();
-                                    return;
-                                }
-                                _ => {}
+                            let accion = widget_action(
+                                &self.dock,
+                                &self.widgets,
+                                tray_count,
+                                x,
+                                y,
+                                render::WidgetClick::Left,
+                                kind,
+                            );
+                            if let Some(action) = accion {
+                                self.run_widget_action(action, qh);
+                                return;
                             }
                         }
                         // ----- el doble click abre el selector de fondos SÓLO en la
@@ -293,64 +215,19 @@ impl App {
                                 y,
                             );
                             log::debug!("dock: click derecho ({x:.0},{y:.0}) -> {hit:?}");
-                            match hit {
-                                Some(crate::config::WidgetKind::Tray) => {
-                                    if let Some(idx) = render::tray_icon_hit(
-                                        &self.dock,
-                                        &self.widgets,
-                                        tray_count,
-                                        x,
-                                        y,
-                                    ) {
-                                        self.open_tray_menu(idx, qh);
-                                    }
-                                }
-                                // ----- wifi y bluetooth salen del tray visible, así
-                                // que su menú (nm-applet/blueman) se abre desde su
-                                // propio widget de la izquierda -----
-                                Some(crate::config::WidgetKind::Network) => {
-                                    if !self.open_widget_tray_menu(
-                                        crate::config::WidgetKind::Network,
-                                        |s| s.contains("nm_applet"),
-                                        qh,
-                                    ) {
-                                        // ----- sin nm-applet registrado: que haga lo
-                                        // del click izquierdo en vez de nada -----
-                                        widgets::open_network_settings();
-                                    }
-                                }
-                                Some(crate::config::WidgetKind::Bluetooth) => {
-                                    let abierto = self.open_widget_tray_menu(
-                                        crate::config::WidgetKind::Bluetooth,
-                                        |s| {
-                                            let s = s.to_lowercase();
-                                            s.contains("blueman") || s.contains("bluetooth")
-                                        },
-                                        qh,
-                                    );
-                                    if !abierto {
-                                        let powered = self
-                                            .widgets
-                                            .bluetooth
-                                            .as_ref()
-                                            .map(|b| b.powered)
-                                            .unwrap_or(false);
-                                        widgets::open_bluetooth_manager(true, powered);
-                                    }
-                                }
-                                Some(crate::config::WidgetKind::Volume) => {
-                                    // ----- click derecho: el control externo (lo que
-                                    // antes hacía el click izquierdo) -----
-                                    widgets::open_volume_control();
-                                }
-                                Some(crate::config::WidgetKind::Workspaces) => {
-                                    // ----- ajustes: SÓLO con click derecho sobre el
-                                    // indicador de workspaces. Antes se abría en cualquier
-                                    // punto sin icono ni tray: reloj, huecos entre zonas,
-                                    // o encima de cualquier widget. -----
-                                    self.open_dock_menu(qh);
-                                }
-                                _ => {}
+                            let accion = hit.and_then(|kind| {
+                                widget_action(
+                                    &self.dock,
+                                    &self.widgets,
+                                    tray_count,
+                                    x,
+                                    y,
+                                    render::WidgetClick::Right,
+                                    kind,
+                                )
+                            });
+                            if let Some(action) = accion {
+                                self.run_widget_action(action, qh);
                             }
                         }
                     }
@@ -384,11 +261,19 @@ impl App {
                 let tray_count = self.tray.lock().unwrap().len();
                 let hit = render::widget_hit_test(&self.dock, &self.widgets, tray_count, x, y);
                 log::debug!("dock: rueda ({x:.0},{y:.0}) subir={subir} -> {hit:?}");
-                if hit == Some(crate::config::WidgetKind::Volume) {
-                    widgets::volume_step(subir);
-                    // ----- releer ya: el tick de sistema corre cada 2s y si no el
-                    // número quedaría viejo hasta el próximo -----
-                    self.refresh_sys(qh);
+                let accion = hit.and_then(|kind| {
+                    widget_action(
+                        &self.dock,
+                        &self.widgets,
+                        tray_count,
+                        x,
+                        y,
+                        render::WidgetClick::Wheel { up: subir },
+                        kind,
+                    )
+                });
+                if let Some(action) = accion {
+                    self.run_widget_action(action, qh);
                 }
             }
             _ => {}
@@ -398,6 +283,121 @@ impl App {
 
 #[cfg(test)]
 mod wheel_tests {
+
+    /// Ejecuta lo que la tabla de widgets decidió.
+    ///
+    /// Es el ÚNICO lugar donde un click de widget se convierte en algo que hace
+    /// la app, y está acá y no en la tabla porque varias acciones necesitan
+    /// `&mut App` (abrir el menú de apagado, el panel de volumen, el menú del
+    /// tray) o el estado del tray, que no vive en el widget.
+    fn run_widget_action(&mut self, action: render::WidgetAction, qh: &QueueHandle<App>) {
+        use render::WidgetAction as A;
+        match action {
+            A::MediaToggle => widgets::media_toggle(),
+            A::OpenPowerMenu => self.open_power_menu(qh),
+            A::OpenBluetoothManager => {
+                if let Some(bt) = &self.widgets.bluetooth {
+                    widgets::open_bluetooth_manager(true, bt.powered);
+                }
+            }
+            A::ActivateTray { index } => {
+                let icons = self.tray.lock().unwrap();
+                if let Some(item) = icons.get(index) {
+                    crate::tray::activate(item.service.clone(), item.path.clone());
+                }
+            }
+            A::OpenTrayMenu { index } => self.open_tray_menu(index, qh),
+            A::SwitchWorkspace { id } => {
+                let output = self
+                    .widgets
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == id)
+                    .map(|w| w.output.clone())
+                    .unwrap_or_default();
+                let current = self
+                    .widgets
+                    .workspaces
+                    .iter()
+                    .find(|w| w.active)
+                    .map(|w| w.output.clone())
+                    .unwrap_or_default();
+                widgets::workspace_switch(id, &output, &current);
+            }
+            A::OpenNetworkSettings => widgets::open_network_settings(),
+            A::OpenSystemMonitor => widgets::open_system_monitor(),
+            A::OpenVolumePanel => self.open_volume_panel(qh),
+            A::OpenVolumeControl => widgets::open_volume_control(),
+            A::VolumeStep { up } => {
+                widgets::volume_step(up);
+                // ----- releer ya: el tick de sistema corre cada 2s y si no el
+                // número quedaría viejo hasta el próximo -----
+                self.refresh_sys(qh);
+            }
+            A::NextKbdLayout => widgets::kblayout_next(),
+            A::OpenDockMenu => self.open_dock_menu(qh),
+            A::OpenWidgetTrayMenu(which) => {
+                // ----- wifi y bluetooth salen del tray visible, así que su menú
+                // (nm-applet/blueman) se abre desde su propio widget de la
+                // izquierda -----
+                let abierto = match which {
+                    crate::config::WidgetKind::Network => {
+                        self.open_widget_tray_menu(which, |s| s.contains("nm_applet"), qh)
+                    }
+                    _ => self.open_widget_tray_menu(
+                        which,
+                        |s| {
+                            let s = s.to_lowercase();
+                            s.contains("blueman") || s.contains("bluetooth")
+                        },
+                        qh,
+                    ),
+                };
+                if !abierto {
+                    // ----- sin el item registrado: que haga lo del click
+                    // izquierdo en vez de nada -----
+                    match which {
+                        crate::config::WidgetKind::Network => widgets::open_network_settings(),
+                        _ => {
+                            let powered = self
+                                .widgets
+                                .bluetooth
+                                .as_ref()
+                                .map(|b| b.powered)
+                                .unwrap_or(false);
+                            widgets::open_bluetooth_manager(true, powered);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Resuelve un click con la tabla de widgets. `None` si el widget no reacciona.
+///
+/// El `ClickCtx` se arma y se tira acá adentro a propósito: presta `&self.dock` y
+/// `&self.widgets`, así que no puede sobrevivir hasta el momento de ejecutar la
+/// acción, que necesita `&mut self`.
+fn widget_action(
+    dock: &crate::dock::Dock,
+    widgets: &crate::widgets::WidgetSnapshot,
+    tray_count: usize,
+    x: f64,
+    y: f64,
+    click: render::WidgetClick,
+    kind: crate::config::WidgetKind,
+) -> Option<render::WidgetAction> {
+    let click_fn = render::spec_for(kind)?.click?;
+    // ----- las tres sub-zonas se resuelven aca: asi las decisiones de la tabla
+    // son puras (y testeables) y no dependen del `Dock` -----
+    let cx = render::ClickCtx {
+        click,
+        tray_index: render::tray_icon_hit(dock, widgets, tray_count, x, y),
+        workspace_id: render::workspace_dot_hit(dock, widgets, tray_count, x, y),
+        media_toggle: render::media_toggle_hit(dock, widgets, tray_count, x, y),
+    };
+    click_fn(&cx)
     // ----- el signo del eje vertical es lo que se equivocó: sin este test la
     // rueda hacía lo contrario (arriba bajaba el volumen). -----
     use super::wheel_raise;

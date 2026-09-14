@@ -1,16 +1,75 @@
-//! La tabla de widgets: un solo lugar que sabe que widgets existen y con que se
-//! mide y se dibuja cada uno.
+//! La tabla de widgets: un solo lugar que sabe que widgets existen, con que se
+//! miden, con que se dibujan y que hacen cuando los tocan.
 //!
-//! Reemplaza, de a uno, los `match kind` que hoy estan repartidos entre
-//! `widget_natural_len` y el despacho de `draw_widgets`. Agregar un widget
-//! costaba 16 sitios en 7 archivos (medido con `KbdLayout`, commit c458821);
-//! la meta es que sea UNA entrada aca.
+//! Reemplaza los `match kind` que estaban repartidos entre
+//! `widget_natural_len`, `draw_widgets` y el despacho de clicks de
+//! `app/pointer.rs`. Agregar un widget costaba 16 sitios en 7 archivos (medido
+//! con `KbdLayout`, commit c458821); la meta es que sea UNA entrada aca.
 //!
 //! El dibujo recibe el MISMO `WidgetRect` que produjo `layout_widgets`, asi que
 //! el reparto y el dibujo no pueden usar escalas distintas. Eso es lo que las
 //! trampas 10 y 12 de AGENTS.md piden y hoy sostienen a mano los tests.
 
 use super::*;
+
+/// Que se toco y donde. La rueda lleva la direccion porque el volumen la usa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WidgetClick {
+    Left,
+    Right,
+    Wheel { up: bool },
+}
+
+/// Lo que un widget necesita para decidir que hacer con un click.
+///
+/// NO lleva `dock` a proposito: las sub-zonas de un widget (que icono del tray,
+/// que workspace, el boton de play de Media) las resuelve el llamador con los hit
+/// tests que ya existen y entran aca ya masticadas. Gracias a eso las decisiones
+/// de la tabla son puras y se pueden testear sin armar un `Dock`.
+pub(crate) struct ClickCtx {
+    pub(crate) click: WidgetClick,
+    /// Icono del tray bajo el puntero, si el puntero esta sobre el tray.
+    pub(crate) tray_index: Option<usize>,
+    /// Workspace bajo el puntero, si esta sobre el widget de workspaces.
+    pub(crate) workspace_id: Option<i32>,
+    /// `true` si el puntero esta sobre el boton de play de Media.
+    pub(crate) media_toggle: bool,
+}
+
+/// Que hacer despues del click.
+///
+/// El widget DECIDE la accion; EJECUTARLA es de la app, porque varias necesitan
+/// `&mut App` (abrir el menu de apagado, el panel de volumen, el menu del tray)
+/// o el estado del tray, que no vive en el widget. Antes esto era un `match
+/// kind` de 10 ramas dentro de `app/pointer.rs`, y era el unico contrato de un
+/// widget que no custodiaba nadie.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WidgetAction {
+    MediaToggle,
+    OpenPowerMenu,
+    OpenBluetoothManager,
+    ActivateTray {
+        index: usize,
+    },
+    OpenTrayMenu {
+        index: usize,
+    },
+    SwitchWorkspace {
+        id: i32,
+    },
+    OpenNetworkSettings,
+    OpenSystemMonitor,
+    OpenVolumePanel,
+    OpenVolumeControl,
+    VolumeStep {
+        up: bool,
+    },
+    NextKbdLayout,
+    OpenDockMenu,
+    /// Menu del SNI del widget (nm-applet / blueman). El ejecutor sabe el
+    /// patron y el fallback de cada uno.
+    OpenWidgetTrayMenu(crate::config::WidgetKind),
+}
 
 /// Lo que un widget necesita para medirse Y para dibujarse.
 ///
@@ -20,7 +79,7 @@ use super::*;
 /// (`dead_code`), que es la senal de que el campo todavia no hacia falta.
 /// `bar_len`, `colors` y `hovered` NO van aca porque no existen cuando se mide
 /// (el reparto no tiene paleta ni largo de barra): viven en `Canvas`.
-pub(super) struct Ctx<'a> {
+pub(crate) struct Ctx<'a> {
     pub(super) widgets: &'a WidgetSnapshot,
     pub(super) settings: &'a crate::config::DockSettings,
     /// Ya viene multiplicada por `widget_scale`, igual que en el dibujo.
@@ -33,7 +92,7 @@ pub(super) struct Ctx<'a> {
 
 /// Donde se pinta un frame. Se arma una vez por frame y lo reciben todos los
 /// widgets que se dibujan.
-pub(super) struct Canvas<'a, 'b> {
+pub(crate) struct Canvas<'a, 'b> {
     pub(super) pixmap: &'a mut Pixmap,
     pub(super) text_cache: &'a mut TextCache,
     pub(super) icon_cache: &'a mut IconCache,
@@ -60,13 +119,16 @@ impl Canvas<'_, '_> {
     }
 }
 
-pub(super) struct WidgetSpec {
-    pub(super) kind: crate::config::WidgetKind,
+pub(crate) struct WidgetSpec {
+    pub(crate) kind: crate::config::WidgetKind,
     /// Ancho que reserva el reparto. La llama `widget_natural_len`.
-    pub(super) natural_len: fn(&Ctx) -> f32,
+    pub(crate) natural_len: fn(&Ctx) -> f32,
     /// Dibuja dentro del `rect` que le dio el reparto. Devuelve `true` si el
     /// widget animo este frame (hoy solo el marquee de Media).
-    pub(super) draw: fn(&mut Canvas, &WidgetRect, &Ctx) -> bool,
+    pub(crate) draw: fn(&mut Canvas, &WidgetRect, &Ctx) -> bool,
+    /// Que hace con un click. `None` = el widget no reacciona (hoy Clock,
+    /// Battery y Cpu).
+    pub(crate) click: Option<fn(&ClickCtx) -> Option<WidgetAction>>,
 }
 
 /// Los 12 widgets del enum, en el orden del enum. Es la unica lista: reemplazo
@@ -78,71 +140,163 @@ pub(super) struct WidgetSpec {
 /// eso este archivo es mas largo que los dos `match` que reemplaza: el
 /// boilerplate se movio, no desaparecio. Cobrarlo del todo pide cambiar esas 12
 /// firmas a `&WidgetRect`.
-pub(super) const WIDGETS: &[WidgetSpec] = &[
+pub(crate) const WIDGETS: &[WidgetSpec] = &[
     WidgetSpec {
         kind: crate::config::WidgetKind::Clock,
         natural_len: len_clock,
         draw: draw_clock,
+        click: None,
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Battery,
         natural_len: len_battery,
         draw: draw_battery,
+        click: None,
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Media,
         natural_len: len_media,
         draw: draw_media,
+        click: Some(click_media),
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::PowerMenu,
         natural_len: len_power,
         draw: draw_power,
+        click: Some(click_power),
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Bluetooth,
         natural_len: len_bluetooth,
         draw: draw_bluetooth,
+        click: Some(click_bluetooth),
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Tray,
         natural_len: len_tray,
         draw: draw_tray,
+        click: Some(click_tray),
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Workspaces,
         natural_len: len_workspaces,
         draw: draw_workspaces,
+        click: Some(click_workspaces),
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Cpu,
         natural_len: len_cpu,
         draw: draw_cpu,
+        click: None,
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Ram,
         natural_len: len_ram,
         draw: draw_ram,
+        click: Some(click_ram),
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Network,
         natural_len: len_network,
         draw: draw_network,
+        click: Some(click_network),
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::Volume,
         natural_len: len_volume,
         draw: draw_volume,
+        click: Some(click_volume),
     },
     WidgetSpec {
         kind: crate::config::WidgetKind::KbdLayout,
         natural_len: len_kblayout,
         draw: draw_kblayout,
+        click: Some(click_kblayout),
     },
 ];
 
-pub(super) fn spec_for(kind: crate::config::WidgetKind) -> Option<&'static WidgetSpec> {
+pub(crate) fn spec_for(kind: crate::config::WidgetKind) -> Option<&'static WidgetSpec> {
     WIDGETS.iter().find(|s| s.kind == kind)
+}
+
+// ----- clicks -----
+//
+// Cada uno traduce un click (o una rueda) a una `WidgetAction`, y son PUROS: la
+// unica entrada es `ClickCtx`, sin `Dock` ni estado de la app. Los que tienen
+// sub-zonas (Media, Tray, Workspaces) las reciben ya resueltas. Los
+// `WidgetClick::Wheel` de la mayoria son `None` a proposito: la rueda hoy es
+// solo del volumen.
+
+fn click_media(cx: &ClickCtx) -> Option<WidgetAction> {
+    // ----- el widget de media tiene zonas: solo el boton de play dispara -----
+    (cx.click == WidgetClick::Left && cx.media_toggle).then_some(WidgetAction::MediaToggle)
+}
+
+fn click_power(cx: &ClickCtx) -> Option<WidgetAction> {
+    (cx.click == WidgetClick::Left).then_some(WidgetAction::OpenPowerMenu)
+}
+
+fn click_bluetooth(cx: &ClickCtx) -> Option<WidgetAction> {
+    match cx.click {
+        WidgetClick::Left => Some(WidgetAction::OpenBluetoothManager),
+        WidgetClick::Right => Some(WidgetAction::OpenWidgetTrayMenu(
+            crate::config::WidgetKind::Bluetooth,
+        )),
+        WidgetClick::Wheel { .. } => None,
+    }
+}
+
+fn click_tray(cx: &ClickCtx) -> Option<WidgetAction> {
+    let index = cx.tray_index?;
+    match cx.click {
+        WidgetClick::Left => Some(WidgetAction::ActivateTray { index }),
+        WidgetClick::Right => Some(WidgetAction::OpenTrayMenu { index }),
+        WidgetClick::Wheel { .. } => None,
+    }
+}
+
+fn click_workspaces(cx: &ClickCtx) -> Option<WidgetAction> {
+    match cx.click {
+        WidgetClick::Left => {
+            let id = cx.workspace_id?;
+            Some(WidgetAction::SwitchWorkspace { id })
+        }
+        // ----- ajustes: SÓLO con click derecho sobre el indicador -----
+        WidgetClick::Right => Some(WidgetAction::OpenDockMenu),
+        WidgetClick::Wheel { .. } => None,
+    }
+}
+
+fn click_ram(cx: &ClickCtx) -> Option<WidgetAction> {
+    (cx.click == WidgetClick::Left).then_some(WidgetAction::OpenSystemMonitor)
+}
+
+fn click_network(cx: &ClickCtx) -> Option<WidgetAction> {
+    match cx.click {
+        WidgetClick::Left => Some(WidgetAction::OpenNetworkSettings),
+        // ----- wifi sale del tray visible, asi que su menu se abre desde su
+        // propio widget de la izquierda -----
+        WidgetClick::Right => Some(WidgetAction::OpenWidgetTrayMenu(
+            crate::config::WidgetKind::Network,
+        )),
+        WidgetClick::Wheel { .. } => None,
+    }
+}
+
+fn click_volume(cx: &ClickCtx) -> Option<WidgetAction> {
+    match cx.click {
+        // ----- click = panel de volumen (salida, un stream por app y selector
+        // de salida) -----
+        WidgetClick::Left => Some(WidgetAction::OpenVolumePanel),
+        // ----- click derecho = el control externo (pavucontrol) -----
+        WidgetClick::Right => Some(WidgetAction::OpenVolumeControl),
+        // ----- rueda = +/- 5% -----
+        WidgetClick::Wheel { up } => Some(WidgetAction::VolumeStep { up }),
+    }
+}
+
+fn click_kblayout(cx: &ClickCtx) -> Option<WidgetAction> {
+    (cx.click == WidgetClick::Left).then_some(WidgetAction::NextKbdLayout)
 }
 
 // ----- reloj -----
@@ -473,4 +627,143 @@ fn draw_ram(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         cx.is_vertical,
     );
     false
+}
+
+#[cfg(test)]
+mod click_tests {
+    // ----- Las decisiones de click son puras (no piden `Dock`), asi que se
+    // pueden fijar aca. Antes eran un `match kind` de 10 ramas dentro de
+    // `app/pointer.rs` que no custodiaba ningun test: era el unico contrato de un
+    // widget sin guard. -----
+    use super::*;
+    use WidgetAction as A;
+    use WidgetClick::{Left, Right, Wheel};
+    use crate::config::WidgetKind;
+
+    fn sin_zonas(click: WidgetClick) -> ClickCtx {
+        ClickCtx {
+            click,
+            tray_index: None,
+            workspace_id: None,
+            media_toggle: false,
+        }
+    }
+
+    fn decidir(kind: WidgetKind, cx: &ClickCtx) -> Option<WidgetAction> {
+        let click_fn = spec_for(kind).expect("widget en la tabla").click;
+        click_fn.and_then(|f| f(cx))
+    }
+
+    /// Clock, Battery y Cpu no reaccionan a nada: en el `match` viejo caian al
+    /// `_ => {}`.
+    #[test]
+    fn los_que_no_reaccionan_no_reaccionan() {
+        for kind in [WidgetKind::Clock, WidgetKind::Battery, WidgetKind::Cpu] {
+            assert!(
+                spec_for(kind).is_some_and(|s| s.click.is_none()),
+                "{kind:?} tendria que no tener click"
+            );
+            assert_eq!(decidir(kind, &sin_zonas(Left)), None, "{kind:?}");
+            assert_eq!(decidir(kind, &sin_zonas(Right)), None, "{kind:?}");
+            assert_eq!(decidir(kind, &sin_zonas(Wheel { up: true })), None, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn el_click_izquierdo_es_el_de_siempre() {
+        assert_eq!(
+            decidir(WidgetKind::PowerMenu, &sin_zonas(Left)),
+            Some(A::OpenPowerMenu)
+        );
+        assert_eq!(
+            decidir(WidgetKind::Bluetooth, &sin_zonas(Left)),
+            Some(A::OpenBluetoothManager)
+        );
+        assert_eq!(
+            decidir(WidgetKind::Ram, &sin_zonas(Left)),
+            Some(A::OpenSystemMonitor)
+        );
+        assert_eq!(
+            decidir(WidgetKind::Network, &sin_zonas(Left)),
+            Some(A::OpenNetworkSettings)
+        );
+        assert_eq!(
+            decidir(WidgetKind::Volume, &sin_zonas(Left)),
+            Some(A::OpenVolumePanel)
+        );
+        assert_eq!(
+            decidir(WidgetKind::KbdLayout, &sin_zonas(Left)),
+            Some(A::NextKbdLayout)
+        );
+
+        // ----- los tres con sub-zona: sin sub-zona no hay accion -----
+        assert_eq!(decidir(WidgetKind::Media, &sin_zonas(Left)), None);
+        assert_eq!(decidir(WidgetKind::Tray, &sin_zonas(Left)), None);
+        assert_eq!(decidir(WidgetKind::Workspaces, &sin_zonas(Left)), None);
+
+        let con_zona = |tray, ws, media| ClickCtx {
+            click: Left,
+            tray_index: tray,
+            workspace_id: ws,
+            media_toggle: media,
+        };
+        assert_eq!(
+            decidir(WidgetKind::Tray, &con_zona(Some(3), None, false)),
+            Some(A::ActivateTray { index: 3 })
+        );
+        assert_eq!(
+            decidir(WidgetKind::Workspaces, &con_zona(None, Some(7), false)),
+            Some(A::SwitchWorkspace { id: 7 })
+        );
+        assert_eq!(
+            decidir(WidgetKind::Media, &con_zona(None, None, true)),
+            Some(A::MediaToggle)
+        );
+        // ----- Media tiene zonas anchas: estar sobre el widget no alcanza -----
+        assert_eq!(decidir(WidgetKind::Media, &con_zona(None, None, false)), None);
+    }
+
+    #[test]
+    fn el_derecho_y_la_rueda_son_los_de_siempre() {
+        assert_eq!(
+            decidir(WidgetKind::Network, &sin_zonas(Right)),
+            Some(A::OpenWidgetTrayMenu(WidgetKind::Network))
+        );
+        assert_eq!(
+            decidir(WidgetKind::Bluetooth, &sin_zonas(Right)),
+            Some(A::OpenWidgetTrayMenu(WidgetKind::Bluetooth))
+        );
+        assert_eq!(
+            decidir(WidgetKind::Volume, &sin_zonas(Right)),
+            Some(A::OpenVolumeControl)
+        );
+        assert_eq!(
+            decidir(WidgetKind::Workspaces, &sin_zonas(Right)),
+            Some(A::OpenDockMenu)
+        );
+        let mut con_tray = sin_zonas(Right);
+        con_tray.tray_index = Some(1);
+        assert_eq!(
+            decidir(WidgetKind::Tray, &con_tray),
+            Some(A::OpenTrayMenu { index: 1 })
+        );
+
+        // ----- la rueda es SOLO del volumen; el resto devuelve None a proposito -----
+        assert_eq!(
+            decidir(WidgetKind::Volume, &sin_zonas(Wheel { up: true })),
+            Some(A::VolumeStep { up: true })
+        );
+        assert_eq!(
+            decidir(WidgetKind::Volume, &sin_zonas(Wheel { up: false })),
+            Some(A::VolumeStep { up: false })
+        );
+        for kind in [
+            WidgetKind::PowerMenu,
+            WidgetKind::KbdLayout,
+            WidgetKind::Network,
+            WidgetKind::Tray,
+        ] {
+            assert_eq!(decidir(kind, &sin_zonas(Wheel { up: true })), None, "{kind:?}");
+        }
+    }
 }

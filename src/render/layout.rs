@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) struct WidgetRect {
+pub(crate) struct WidgetRect {
     pub(super) kind: crate::config::WidgetKind,
     pub(super) slot: crate::config::WidgetSlot,
     pub(super) x: f32,
@@ -276,10 +276,7 @@ pub(super) fn draw_widgets(
         // ----- la tabla es la unica lista: si un widget del enum no esta ahi,
         // `WIDGETS` quedo incompleto y conviene que paniquee con el nombre -----
         let Some(spec) = spec_for(r.kind) else {
-            unreachable!(
-                "{:?} no esta en WIDGETS (render/widget_spec.rs)",
-                r.kind
-            )
+            unreachable!("{:?} no esta en WIDGETS (render/widget_spec.rs)", r.kind)
         };
         let mut canvas = Canvas {
             pixmap: &mut *pixmap,

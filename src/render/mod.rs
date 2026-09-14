@@ -23,6 +23,9 @@ mod syswidgets;
 use syswidgets::*;
 mod widget_spec;
 use widget_spec::*;
+// ----- lo que `app/` necesita para despachar clicks: la tabla y las acciones.
+// `spec_for` ya entra por el glob, pero como privado; esto lo hace `pub(crate)`. -----
+pub(crate) use widget_spec::{ClickCtx, WidgetAction, WidgetClick, spec_for};
 
 const ICON_OVERSAMPLE: f32 = 1.0;
 const DATE_FONT_FAMILY: &str = "JetBrains Mono";
@@ -406,7 +409,7 @@ pub fn draw(
     false
 }
 
-struct WidgetColors<'a> {
+pub(crate) struct WidgetColors<'a> {
     accent: (u8, u8, u8, u8),
     text_rgb: (u8, u8, u8),
     text_color: &'a str,
