@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::Stdio;
 use std::sync::mpsc::Sender;
+use std::time::Duration;
 use wayland_client::{Connection, QueueHandle};
 
 #[derive(Clone, Debug)]
@@ -39,6 +40,20 @@ pub fn send_message(text: &str, profile: &str) {
     }
 }
 
+// ----- cuánto esperamos a que un cliente escriba su comando. El listener es UN
+// solo hilo y `handle_client` hace un `read` bloqueante, así que sin este tope el
+// primer cliente que conecta y no escribe deja el loop esperándolo PARA SIEMPRE:
+// ningún `--toggle-*`, screenshot ni notify vuelve a funcionar y no hay forma de
+// saber por qué. Un `send_message` real escribe inmediatamente después del
+// connect, así que 50 ms es holgado; lo único que corta es al cliente roto. -----
+const IPC_READ_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// Deja al cliente con el timeout puesto. Separado para poder fijarlo en un test
+/// sin fabricar un `App` ni una conexión Wayland.
+fn preparar_cliente(stream: &UnixStream) {
+    let _ = stream.set_read_timeout(Some(IPC_READ_TIMEOUT));
+}
+
 // ----- wakes loop -----
 pub fn spawn_listener(
     tx: Sender<IpcMessage>,
@@ -57,6 +72,7 @@ pub fn spawn_listener(
     };
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
+            preparar_cliente(&stream);
             handle_client(stream, &tx, &conn, &qh);
         }
     });
@@ -344,4 +360,41 @@ fn spawn_hypr_workspace_watcher(
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
     });
+}
+
+#[cfg(test)]
+mod ipc_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn el_timeout_del_cliente_es_corto() {
+        // ----- el listener es UN solo hilo con un `read` bloqueante: si este
+        // número se agranda, un cliente que conecta y no escribe vuelve a dejar
+        // todo el IPC sin responder durante ese rato. -----
+        assert!(
+            IPC_READ_TIMEOUT <= Duration::from_millis(200),
+            "el timeout de lectura del IPC quedó en {IPC_READ_TIMEOUT:?}"
+        );
+    }
+
+    #[test]
+    fn un_cliente_que_no_escribe_no_cuelga_el_read() {
+        // ----- el mecanismo del que depende b3: con el timeout puesto, el `read`
+        // de `handle_client` vuelve en vez de esperar para siempre. -----
+        let (mut servidor, _cliente_que_nunca_escribe) =
+            UnixStream::pair().expect("socketpair AF_UNIX");
+        preparar_cliente(&servidor);
+        let mut buf = [0u8; 1024];
+        let start = std::time::Instant::now();
+        let res = servidor.read(&mut buf);
+        assert!(
+            res.is_err(),
+            "sin datos el read tiene que volver con error, no quedarse esperando"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "tardó {:?} en volver",
+            start.elapsed()
+        );
+    }
 }
