@@ -20,6 +20,12 @@ pub fn ws_target_for(workspaces: &[crate::widgets::WorkspaceInfo]) -> f32 {
     active_slot(workspaces)
 }
 
+/// ¿El workspace activo no tiene ventanas? El autohide lo usa para dejar el dock
+/// fijo en pantalla: sin ventanas no hay nada que tape ni motivo para ocultarlo.
+pub fn active_is_empty(workspaces: &[crate::widgets::WorkspaceInfo]) -> bool {
+    workspaces.iter().any(|w| w.active && w.empty)
+}
+
 pub fn workspaces_geometry(workspaces: &[crate::widgets::WorkspaceInfo], render_scale: f32) -> f32 {
     let n = slot_count(workspaces) as f32;
     ((n - 1.0) * WS_SLOT + WS_ACTIVE) * render_scale
@@ -209,6 +215,26 @@ pub fn ws_flash_dot_hit(
 #[cfg(test)]
 mod workspace_hit_tests {
     use super::*;
+
+    fn ws(id: i32, active: bool, empty: bool) -> crate::widgets::WorkspaceInfo {
+        crate::widgets::WorkspaceInfo {
+            id,
+            active,
+            empty,
+            output: String::new(),
+        }
+    }
+
+    #[test]
+    fn solo_el_activo_vacio_cuenta() {
+        // activo vacío -> fijo
+        assert!(active_is_empty(&[ws(1, false, true), ws(2, true, true)]));
+        // activo con ventanas -> autohide normal (aunque otro esté vacío)
+        assert!(!active_is_empty(&[ws(1, false, true), ws(2, true, false)]));
+        assert!(!active_is_empty(&[ws(1, true, false), ws(2, false, true)]));
+        // sin estado (lista vacía) -> no fuerza nada
+        assert!(!active_is_empty(&[]));
+    }
 
     // ----- escala real reportada en AGENTS.md trampa 10; con 1.0 el bug es
     // invisible, así que el test tiene que correr con ésta. -----

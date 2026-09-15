@@ -1,14 +1,15 @@
 use crate::desktop::DesktopEntry;
 use crate::dock::Dock;
-use dockyrs_canvas::IconCache;
 use crate::menu::{
     ButtonKind, Control, ControlKind, HitTarget, MENU_PADDING, MenuScreen, OsdKind, STEP_BTN_SIZE,
     WALLPAPER_BACK_ZONE_W, WALLPAPER_GAP, WALLPAPER_PADDING, WallpaperHit,
 };
-use dockyrs_canvas::{TextCache, ThumbnailCache};
 use crate::wallpaper::WallpaperEntry;
+use dockyrs_canvas::IconCache;
+use dockyrs_canvas::{TextCache, ThumbnailCache};
 use tiny_skia::{Paint, Pixmap, Rect, Transform};
 mod app_search;
+mod calendar;
 mod clipboard;
 mod controls;
 mod dock_menu;
@@ -21,6 +22,7 @@ mod volume_panel;
 mod wallpaper;
 
 pub use app_search::*;
+use calendar::*;
 pub use clipboard::*;
 use controls::*;
 pub use dock_menu::*;
@@ -245,10 +247,19 @@ fn blend_u8(base: u8, tint: u8, amount: f32) -> u8 {
 }
 
 // ----- matugen surface -----
+/// Color de texto del panel como tupla. `text_hex` es el MISMO valor en hex, así
+/// que sale de acá: son el mismo color y no se pueden despegar.
+fn text_rgb(settings: &crate::config::DockSettings) -> (u8, u8, u8, u8) {
+    (
+        blend_u8(settings.text_r, settings.accent_r, 0.25),
+        blend_u8(settings.text_g, settings.accent_g, 0.25),
+        blend_u8(settings.text_b, settings.accent_b, 0.25),
+        255,
+    )
+}
+
 fn text_hex(settings: &crate::config::DockSettings) -> String {
-    let r = blend_u8(settings.text_r, settings.accent_r, 0.25);
-    let g = blend_u8(settings.text_g, settings.accent_g, 0.25);
-    let b = blend_u8(settings.text_b, settings.accent_b, 0.25);
+    let (r, g, b, _) = text_rgb(settings);
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
@@ -472,6 +483,9 @@ fn draw_control_rows(
             ControlKind::VolumeRow(i) => draw_volume_row(pixmap, text_cache, control, i, args, y),
             ControlKind::VolumeDevice(i) => {
                 draw_volume_device(pixmap, text_cache, control, i, args, y)
+            }
+            ControlKind::Calendar(month) => {
+                draw_calendar(pixmap, text_cache, control, month, args, y)
             }
         }
     }

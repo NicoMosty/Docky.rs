@@ -8,27 +8,28 @@ fn draw_centered_label(
     zy: f32,
     zw: f32,
     zh: f32,
-    render_scale: f32,
+    _render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    text_px: f32,
 ) {
     if label.is_empty() {
         return;
     }
     if is_vertical {
-        let label_len = text_width_estimate_render(label, 8.5 * render_scale);
+        let label_len = text_width_estimate_render(label, text_px);
         draw_text_rotated(
             pixmap,
             text_cache,
             label,
             zx + zw / 2.0,
             zy + zh / 2.0,
-            8.5 * render_scale,
+            text_px,
             colors.text_color,
             600,
         );
         let _ = label_len;
-    } else if let Some(txt) = text_cache.get(label, 8.5 * render_scale, colors.text_color, 600) {
+    } else if let Some(txt) = text_cache.get(label, text_px, colors.text_color, 600) {
         let tx = zx + (zw - txt.width() as f32) / 2.0;
         let ty = zy + (zh - txt.height() as f32) / 2.0;
         pixmap.draw_pixmap(
@@ -47,6 +48,8 @@ fn draw_icon_label(
     pixmap: &mut Pixmap,
     text_cache: &mut TextCache,
     draw_icon: fn(&mut Pixmap, f32, f32, f32, &WidgetColors, bool),
+    // Radio del símbolo ya escalado (`volume_icon_r`). Se le pasa al `draw_icon`
+    // tal cual: el símbolo no puede tener un tamaño propio aparte del reservado.
     icon_r: f32,
     active: bool,
     label: &str,
@@ -57,28 +60,22 @@ fn draw_icon_label(
     render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    text_px: f32,
 ) {
     if is_vertical {
-        let label_len = text_width_estimate_render(label, VOLUME_LABEL_PX * render_scale);
+        let label_len = text_width_estimate_render(label, text_px);
         let gap = VOLUME_ICON_GAP * render_scale;
         let total = icon_r * 2.0 + gap + label_len;
         let block_start = zy + (zh - total) / 2.0;
         let cx = zx + zw / 2.0;
-        draw_icon(
-            pixmap,
-            render_scale,
-            cx,
-            block_start + icon_r,
-            colors,
-            active,
-        );
+        draw_icon(pixmap, icon_r, cx, block_start + icon_r, colors, active);
         draw_text_rotated(
             pixmap,
             text_cache,
             label,
             cx,
             block_start + icon_r * 2.0 + gap + label_len / 2.0,
-            VOLUME_LABEL_PX * render_scale,
+            text_px,
             colors.text_color,
             600,
         );
@@ -86,12 +83,7 @@ fn draw_icon_label(
         // ----- centrado con el ancho REAL del texto, no con la estimación: la
         // estimación subestima un par de px y el contenido quedaba pegado al
         // borde izquierdo de la pastilla (padding 1px izq / 4px der) -----
-        let Some(txt) = text_cache.get(
-            label,
-            VOLUME_LABEL_PX * render_scale,
-            colors.text_color,
-            600,
-        ) else {
+        let Some(txt) = text_cache.get(label, text_px, colors.text_color, 600) else {
             return;
         };
         let label_w = txt.width() as f32;
@@ -100,7 +92,7 @@ fn draw_icon_label(
         let block_x = zx + (zw - content_w) / 2.0;
         let cy = zy + zh / 2.0;
         let icon_cx = block_x + icon_r;
-        draw_icon(pixmap, render_scale, icon_cx, cy, colors, active);
+        draw_icon(pixmap, icon_r, icon_cx, cy, colors, active);
         pixmap.draw_pixmap(
             0,
             0,
@@ -138,7 +130,7 @@ fn stroke(
 
 fn draw_speaker_icon(
     pixmap: &mut Pixmap,
-    render_scale: f32,
+    icon_r: f32,
     cx: f32,
     cy: f32,
     colors: &WidgetColors,
@@ -146,12 +138,11 @@ fn draw_speaker_icon(
 ) {
     // ----- altavoz compacto: caja + cono y UNA sola onda. Antes llevaba dos
     // ondas y era ~30% más ancho; así el espacio ahorrado rinde para el número -----
-    // ----- `s` atado a VOLUME_ICON_R a propósito: el cuerpo llega a -0.95s y la
-    // onda a ~+0.85s, o sea que el icono mide ~1.8s de ancho y tiene que entrar en
-    // la caja de 2*VOLUME_ICON_R que le reservan el reparto y `draw_icon_label`. Con
-    // el s fijo viejo (5.2) medía ~10 unidades contra las 6 reservadas y se salía
-    // de la pastilla por la izquierda. -----
-    let s = VOLUME_ICON_R * render_scale;
+    // ----- `s` ES el radio que le reserva el reparto (`volume_icon_r`): el cuerpo
+    // llega a -0.95s y la onda a ~+0.85s, o sea que el icono mide ~1.8s de ancho y
+    // entra en la caja de 2s. Con el `s` fijo viejo (5.2) medía ~10 unidades contra
+    // las 6 reservadas y se salía de la pastilla por la izquierda. -----
+    let s = icon_r;
     let alpha = if active { 230 } else { 110 };
     let mut paint = Paint::default();
     paint.set_color_rgba8(
@@ -201,7 +192,9 @@ fn draw_speaker_icon(
             wave.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, 200);
             wave.anti_alias = true;
             let stroke = tiny_skia::Stroke {
-                width: 1.35 * render_scale,
+                // ----- la onda engorda con el icono: 1.35 sobre el default es
+                // 0.45 del radio, así que se mantiene la proporción al escalar -----
+                width: 0.45 * s,
                 line_cap: tiny_skia::LineCap::Round,
                 ..Default::default()
             };
@@ -272,6 +265,8 @@ pub(crate) fn draw_volume_widget(
     colors: &WidgetColors,
     is_vertical: bool,
     hovered: bool,
+    text_px: f32,
+    icon_r: f32,
 ) {
     let Some((pct, muted)) = widgets.volume else {
         return;
@@ -287,7 +282,7 @@ pub(crate) fn draw_volume_widget(
         pixmap,
         text_cache,
         draw_speaker_icon,
-        VOLUME_ICON_R * render_scale,
+        icon_r,
         !muted,
         &label,
         zx,
@@ -297,6 +292,7 @@ pub(crate) fn draw_volume_widget(
         render_scale,
         colors,
         is_vertical,
+        text_px,
     );
 }
 
@@ -338,6 +334,7 @@ pub(crate) fn draw_kblayout_widget(
     render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    text_px: f32,
 ) {
     draw_centered_label(
         pixmap,
@@ -350,6 +347,7 @@ pub(crate) fn draw_kblayout_widget(
         render_scale,
         colors,
         is_vertical,
+        text_px,
     );
 }
 
@@ -368,6 +366,7 @@ pub(crate) fn draw_text_widget(
     colors: &WidgetColors,
     is_vertical: bool,
     hovered: bool,
+    text_px: f32,
 ) {
     draw_widget_button_bg(pixmap, zx, zy, zw, zh, render_scale, colors, hovered);
     draw_centered_label(
@@ -381,5 +380,6 @@ pub(crate) fn draw_text_widget(
         render_scale,
         colors,
         is_vertical,
+        text_px,
     );
 }

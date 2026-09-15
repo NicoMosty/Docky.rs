@@ -208,7 +208,10 @@ impl App {
         layer.set_anchor(anchor);
         layer.set_margin(margin.0, margin.1, margin.2, margin.3);
         layer.set_size(surface_w as u32, surface_h as u32);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        // ----- mismo criterio que el menú de íconos: el teclado lo tiene la
+        // superficie del popup mientras esté mapeada (con OnDemand no llegaba
+        // ninguna tecla y Escape no cerraba nada) -----
+        layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         layer.set_exclusive_zone(-1);
         if let Some(region) = popup_input_region(&self.compositor, box_x, box_y, content_height) {
             layer
@@ -516,6 +519,75 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Teclado en los menús del popup (tray, energía y panel de volumen): ↑↓
+    /// mueven el resaltado, Enter activa, ←/→ ajustan la fila de volumen y
+    /// Escape cierra. El resaltado es el MISMO `hovered` que dibuja el mouse, así
+    /// que con las flechas se ve exactamente lo mismo que con el puntero.
+    pub(super) fn handle_popup_key(&mut self, event: KeyEvent, qh: &QueueHandle<Self>) {
+        use menu::HitTarget;
+        let Some(p) = self.popup_mode.as_ref() else {
+            return;
+        };
+        let screen = p.screen;
+        let targets = menu::panel_targets(
+            &p.controls,
+            &self.dock.config.settings,
+            menu::MENU_WIDTH,
+            &p.tray_items,
+        );
+        let cur = p.hovered;
+        match event.keysym {
+            Keysym::Escape => {
+                log::debug!("teclado: Escape -> cierra popup {screen:?}");
+                self.close_popup_mode(qh);
+                return;
+            }
+            Keysym::Up | Keysym::Down => {
+                let dir = if event.keysym == Keysym::Down { 1 } else { -1 };
+                if let Some(next) = menu::nav_step(&targets, cur, dir) {
+                    log::debug!("teclado: popup {cur:?} -> {next:?}");
+                    self.set_popup_hovered(next, qh);
+                }
+                return;
+            }
+            Keysym::Left | Keysym::Right => {
+                let dir = if event.keysym == Keysym::Right { 1 } else { -1 };
+                match cur {
+                    Some(HitTarget::VolumeTrack(i)) => self.nudge_volume_row(i, dir, qh),
+                    // ----- el calendario no tiene nada que resaltar (sus targets
+                    // están vacíos), así que acá `cur` es siempre `None` -----
+                    None if screen == menu::MenuScreen::Calendar => {
+                        self.step_calendar_month(dir, qh)
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            Keysym::Return | Keysym::KP_Enter => {}
+            _ => return,
+        }
+        let Some(target) = cur else {
+            return;
+        };
+        // Enter sobre una fila de volumen mutea, igual que el icono de la fila
+        let target = match target {
+            HitTarget::VolumeTrack(i) => HitTarget::VolumeMute(i),
+            other => other,
+        };
+        if self.volume_panel_hit(Some(target), 0.0, qh) {
+            return;
+        }
+        self.handle_popup_click(Some(target), qh);
+    }
+
+    fn set_popup_hovered(&mut self, target: menu::HitTarget, qh: &QueueHandle<Self>) {
+        if let Some(p) = self.popup_mode.as_mut() {
+            p.hovered = Some(target);
+            p.content_dirty = true;
+        }
+        self.request_popup_redraw(qh);
     }
 
     pub(super) fn handle_popup_click(

@@ -217,17 +217,27 @@ pub(super) fn widget_natural_len(
     (spec.natural_len)(&cx)
 }
 
-pub(crate) fn text_widget_len(label: &str, is_vertical: bool, render_scale: f32) -> f32 {
+pub(crate) fn text_widget_len(
+    label: &str,
+    is_vertical: bool,
+    render_scale: f32,
+    text_px: f32,
+) -> f32 {
     let icon_side = 12.0 * render_scale;
     if is_vertical {
-        icon_side + 5.0 * render_scale + text_width_estimate_render(label, 8.5 * render_scale)
+        icon_side + 5.0 * render_scale + text_width_estimate_render(label, text_px)
     } else {
-        icon_side + 6.0 * render_scale + text_width_estimate_render(label, 8.5 * render_scale)
+        icon_side + 6.0 * render_scale + text_width_estimate_render(label, text_px)
     }
 }
-pub(crate) fn percentage_widget_len(pct: Option<u8>, is_vertical: bool, render_scale: f32) -> f32 {
+pub(crate) fn percentage_widget_len(
+    pct: Option<u8>,
+    is_vertical: bool,
+    render_scale: f32,
+    text_px: f32,
+) -> f32 {
     let Some(pct) = pct else { return 0.0 };
-    text_widget_len(&format!("{pct}%"), is_vertical, render_scale)
+    text_widget_len(&format!("{pct}%"), is_vertical, render_scale, text_px)
 }
 pub(super) fn draw_widgets(
     pixmap: &mut Pixmap,
@@ -403,7 +413,11 @@ fn draw_network_hover_pill(
     .find(|r| r.kind == WidgetKind::Network) else {
         return;
     };
-    let fs = 8.5 * render_scale;
+    let fs = super::widget_text_px(
+        &dock.config.settings,
+        crate::config::WidgetKind::Network,
+        render_scale,
+    );
     let Some(txt) = text_cache.get(label, fs, colors.text_color, 500) else {
         return;
     };
@@ -663,6 +677,59 @@ mod hit_layout_tests {
             "KbdLayout: el reparto reservo {} y la rama vieja reservaba {}",
             r.w,
             esperado
+        );
+    }
+
+    /// El ajuste de letra mueve la medida: con `font_scale = 2.0` el ancho del
+    /// texto es el doble que con el default, porque `len_*` usa `widget_text_px`
+    /// (la misma base 8.5 que el dibujo). Si alguien vuelve a hardcodear un
+    /// tamaño en un `len_*`, este test se corre.
+    #[test]
+    fn el_factor_de_letra_mueve_la_medida() {
+        let mut s = settings();
+        s.font_scale = 2.0;
+        let w = snapshot();
+        let tp = crate::render::widget_text_px(&s, WidgetKind::KbdLayout, SCALE_DEL_BUG);
+        assert!((tp - 2.0 * 8.5 * SCALE_DEL_BUG).abs() < 0.001);
+        let esperado = text_width_estimate_render(&w.kblayout.short, tp) + 10.0 * SCALE_DEL_BUG;
+        let r = rect(&s, WidgetKind::KbdLayout, SCALE_DEL_BUG);
+        assert!(
+            (r.w - esperado).abs() < 0.01,
+            "KbdLayout con letra x2: el reparto reservo {} y tocaba {}",
+            r.w,
+            esperado
+        );
+    }
+
+    /// La escala de letra por widget mueve SÓLO la medida de ese widget: es el
+    /// caso de uso del editor del panel (el reloj más grande sin tocar el resto).
+    #[test]
+    fn la_escala_del_widget_mueve_solo_su_medida() {
+        let base = settings();
+        let mut grande = base.clone();
+        grande.set_widget_options(
+            WidgetKind::Clock,
+            crate::config::WidgetOptions {
+                font_scale: Some(1.5),
+                ..Default::default()
+            },
+        );
+        let antes = rect(&base, WidgetKind::Clock, SCALE_DEL_BUG);
+        let despues = rect(&grande, WidgetKind::Clock, SCALE_DEL_BUG);
+        assert!(
+            despues.w > antes.w + 1.0,
+            "el reloj no creció: {} contra {}",
+            despues.w,
+            antes.w
+        );
+        // ----- el vecino mide exactamente lo mismo -----
+        let vecino_antes = rect(&base, WidgetKind::Volume, SCALE_DEL_BUG);
+        let vecino_despues = rect(&grande, WidgetKind::Volume, SCALE_DEL_BUG);
+        assert!(
+            (vecino_despues.w - vecino_antes.w).abs() < 0.01,
+            "subir la letra del reloj movió el volumen: {} contra {}",
+            vecino_despues.w,
+            vecino_antes.w
         );
     }
 

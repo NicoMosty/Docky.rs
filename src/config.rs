@@ -106,6 +106,16 @@ fn default_matugen_scheme() -> String {
     "scheme-neutral".to_string()
 }
 
+/// Rango de los multiplicadores de tamaño visual (letra e icono), generales y por
+/// widget. Vive acá y no en el panel porque lo usan los dos: `SettingId::range`
+/// para el slider y los accessores para no confiar en un JSON editado a mano.
+pub const SIZE_SCALE_MIN: f32 = 0.5;
+pub const SIZE_SCALE_MAX: f32 = 2.0;
+
+fn default_font_scale() -> f32 {
+    1.0
+}
+
 fn default_true() -> bool {
     true
 }
@@ -124,6 +134,41 @@ fn default_custom_timeout_ms() -> u64 {
 
 fn default_custom_max_chars() -> usize {
     64
+}
+
+/// Opciones por widget del tab "Widgets". Cada campo es `None` mientras el
+/// widget use el valor general de la barra: el JSON guarda sólo lo que el
+/// usuario tocó, no una copia de los defaults.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WidgetOptions {
+    /// Multiplicador de letra de ESTE widget, encima del `font_scale` general.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_scale: Option<f32>,
+    /// Multiplicador del SÍMBOLO de este widget (hoy sólo la bocina del botón de
+    /// volumen), encima de la escala general. No es lo mismo que el tamaño del
+    /// widget: el icono crece dentro de su pastilla y la pastilla lo acompaña.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_scale: Option<f32>,
+    /// Reloj en 24 h. Ausente o `false` = 12 h con AM/PM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_24h: Option<bool>,
+}
+
+impl WidgetOptions {
+    /// Sin ninguna opción puesta: la entrada se puede borrar del JSON.
+    fn is_empty(&self) -> bool {
+        self.font_scale.is_none() && self.icon_scale.is_none() && self.clock_24h.is_none()
+    }
+}
+
+/// Un par widget + opciones. Es un `Vec` y no un mapa porque `WidgetKind` tiene
+/// payload (`Custom(u16)`) y un mapa de serde necesita claves de texto.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WidgetOptionEntry {
+    pub kind: WidgetKind,
+    #[serde(flatten)]
+    pub options: WidgetOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +231,10 @@ pub struct DockSettings {
     pub icon_size: f32,
     pub dock_scale: f32,
     pub widget_scale: f32,
+    /// Multiplicador del tamaño de letra de la barra (1.0 = el de fábrica).
+    /// Ajuste "Font Size" en Appearance.
+    #[serde(default = "default_font_scale")]
+    pub font_scale: f32,
     pub media_smooth_scroll: bool,
     pub media_width_scale: f32,
     pub icon_gap: f32,
@@ -254,6 +303,19 @@ pub struct DockSettings {
     /// control en el panel de Ajustes en esta prueba mínima del framework.
     #[serde(default)]
     pub custom_widgets: Vec<CustomWidgetSource>,
+    /// Opciones por widget del tab "Widgets", direccionadas por `kind`.
+    #[serde(default)]
+    pub widget_options: Vec<WidgetOptionEntry>,
+    /// Widget elegido en el tab "Widgets". Es estado de UI y por eso no se
+    /// guarda (`skip`), pero vive acá porque `SettingId::get/set` reciben sólo
+    /// `&DockSettings`: así las filas del editor son `SettingId` comunes y
+    /// heredan gratis el slider, el teclado y el dibujo del panel.
+    ///
+    /// ponytail: estado de UI dentro de la config. Si aparece una segunda cosa
+    /// que el panel necesite saber, conviene un `MenuCtx` (settings + selección)
+    /// en vez de seguir sumando campos acá.
+    #[serde(skip)]
+    pub selected_widget: Option<WidgetKind>,
 }
 
 impl Default for DockSettings {
@@ -262,6 +324,7 @@ impl Default for DockSettings {
             icon_size: 35.688725,
             dock_scale: 0.335,
             widget_scale: 1.0,
+            font_scale: default_font_scale(),
             media_smooth_scroll: false,
             media_width_scale: 1.2026273,
             icon_gap: 2.858622,
@@ -313,6 +376,56 @@ impl Default for DockSettings {
             widgets: default_widgets(),
             custom_palettes: Vec::new(),
             custom_widgets: Vec::new(),
+            widget_options: Vec::new(),
+            selected_widget: None,
+        }
+    }
+}
+
+impl DockSettings {
+    /// Opciones puestas de `kind`. `None` = no tiene ninguna.
+    pub fn widget_options(&self, kind: WidgetKind) -> Option<&WidgetOptions> {
+        self.widget_options
+            .iter()
+            .find(|e| e.kind == kind)
+            .map(|e| &e.options)
+    }
+
+    /// Escala de letra de `kind`: la general por la suya. El valor sale
+    /// recortado a `SIZE_SCALE_MIN..=SIZE_SCALE_MAX` para que un JSON editado a
+    /// mano no deforme la barra.
+    pub fn widget_font_scale(&self, kind: WidgetKind) -> f32 {
+        let per_widget = self
+            .widget_options(kind)
+            .and_then(|o| o.font_scale)
+            .unwrap_or(1.0)
+            .clamp(SIZE_SCALE_MIN, SIZE_SCALE_MAX);
+        self.font_scale * per_widget
+    }
+
+    /// Escala del símbolo de `kind`, con el mismo recorte que la letra. Un widget
+    /// que no dibuja símbolo propio la ignora.
+    pub fn widget_icon_scale(&self, kind: WidgetKind) -> f32 {
+        self.widget_options(kind)
+            .and_then(|o| o.icon_scale)
+            .unwrap_or(1.0)
+            .clamp(SIZE_SCALE_MIN, SIZE_SCALE_MAX)
+    }
+
+    /// Reloj en 24 h. Sólo el widget `Clock` lo mira.
+    pub fn widget_clock_24h(&self, kind: WidgetKind) -> bool {
+        self.widget_options(kind)
+            .and_then(|o| o.clock_24h)
+            .unwrap_or(false)
+    }
+
+    /// Guarda las opciones de `kind`. Un juego vacío borra la entrada, así el
+    /// JSON no acumula widgets con todos los campos en el default.
+    pub fn set_widget_options(&mut self, kind: WidgetKind, options: WidgetOptions) {
+        self.widget_options.retain(|e| e.kind != kind);
+        if !options.is_empty() {
+            self.widget_options
+                .push(WidgetOptionEntry { kind, options });
         }
     }
 }
@@ -372,5 +485,196 @@ impl Config {
         let raw = serde_json::to_string_pretty(self)?;
         std::fs::write(path, raw)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod widget_options_tests {
+    use super::*;
+
+    fn con_opciones(kind: WidgetKind, options: WidgetOptions) -> DockSettings {
+        let mut s = DockSettings::default();
+        s.set_widget_options(kind, options);
+        s
+    }
+
+    /// Sin nada puesto todo vale lo general: ninguna opción por widget cambia
+    /// el look de fábrica.
+    #[test]
+    fn arrancan_vacias_y_con_el_valor_general() {
+        let s = DockSettings::default();
+        assert!(s.widget_options.is_empty());
+        assert!(s.selected_widget.is_none());
+        for kind in [WidgetKind::Clock, WidgetKind::Custom(0)] {
+            assert_eq!(s.widget_font_scale(kind), 1.0, "{kind:?}");
+            assert_eq!(s.widget_icon_scale(kind), 1.0, "{kind:?}");
+            assert!(!s.widget_clock_24h(kind), "{kind:?}");
+        }
+    }
+
+    /// Sola la escala del widget: la del vecino no se toca. Es todo el punto del
+    /// editor.
+    #[test]
+    fn la_escala_de_un_widget_no_toca_al_resto() {
+        let s = con_opciones(
+            WidgetKind::Clock,
+            WidgetOptions {
+                font_scale: Some(1.5),
+                ..Default::default()
+            },
+        );
+        assert_eq!(s.widget_font_scale(WidgetKind::Clock), 1.5);
+        assert_eq!(s.widget_font_scale(WidgetKind::Volume), 1.0);
+    }
+
+    /// La escala del widget multiplica a la general; el global sigue moviendo
+    /// todo.
+    #[test]
+    fn la_escala_del_widget_multiplica_a_la_general() {
+        let mut s = con_opciones(
+            WidgetKind::Clock,
+            WidgetOptions {
+                font_scale: Some(1.5),
+                ..Default::default()
+            },
+        );
+        s.font_scale = 1.2;
+        assert!((s.widget_font_scale(WidgetKind::Clock) - 1.8).abs() < 0.001);
+        assert!((s.widget_font_scale(WidgetKind::Volume) - 1.2).abs() < 0.001);
+    }
+
+    /// Un JSON editado a mano no puede deformar la barra: el factor sale
+    /// recortado a `SIZE_SCALE_MIN..=SIZE_SCALE_MAX`.
+    #[test]
+    fn un_factor_fuera_de_rango_se_recorta() {
+        for (puesto, esperado) in [(99.0, SIZE_SCALE_MAX), (0.01, SIZE_SCALE_MIN)] {
+            let s = con_opciones(
+                WidgetKind::Clock,
+                WidgetOptions {
+                    font_scale: Some(puesto),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(s.widget_font_scale(WidgetKind::Clock), esperado);
+        }
+    }
+
+    /// Un juego vacío no deja entrada: el JSON guarda lo que el usuario tocó y
+    /// no una lista de widgets con todos los campos en el default.
+    #[test]
+    fn volver_al_default_borra_la_entrada() {
+        let mut s = con_opciones(
+            WidgetKind::Clock,
+            WidgetOptions {
+                font_scale: Some(1.4),
+                clock_24h: Some(true),
+                ..Default::default()
+            },
+        );
+        assert_eq!(s.widget_options.len(), 1);
+        assert!(s.widget_clock_24h(WidgetKind::Clock));
+
+        s.set_widget_options(
+            WidgetKind::Clock,
+            WidgetOptions {
+                font_scale: Some(1.4),
+                ..Default::default()
+            },
+        );
+        assert_eq!(s.widget_options.len(), 1, "quedaba la escala de letra");
+
+        // ----- y tampoco se va con sólo el símbolo puesto: `is_empty` tiene que
+        // mirar los tres campos, no dos -----
+        s.set_widget_options(
+            WidgetKind::Clock,
+            WidgetOptions {
+                icon_scale: Some(1.2),
+                ..Default::default()
+            },
+        );
+        assert_eq!(s.widget_options.len(), 1, "quedaba la escala del símbolo");
+
+        s.set_widget_options(WidgetKind::Clock, WidgetOptions::default());
+        assert!(
+            s.widget_options.is_empty(),
+            "la entrada vacía tenía que irse"
+        );
+    }
+
+    /// La escala del símbolo es un knob aparte de la letra: son dos tamaños
+    /// distintos del mismo widget y ninguno arrastra al otro.
+    #[test]
+    fn la_escala_del_simbolo_es_independiente_de_la_letra() {
+        let s = con_opciones(
+            WidgetKind::Volume,
+            WidgetOptions {
+                icon_scale: Some(1.6),
+                ..Default::default()
+            },
+        );
+        assert_eq!(s.widget_icon_scale(WidgetKind::Volume), 1.6);
+        assert_eq!(
+            s.widget_font_scale(WidgetKind::Volume),
+            1.0,
+            "la letra del volumen no se movió"
+        );
+        assert_eq!(
+            s.widget_icon_scale(WidgetKind::Clock),
+            1.0,
+            "el símbolo del vecino no se movió"
+        );
+    }
+
+    /// El símbolo se recorta con el mismo rango que la letra.
+    #[test]
+    fn el_factor_del_simbolo_se_recorta() {
+        for (puesto, esperado) in [(99.0, SIZE_SCALE_MAX), (0.01, SIZE_SCALE_MIN)] {
+            let s = con_opciones(
+                WidgetKind::Volume,
+                WidgetOptions {
+                    icon_scale: Some(puesto),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(s.widget_icon_scale(WidgetKind::Volume), esperado);
+        }
+    }
+
+    /// Las opciones viajan al JSON y vuelven (el par va como `Vec` porque
+    /// `WidgetKind::Custom` tiene payload y no sirve de clave de mapa).
+    #[test]
+    fn las_opciones_sobreviven_al_json() {
+        let s = con_opciones(
+            WidgetKind::Custom(3),
+            WidgetOptions {
+                font_scale: Some(1.25),
+                ..Default::default()
+            },
+        );
+        let json = serde_json::to_string(&s).expect("serializa");
+        let vuelta: DockSettings = serde_json::from_str(&json).expect("deserializa");
+        assert_eq!(vuelta.widget_font_scale(WidgetKind::Custom(3)), 1.25);
+        // ----- sólo lo puesto: los otros campos no viajan como `null` -----
+        assert!(
+            !json.contains("null"),
+            "el JSON guarda campos que el usuario no tocó: {json}"
+        );
+    }
+
+    /// La selección es estado de UI: no se guarda, así que un panel abierto no
+    /// ensucia el config con la última pestaña que se miró.
+    #[test]
+    fn la_seleccion_del_editor_no_se_guarda() {
+        let s = DockSettings {
+            selected_widget: Some(WidgetKind::Clock),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s).expect("serializa");
+        assert!(
+            !json.contains("selected_widget"),
+            "la selección no puede viajar al JSON: {json}"
+        );
+        let vuelta: DockSettings = serde_json::from_str(&json).expect("deserializa");
+        assert!(vuelta.selected_widget.is_none());
     }
 }

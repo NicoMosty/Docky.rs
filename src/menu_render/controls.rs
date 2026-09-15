@@ -50,6 +50,22 @@ pub(crate) fn draw_widget_chips(
         };
         let hot = matches!(args.hovered, Some(HitTarget::WidgetChip(hk)) if hk == kind);
         let (rx, ry, rw, rh) = (r.x * s, r.y * s, r.w * s, r.h * s);
+        // ----- el chip elegido lleva un anillo: es lo único que dice a qué
+        // widget le va a escribir el editor de abajo, y sirve igual para los de
+        // la barra y para los que están en "Available" -----
+        if settings.selected_widget == Some(kind) {
+            let pad = 2.0 * s;
+            let (tr, tg, tb, _) = text_rgb(settings);
+            fill_rrect(
+                pixmap,
+                rx - pad,
+                ry - pad,
+                rw + pad * 2.0,
+                rh + pad * 2.0,
+                (rh + pad * 2.0) / 2.0,
+                (tr, tg, tb, 200),
+            );
+        }
         if r.assigned {
             let fill = if hot {
                 (accent_c.0, accent_c.1, accent_c.2, 210)

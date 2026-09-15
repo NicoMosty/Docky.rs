@@ -290,10 +290,12 @@ impl App {
     }
 
     pub(super) fn handle_search_key(&mut self, event: KeyEvent, qh: &QueueHandle<Self>) {
-        let screen = self.menu.as_ref().map(|m| m.screen);
-        if let Some(screen) = screen
-            && self.list_len_for_screen(screen).is_some()
-        {
+        // sin menú abierto (el dock solo) las teclas son de la aplicación que
+        // tenga el foco: acá no hay nada que hacer
+        let Some(screen) = self.menu.as_ref().map(|m| m.screen) else {
+            return;
+        };
+        if self.list_len_for_screen(screen).is_some() {
             match event.keysym {
                 Keysym::Down => {
                     self.move_menu_list_selection(1, qh);
@@ -303,7 +305,7 @@ impl App {
                     self.move_menu_list_selection(-1, qh);
                     return;
                 }
-                Keysym::Return => {
+                Keysym::Return | Keysym::KP_Enter => {
                     let selected = self.menu.as_ref().map(|m| m.list_selected);
                     if let Some(selected) = selected {
                         match screen {
@@ -314,36 +316,68 @@ impl App {
                     }
                     return;
                 }
+                Keysym::Escape => {
+                    self.close_menu(qh);
+                    return;
+                }
                 _ => {}
             }
-        }
 
-        let screen = self.menu.as_ref().map(|m| m.screen);
-        let has_search_box = matches!(
-            screen,
-            Some(menu::MenuScreen::IconPicker(_)) | Some(menu::MenuScreen::AddApp)
-        );
-        if !has_search_box {
-            return;
-        }
-        if event.keysym == Keysym::Escape {
-            self.close_menu(qh);
-            return;
-        }
-        if let Some(menu) = self.menu.as_mut() {
-            if event.keysym == Keysym::BackSpace {
-                menu.search_query.pop();
-            } else if let Some(text) = &event.utf8 {
-                for ch in text.chars() {
-                    if !ch.is_control() {
-                        menu.search_query.push(ch);
+            // caja de búsqueda: es lo único que filtran estas pantallas
+            if let Some(menu) = self.menu.as_mut() {
+                if event.keysym == Keysym::BackSpace {
+                    menu.search_query.pop();
+                } else if let Some(text) = &event.utf8 {
+                    for ch in text.chars() {
+                        if !ch.is_control() {
+                            menu.search_query.push(ch);
+                        }
                     }
                 }
             }
+            match screen {
+                menu::MenuScreen::AddApp => self.refresh_add_app_search(qh),
+                menu::MenuScreen::IconPicker(_) => self.refresh_icon_search(qh),
+                _ => {}
+            }
+            return;
         }
-        match screen {
-            Some(menu::MenuScreen::AddApp) => self.refresh_add_app_search(qh),
-            Some(menu::MenuScreen::IconPicker(_)) => self.refresh_icon_search(qh),
+
+        // ----- pantallas sin lista (el menú de un ícono del dock): filas de
+        // botones. El resaltado es el mismo `hovered` que dibuja el mouse, así
+        // que las flechas no traen un estado nuevo que sincronizar. -----
+        match event.keysym {
+            Keysym::Escape => {
+                log::debug!("teclado: Escape -> cierra menú de ícono");
+                self.close_menu(qh);
+            }
+            Keysym::Up | Keysym::Down => {
+                let dir = if event.keysym == Keysym::Down { 1 } else { -1 };
+                let Some(m) = self.menu.as_ref() else {
+                    return;
+                };
+                let targets = menu::panel_targets(
+                    &m.controls,
+                    &self.dock.config.settings,
+                    menu::MENU_WIDTH,
+                    &[],
+                );
+                let cur = m.hovered;
+                let Some(next) = menu::nav_step(&targets, cur, dir) else {
+                    return;
+                };
+                log::debug!("teclado: menú de ícono {cur:?} -> {next:?}");
+                if let Some(m) = self.menu.as_mut() {
+                    m.hovered = Some(next);
+                }
+                self.request_menu_redraw(qh);
+            }
+            Keysym::Return | Keysym::KP_Enter => {
+                let target = self.menu.as_ref().and_then(|m| m.hovered);
+                if let Some(target) = target {
+                    self.handle_menu_click(Some(target), 0.0, qh);
+                }
+            }
             _ => {}
         }
     }

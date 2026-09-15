@@ -9,6 +9,9 @@ use super::*;
 /// llega desordenado). El valor final se aplica siempre al soltar.
 const VOLUME_APPLY_MS: u128 = 50;
 
+/// Paso de las flechas en el panel (mismo 5% que la rueda sobre el widget).
+const VOLUME_STEP_PCT: i32 = 5;
+
 impl App {
     pub(super) fn open_volume_panel(&mut self, qh: &QueueHandle<Self>) {
         let rows = widgets::read_volume_rows();
@@ -110,12 +113,27 @@ impl App {
             x - box_x,
             y - box_y
         );
+        self.volume_panel_hit(hit, x - box_x, qh)
+    }
+
+    /// Aplica un hit ya resuelto del panel (click o teclado). `panel_x` es la
+    /// coordenada local del panel que usa la barra. `true` si lo consumió: el
+    /// mute y el cambio de salida viven acá una sola vez.
+    pub(super) fn volume_panel_hit(
+        &mut self,
+        hit: Option<menu::HitTarget>,
+        panel_x: f32,
+        qh: &QueueHandle<Self>,
+    ) -> bool {
+        if !self.volume_panel_open() {
+            return false;
+        }
         match hit {
             Some(menu::HitTarget::VolumeTrack(i)) => {
                 if let Some(p) = self.popup_mode.as_mut() {
                     p.volume_drag = Some(i);
                 }
-                self.drag_volume_row(i, x - box_x, true, qh);
+                self.drag_volume_row(i, panel_x, true, qh);
                 true
             }
             Some(menu::HitTarget::VolumeMute(i)) => {
@@ -180,6 +198,31 @@ impl App {
         // el paso final se aplica siempre: el throttle pudo dejarlo sin mandar
         self.drag_volume_row(i, x - box_x, true, qh);
         true
+    }
+
+    /// ±5% con ←/→ sobre la fila resaltada. Usa el mismo throttle que el
+    /// arrastre (un proceso cada `VOLUME_APPLY_MS`) pero forzando el paso: acá no
+    /// hay "soltar" que aplique el valor final.
+    pub(super) fn nudge_volume_row(&mut self, i: usize, dir: i32, qh: &QueueHandle<Self>) {
+        let now = std::time::Instant::now();
+        let throttled = self.popup_mode.as_ref().is_some_and(|p| {
+            p.volume_apply_at
+                .is_some_and(|t| now.duration_since(t).as_millis() < VOLUME_APPLY_MS)
+        });
+        if throttled {
+            return;
+        }
+        let Some(pct) = self
+            .popup_mode
+            .as_ref()
+            .and_then(|p| p.volume_rows.get(i))
+            .map(|r| r.pct)
+        else {
+            return;
+        };
+        let next = (pct as i32 + dir * VOLUME_STEP_PCT).clamp(0, 100) as u8;
+        let x = menu::volume_x_from_pct(menu::MENU_WIDTH, next);
+        self.drag_volume_row(i, x, true, qh);
     }
 
     /// Valor que corresponde a `x` (coordenada del panel) en la fila `i`. Con

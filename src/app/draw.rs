@@ -43,6 +43,9 @@ impl App {
             self.dock_visible = true;
             self.sync_autohide_surfaces();
         }
+        // ----- o si el workspace activo está vacío (no hay ventana que justifique
+        // ocultarlo): misma regla que aplica el refresco de workspaces -----
+        self.reveal_dock_if_empty(qh);
         // ----- oculto: pinta transparente (sin desmapear; attach(NULL)
         // resetea el tamaño de la layer surface en niri y rompe el remapeo) -----
         if self.dock.config.settings.autohide && !self.dock_visible && self.ws_flash_mode.is_none()
@@ -207,7 +210,19 @@ impl App {
     pub(super) fn relayout_dock(&mut self, qh: &QueueHandle<Self>) {
         self.sync_widget_bar_len();
         self.dock.relayout();
-        if !self.layer_is_borrowed() {
+        // ----- el panel de ajustes comparte la superficie y su tamaño sale del
+        // ancho del dock: si cambia un ajuste de layout (Dock Width, Dock Size,
+        // …) hay que RE-APLICAR el reparto. Antes se salteaba por estar la
+        // superficie prestada: el buffer quedaba más ancho que la superficie, el
+        // compositor mostraba su borde izquierdo y el dock se veía descentrado
+        // (y el panel, corrido respecto de sus hit tests). -----
+        if let Some((panel_w, panel_h)) = self
+            .dock_menu_mode
+            .as_ref()
+            .map(|dm| (dm.panel_w, dm.panel_h))
+        {
+            self.apply_panel_size(panel_w, panel_h);
+        } else if !self.layer_is_borrowed() {
             let (w, h) = self.dock.base_size();
             // ----- sólo si cambió: set_size dispara un configure del compositor
             // que puede quitar el foco del puntero (y ese foco es lo que mantiene
@@ -236,15 +251,67 @@ impl App {
         self.forces_dock_visible() || self.menu.is_some() || self.popup_mode.is_some()
     }
 
+    /// El workspace activo no tiene ventanas: el dock se queda en pantalla.
+    fn empty_workspace(&self) -> bool {
+        render::active_is_empty(&self.widgets.workspaces)
+    }
+
+    /// Reveal del dock por workspace vacío. Lo aplica también el refresco de
+    /// workspaces, no sólo el dibujo: `request_redraw` se saltea si hay un frame
+    /// pendiente, y `show_ws_flash` decide con `dock_visible` en el mismo bloque, así
+    /// que si no el HUD alcanzaba a abrirse y el dock recién se revelaba con el frame
+    /// siguiente (o el HUD quedaba clavado hasta su timeout).
+    fn reveal_dock_if_empty(&mut self, qh: &QueueHandle<Self>) {
+        // ----- no pisar un modo abierto: él ya tiene la superficie, y puede estar
+        // en `Overlay`, que `close_ws_flash_for_dock` bajaría a `Top` (los modos
+        // fijan su layer sólo al abrirse, no en cada frame). -----
+        if !self.dock.config.settings.autohide
+            || self.dock_visible
+            || !self.empty_workspace()
+            || self.autohide_force_visible()
+        {
+            return;
+        }
+        // ----- el HUD comparte la superficie: devolvérsela al dock, o el dock
+        // entero se pinta dentro de la pastilla chica del HUD. -----
+        self.close_ws_flash_for_dock(qh);
+        self.dock_visible = true;
+        self.sync_autohide_surfaces();
+    }
+
+    /// El HUD de workspaces comparte la superficie del dock: al revelar el dock hay
+    /// que devolverle la layer y el tamaño (el HUD los dejó con los suyos, y
+    /// `sync_autohide_surfaces` no toca el tamaño). Sin esto el dock se pinta dentro
+    /// de la pastilla chica del HUD. No hace nada si el HUD no estaba abierto.
+    fn close_ws_flash_for_dock(&mut self, qh: &QueueHandle<Self>) {
+        if self.ws_flash_mode.is_none() {
+            return;
+        }
+        self.ws_flash_mode = None;
+        self.layer.set_layer(Layer::Top);
+        self.relayout_dock(qh);
+    }
+
     /// El puntero se fue del dock y no está en el menú: el menú se cierra. Mientras
     /// `popup_hovered` sea true el salto icono -> menú está en curso y no se cierra.
+    ///
+    /// El calendario es el caso especial: su objetivo es el RELOJ, no el dock, así
+    /// que quedarse sobre otro widget de la barra no lo mantiene abierto (lo cierra
+    /// el mismo plazo corto, que `note_calendar_hover` arma al dejar el widget).
     fn popup_should_dismiss(&self) -> bool {
-        self.popup_mode.is_some()
-            && Self::popup_dismiss_due(
-                self.popup_mode.as_ref().is_some_and(|p| p.popup_hovered),
-                self.dock.pointer_pos.is_some(),
-                self.ptr_left_at.map(|t| t.elapsed().as_millis()),
-            )
+        let Some(p) = self.popup_mode.as_ref() else {
+            return false;
+        };
+        let ptr_on_target = if p.screen == menu::MenuScreen::Calendar {
+            self.pointer_over_clock()
+        } else {
+            self.dock.pointer_pos.is_some()
+        };
+        Self::popup_dismiss_due(
+            p.popup_hovered,
+            ptr_on_target,
+            self.ptr_left_at.map(|t| t.elapsed().as_millis()),
+        )
     }
 
     // ----- con un popup abierto `draw_ex` no corre: el único tick es el del
@@ -252,6 +319,14 @@ impl App {
     // ocultado automático esté encendido. -----
     pub(crate) fn arm_popup_tick(&mut self) {
         let _ = self.autohide_hide_tx.send(LEAVE_HIDE_MS);
+    }
+
+    /// Despierta el tick para revisar el hover del reloj: el canal es el mismo del
+    /// autohide, así que sirve con el autohide apagado (el envío es directo).
+    pub(crate) fn arm_calendar_tick(&mut self) {
+        let _ = self
+            .autohide_hide_tx
+            .send(super::calendar::CALENDAR_HOVER_MS);
     }
 
     /// ¿Ya toca cerrar el menú? El puntero tiene que haberse ido del dock y no estar
@@ -282,6 +357,7 @@ impl App {
             && self.dock.pointer_pos.is_none()
             && !self.pointer_down
             && !self.autohide_force_visible()
+            && !self.empty_workspace()
     }
 
     pub(crate) fn arm_autohide(&mut self) {
@@ -303,19 +379,11 @@ impl App {
         if !self.dock.config.settings.autohide || self.dock_visible {
             return;
         }
-        // ----- el HUD de workspaces comparte la superficie, y el despacho de
-        // dibujo lo prefiere a él: si no se cierra acá, el dock queda revelado
+        // ----- el HUD de workspaces comparte la superficie del dock, y el despacho
+        // de dibujo lo prefiere a él: si no se cierra acá, el dock queda revelado
         // por dentro pero se sigue viendo sólo el indicador en lugar del dock
         // completo. -----
-        if self.ws_flash_mode.is_some() {
-            self.ws_flash_mode = None;
-            self.layer.set_layer(Layer::Top);
-            // ----- el HUD dejó la superficie con SU tamaño (y lo anotó en
-            // applied_size), y sync_autohide_surfaces no toca el tamaño: sin este
-            // relayout el dock completo se dibuja dentro de la pastilla chica y
-            // aparece fuera de lugar. -----
-            self.relayout_dock(qh);
-        }
+        self.close_ws_flash_for_dock(qh);
         self.dock_visible = true;
         self.autohide_armed = false;
         log::debug!("autohide:{} reveal", crate::app::hdbg_ms());
@@ -363,6 +431,13 @@ impl App {
         // menú "no aparecía" a la primera y quedaba abierto para siempre. -----
         if self.popup_should_dismiss() {
             self.close_popup_mode(qh);
+        }
+        // ----- hover sobre el reloj: el panel del calendario se abre cuando el
+        // puntero ya se quedó el plazo corto (el tick es el mismo del autohide, y
+        // `arm_calendar_tick` lo agenda aunque el autohide esté apagado). -----
+        if self.calendar_hover_due() {
+            self.calendar_hover_at = None;
+            self.open_calendar(qh);
         }
         if self.should_hide() {
             self.set_dock_visible(false);
@@ -413,7 +488,7 @@ impl App {
         if !self.dock.icons.is_empty() || !self.widget_placed(crate::config::WidgetKind::Clock) {
             return;
         }
-        if !self.widgets.refresh_clock() {
+        if !self.widgets.refresh_clock(&self.dock.config.settings) {
             return;
         }
         self.sync_widget_bar_len();
@@ -453,10 +528,23 @@ impl App {
     pub(crate) fn refresh_workspaces(&mut self, qh: &QueueHandle<Self>) {
         if self.dock.icons.is_empty() {
             let before = render::ws_target_for(&self.widgets.workspaces);
+            let was_empty = self.empty_workspace();
             self.widgets.refresh_workspaces();
             let after = render::ws_target_for(&self.widgets.workspaces);
             self.marquee.track_ws_target(after);
             self.sync_widget_bar_len();
+            // ----- la regla del workspace vacío se resuelve ACÁ, antes de decidir el
+            // HUD: `show_ws_flash` mira `dock_visible` en este mismo bloque, así que
+            // dejarlo al dibujo (que puede saltearse por un frame pendiente) hacía que
+            // el HUD apareciera y el dock se revelara tarde. -----
+            self.reveal_dock_if_empty(qh);
+            // ----- dejó de estar vacío (cambio a uno ocupado, o se abrió una
+            // ventana): la regla de "dock fijo" termina YA, no dentro del delay. Si el
+            // puntero está encima o hay un modo abierto, `should_hide` es false y el
+            // dock se queda (correcto). -----
+            if was_empty && !self.empty_workspace() && self.should_hide() {
+                self.set_dock_visible(false);
+            }
             self.relayout_dock(qh);
             // ----- sólo si el espacio activo cambió de verdad -----
             log::debug!("wsflash: refresh before={before} after={after}");

@@ -26,6 +26,10 @@ mod align_picker;
 pub use align_picker::*;
 mod volume_panel;
 pub use volume_panel::*;
+mod keynav;
+pub use keynav::*;
+mod calendar;
+pub use calendar::*;
 
 pub const MENU_WIDTH: f32 = 230.0;
 pub const MENU_PADDING: f32 = 10.0;
@@ -140,6 +144,9 @@ pub enum MenuScreen {
     TrayMenu,
     /// Panel de volumen: salida + un stream por app + selector de salida.
     VolumePanel,
+    /// Calendario del reloj: se abre con el puntero encima del widget y ←/→
+    /// cambian de mes.
+    Calendar,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuCategory {
@@ -208,6 +215,9 @@ pub enum ControlKind {
     // salida del selector (los datos vienen en `DrawArgs`, no de los ajustes) -----
     VolumeRow(usize),
     VolumeDevice(usize),
+    // ----- calendario: el mes mostrado viaja en el propio control, no en un
+    // campo aparte (ver `menu::CalendarMonth`) -----
+    Calendar(CalendarMonth),
 }
 #[derive(Clone, Copy)]
 pub struct Control {
@@ -347,6 +357,8 @@ pub fn hit_test(
             ControlKind::Section(_)
             | ControlKind::Note(_)
             | ControlKind::IconHeader(_)
+            // el calendario no tiene nada clickeable: se cambia de mes con ←/→
+            | ControlKind::Calendar(_)
             | ControlKind::TraySeparator => None,
         };
     }

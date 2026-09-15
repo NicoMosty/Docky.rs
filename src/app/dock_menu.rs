@@ -83,17 +83,42 @@ impl App {
     /// `relayout_dock` cree que el tamaño no cambió y al cerrar el menú la
     /// superficie queda con el del panel: el dock se dibuja dentro de ese
     /// rectángulo y se ve descentrado.
-    fn apply_panel_size(&mut self, panel_w: f32, panel_h: f32) {
+    ///
+    /// El reparto depende del ancho del dock, así que se vuelve a llamar desde
+    /// `relayout_dock` cada vez que un ajuste de layout cambia con el panel
+    /// abierto (ver ahí). Idempotente: no re-setea lo que ya está puesto, porque
+    /// cada `set_*` dispara un configure que puede quitarle el foco al puntero.
+    pub(super) fn apply_panel_size(&mut self, panel_w: f32, panel_h: f32) {
         let s = &self.dock.config.settings;
         let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-        self.layer.set_anchor(anchor);
-        self.layer
-            .set_margin(margin.0, margin.1, margin.2, margin.3);
+        if self.applied_geom != Some((anchor, margin)) {
+            self.layer.set_anchor(anchor);
+            self.layer
+                .set_margin(margin.0, margin.1, margin.2, margin.3);
+            self.applied_geom = Some((anchor, margin));
+        }
         let (surf_w, surf_h) = panel_layout(s, self.dock.base_size(), panel_w, panel_h).surf;
         let (surf_w, surf_h) = (surf_w.round() as u32, surf_h.round() as u32);
-        self.layer.set_size(surf_w, surf_h);
-        self.applied_geom = Some((anchor, margin));
-        self.applied_size = Some((surf_w, surf_h));
+        if self.applied_size != Some((surf_w, surf_h)) {
+            self.layer.set_size(surf_w, surf_h);
+            self.applied_size = Some((surf_w, surf_h));
+        }
+    }
+
+    /// El editor del tab "Widgets" le escribe al widget elegido, así que sin
+    /// ninguno puesto el tab no tendría a quién: arranca por el primero de la
+    /// barra y, si el dock no tiene widgets, por el primero disponible. Los
+    /// otros tabs no lo miran, así que se puede llamar siempre.
+    fn ensure_widget_selection(&mut self) {
+        let settings = &mut self.dock.config.settings;
+        if settings.selected_widget.is_some() {
+            return;
+        }
+        settings.selected_widget = settings
+            .widgets
+            .first()
+            .map(|p| p.kind)
+            .or_else(|| menu::widget_kind_order().first().copied());
     }
 
     pub(super) fn open_dock_menu(&mut self, qh: &QueueHandle<Self>) {
@@ -106,6 +131,7 @@ impl App {
         self.held_key = None;
         self.layer.set_layer(Layer::Top);
         self.menu = None;
+        self.ensure_widget_selection();
         let category = menu::MenuCategory::Layout;
         let controls = menu::build_category_controls(category, &self.dock.config.settings);
         let panel_w =
@@ -153,6 +179,11 @@ impl App {
     /// en cada frame: si un camino cierra un modo sin soltar el teclado, queda preso
     /// y entonces NINGUNA tecla llega a ninguna aplicación. Con esto, cualquier
     /// camino que se olvide se auto-corrige al siguiente frame.
+    ///
+    /// El menú de íconos y los del popup NO pasan por acá: tienen superficie
+    /// propia y se llevan su `Exclusive` al crearse (`open_menu`,
+    /// `create_popup_surface`); el compositor lo suelta cuando la superficie se
+    /// desmapea, así que no hay estado que se pueda quedar preso.
     pub(super) fn enforce_keyboard(&mut self) {
         let exclusive = self.dock_menu_mode.is_some()
             || self.app_search_mode.is_some()
@@ -211,6 +242,9 @@ impl App {
         category: menu::MenuCategory,
         qh: &QueueHandle<Self>,
     ) {
+        // ----- antes de armar el tab: `Widgets` necesita su selección, y el alto
+        // del panel sale de las filas que ese tab arme -----
+        self.ensure_widget_selection();
         let panel_w = self.dock_menu_mode.as_ref().map(|dm| dm.panel_w);
         if let Some(dm) = self.dock_menu_mode.as_mut() {
             if category != dm.category {
@@ -637,5 +671,49 @@ impl App {
         self.dock.config.settings.custom_palettes.push(custom);
         let _ = self.dock.config.save();
         self.switch_dock_menu_category(menu::MenuCategory::Colors, qh);
+    }
+}
+
+#[cfg(test)]
+mod panel_layout_tests {
+    use super::*;
+    use crate::config::{DockAlign, DockEdge, DockSettings};
+
+    fn settings() -> DockSettings {
+        DockSettings {
+            dock_edge: DockEdge::Top,
+            dock_align: DockAlign::Middle,
+            ..Default::default()
+        }
+    }
+
+    /// Contrato que rompería el bug de "Dock Width": con el panel abierto el dock
+    /// se dibuja en `dock_at` DENTRO de la superficie, así que la superficie tiene
+    /// que crecer con el dock. Si `surf.0` quedara fijo en el ancho del panel,
+    /// `align_offset` caería a 0 y el dock aparecería pegado al borde izquierdo
+    /// (descentrado y con la punta derecha recortada).
+    #[test]
+    fn la_superficie_crece_con_el_dock_y_lo_deja_centrado() {
+        let s = settings();
+        let (panel_w, panel_h) = (720.0, 400.0);
+        for dock_w in [200u32, 400, 720, 900, 2400] {
+            let l = panel_layout(&s, (dock_w, 26), panel_w, panel_h);
+            assert!(
+                l.surf.0 >= dock_w as f32,
+                "superficie más angosta que el dock ({dock_w})"
+            );
+            let (dx, _) = l
+                .dock_at
+                .expect("borde superior: el dock va arriba del panel");
+            assert!(
+                (dx - (l.surf.0 - dock_w as f32) / 2.0).abs() < 0.01,
+                "dock descentrado con ancho {dock_w}: x={dx} en surf={}",
+                l.surf.0
+            );
+            assert!(
+                dx + dock_w as f32 <= l.surf.0 + 0.01,
+                "el dock se sale de la superficie"
+            );
+        }
     }
 }

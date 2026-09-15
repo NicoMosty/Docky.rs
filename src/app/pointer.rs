@@ -97,6 +97,9 @@ impl App {
                 let tray_count = self.tray.lock().unwrap().len();
                 let hovered = render::widget_hit_test(&self.dock, &self.widgets, tray_count, x, y);
                 self.dock.hovered_widget = hovered;
+                // ----- el reloj abre su calendario después de un plazo corto de
+                // hover (ver `note_calendar_hover`) -----
+                self.note_calendar_hover(hovered == Some(crate::config::WidgetKind::Clock));
 
                 if self.pointer_down {
                     if self.dock.dragging_index.is_some() {
@@ -116,6 +119,7 @@ impl App {
             PointerEventKind::Leave { .. } => {
                 self.dock.set_pointer(None);
                 self.dock.hovered_widget = None;
+                self.calendar_hover_at = None;
                 // ----- salir de la franja oculta enseguida en vez de esperar el
                 // delay configurable. No se oculta acá porque este Leave también
                 // llega cuando el compositor reconfigura la superficie o cuando el

@@ -64,6 +64,7 @@ pub(crate) fn draw_scheme_overlay(
     text_cache: &mut TextCache,
     start_y: f32,
     args: &DrawArgs,
+    kb_selected: usize,
 ) {
     use crate::menu::{MATUGEN_SCHEMES, scheme_picker_layout};
     let s = args.render_scale;
@@ -90,13 +91,16 @@ pub(crate) fn draw_scheme_overlay(
     for r in &layout.rects {
         let (rx, ry, rw, rh) = (r.x * s, r.y * s, r.w * s, r.h * s);
         let hot = matches!(args.hovered, Some(HitTarget::SchemeOption(i)) if i == r.index);
+        // el resaltado de teclado sale de `dropdown_selected` (mismo contrato que
+        // la lista de fuentes), así no depende de dónde esté el puntero
+        let kb_hot = r.index == kb_selected;
         let selected = MATUGEN_SCHEMES
             .get(r.index)
             .map(|(id, _)| *id == settings.matugen_scheme)
             .unwrap_or(false);
         if selected {
             fill_rrect(pixmap, rx, ry, rw, rh, 6.0 * s, accent_c);
-        } else if hot {
+        } else if hot || kb_hot {
             fill_rrect(pixmap, rx, ry, rw, rh, 6.0 * s, HOVER_SOFT);
         } else {
             fill_rrect(pixmap, rx, ry, rw, rh, 6.0 * s, (255, 255, 255, 14));

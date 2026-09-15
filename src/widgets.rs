@@ -149,6 +149,8 @@ pub struct BluetoothInfo {
 pub struct WorkspaceInfo {
     pub id: i32,
     pub active: bool,
+    /// Sin ventanas: el autohide deja el dock fijo en pantalla.
+    pub empty: bool,
     pub output: String,
 }
 
@@ -209,9 +211,19 @@ pub struct WidgetSnapshot {
 }
 
 impl WidgetSnapshot {
-    pub fn refresh() -> Self {
+    /// Formato de `strftime` del reloj: 24 h si el usuario lo pidió para el
+    /// widget `Clock`, 12 h con AM/PM si no.
+    pub fn clock_format(settings: &crate::config::DockSettings) -> &'static str {
+        if settings.widget_clock_24h(crate::config::WidgetKind::Clock) {
+            "%H:%M"
+        } else {
+            "%I:%M %p"
+        }
+    }
+
+    pub fn refresh(settings: &crate::config::DockSettings) -> Self {
         Self {
-            time: strftime_now("%I:%M %p").unwrap_or_default(),
+            time: strftime_now(Self::clock_format(settings)).unwrap_or_default(),
             date: clock_date_now().unwrap_or_default(),
             battery: read_battery(),
             media: read_media(),
@@ -254,8 +266,8 @@ impl WidgetSnapshot {
         self.workspaces = read_workspaces();
     }
 
-    pub fn refresh_clock(&mut self) -> bool {
-        let time = strftime_now("%I:%M %p").unwrap_or_default();
+    pub fn refresh_clock(&mut self, settings: &crate::config::DockSettings) -> bool {
+        let time = strftime_now(Self::clock_format(settings)).unwrap_or_default();
         let date = clock_date_now().unwrap_or_default();
         let changed = time != self.time || date != self.date;
         self.time = time;
@@ -814,7 +826,19 @@ fn read_workspaces_niri() -> Vec<WorkspaceInfo> {
                 .or_else(|| w.get("is_focused").and_then(|v| v.as_bool()))
                 .or_else(|| w.get("active").and_then(|v| v.as_bool()))
                 .unwrap_or(false);
-            (id > 0).then_some(WorkspaceInfo { id, active, output })
+            // ----- niri: `active_window_id` es null cuando el workspace no tiene
+            // ventanas. Si el campo falta (versión vieja), se asume con ventanas
+            // y el autohide sigue como siempre. -----
+            let empty = w
+                .get("active_window_id")
+                .map(|v| v.is_null())
+                .unwrap_or(false);
+            (id > 0).then_some(WorkspaceInfo {
+                id,
+                active,
+                empty,
+                output,
+            })
         })
         .collect();
     ws.sort_by_key(|w| w.id);
@@ -825,21 +849,30 @@ fn read_workspaces_hypr() -> Vec<WorkspaceInfo> {
     let Some(list) = hyprctl_json(&["workspaces", "-j"]).and_then(|v| v.as_array().cloned()) else {
         return Vec::new();
     };
-    let mut ids: Vec<i32> = list
+    // ----- `windows` es el conteo por workspace; sin el campo se asume con
+    // ventanas para no cambiar el autohide por una versión vieja de hyprctl. -----
+    let mut ws: Vec<(i32, bool)> = list
         .iter()
-        .filter_map(|w| w.get("id").and_then(|v| v.as_i64()))
-        .map(|v| v as i32)
-        .filter(|&id| id > 0) // ----- skip special workspaces -----
+        .filter_map(|w| {
+            let id = w.get("id").and_then(|v| v.as_i64())? as i32;
+            // ----- skip special workspaces -----
+            if id <= 0 {
+                return None;
+            }
+            let empty = w.get("windows").and_then(|v| v.as_u64()).unwrap_or(1) == 0;
+            Some((id, empty))
+        })
         .collect();
-    ids.sort_unstable();
-    ids.dedup();
+    ws.sort_unstable();
+    ws.dedup();
     let active_id = hyprctl_json(&["activeworkspace", "-j"])
         .and_then(|v| v.get("id").and_then(|v| v.as_i64()))
         .map(|v| v as i32);
-    ids.into_iter()
-        .map(|id| WorkspaceInfo {
+    ws.into_iter()
+        .map(|(id, empty)| WorkspaceInfo {
             id,
             active: Some(id) == active_id,
+            empty,
             output: String::new(),
         })
         .collect()
@@ -1295,7 +1328,7 @@ mod custom_widget_tests {
     }
 
     fn instantanea(textos: Vec<Option<String>>) -> WidgetSnapshot {
-        let mut snapshot = WidgetSnapshot::refresh();
+        let mut snapshot = WidgetSnapshot::refresh(&crate::config::DockSettings::default());
         snapshot.custom_last_polls = vec![None; textos.len()];
         snapshot.custom_texts = textos;
         snapshot
@@ -1363,5 +1396,42 @@ mod custom_widget_tests {
         assert!(snapshot.refresh_custom(&ajustes.custom_widgets, Instant::now()));
         assert_eq!(snapshot.custom_texts, [None]);
         assert_eq!(snapshot.custom_last_polls, [None]);
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+    use crate::config::{DockSettings, WidgetKind, WidgetOptions};
+
+    /// El formato sale de la opción del widget `Clock`, no del reloj global: es
+    /// lo que la fila "24-Hour Clock" del editor escribe.
+    #[test]
+    fn el_formato_del_reloj_sale_de_la_opcion_del_widget() {
+        let mut s = DockSettings::default();
+        assert_eq!(WidgetSnapshot::clock_format(&s), "%I:%M %p");
+        for (puesto, esperado) in [(true, "%H:%M"), (false, "%I:%M %p")] {
+            s.set_widget_options(
+                WidgetKind::Clock,
+                WidgetOptions {
+                    clock_24h: Some(puesto),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(WidgetSnapshot::clock_format(&s), esperado);
+        }
+    }
+
+    /// El supuesto del formato de 24 h: `%H:%M` no trae AM/PM ni letras. Si
+    /// alguien lo cambia por un formato con sufijo, el ancho del reloj pasa a
+    /// depender del idioma y esto lo delata.
+    #[test]
+    fn el_formato_de_24h_no_trae_sufijo() {
+        let texto = strftime_now("%H:%M").expect("strftime");
+        assert_eq!(texto.len(), 5, "HH:MM esperado, salió {texto:?}");
+        assert!(
+            !texto.chars().any(|c| c.is_alphabetic()),
+            "el formato de 24 h no debería traer letras: {texto:?}"
+        );
     }
 }

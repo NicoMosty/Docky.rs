@@ -315,8 +315,12 @@ fn spawn_niri_workspace_watcher(
             };
             if let Some(stdout) = child.stdout.take() {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    // ponytail: filtrado por substring, sin parsear JSON por evento
-                    if (line.contains("Workspace") || line.contains("workspace"))
+                    // ponytail: filtrado por substring, sin parsear JSON por evento.
+                    // `Window*` incluye abrir/cerrar ventana: hace falta para que el
+                    // workspace vacío (dock fijo) se reevalúe al abrir la primera.
+                    if (line.contains("Workspace")
+                        || line.contains("workspace")
+                        || line.contains("Window"))
                         && tx.send(IpcMessage::WorkspacesChanged).is_ok()
                     {
                         conn.display().sync(&qh, ());
@@ -350,7 +354,10 @@ fn spawn_hypr_workspace_watcher(
                 continue;
             };
             for line in BufReader::new(stream).lines().map_while(Result::ok) {
-                if (line.starts_with("workspace") || line.starts_with("focusedmon"))
+                if (line.starts_with("workspace")
+                    || line.starts_with("focusedmon")
+                    || line.starts_with("openwindow")
+                    || line.starts_with("closewindow"))
                     && tx.send(IpcMessage::WorkspacesChanged).is_ok()
                 {
                     conn.display().sync(&qh, ());

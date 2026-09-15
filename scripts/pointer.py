@@ -41,6 +41,23 @@ Uso:
                N=1). Sirve para el volumen del dock (rueda = ±5% sobre el widget de
                volumen). Necesita que el dock esté visible: el reveal se hace igual.
 
+    --key up|down|left|right|enter|escape|backspace [--times N]
+               en vez de clickear, teclea esa tecla N veces (taps sueltos, sin
+               auto-repeat) con el TECLADO virtual. Es lo que ejercita la navegación
+               de los menús: imprime la última línea `teclado:` del log, que dice qué
+               quedó resaltado (o si Escape cerró). Igual que --shift-arrow, necesita
+               un modo abierto (la superficie con el teclado en Exclusive).
+
+    --hover    en vez de clickear, deja el puntero donde llegó y espera: es lo que
+               ejercita lo que se abre con hover (el calendario del reloj, 450ms).
+               Imprime la última línea `calendario:` del log. Para saber dónde caer,
+               primero se busca el widget con un click normal (imprime el hit).
+               Ej.:
+                   dockyrs --toggle-dock-menu   # no: el panel tapa el hover
+                   sudo python3 scripts/pointer.py --extra 600 --button L   # -> Some(Clock)
+                   sudo python3 scripts/pointer.py --extra 600 --hover        # calendario: abre
+                   sudo python3 scripts/pointer.py --key right --times 2      # mes siguiente
+
 Imprime el hit que devolvió la app (`-> Some(Battery)`, `-> None`, …), que es
 lo que permite saber dónde cayó el click sin adivinar.
 
@@ -69,12 +86,25 @@ SYN_REPORT = 0
 REL_X, REL_Y = 0, 1
 BTN_LEFT, BTN_RIGHT = 0x110, 0x111
 KEY_LEFTSHIFT, KEY_LEFT, KEY_RIGHT = 42, 105, 106
+# ----- teclas que usan los menús (flechas, Enter, ESC) -----
+KEY_UP, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_BACKSPACE = 103, 108, 28, 1, 14
+KEY_CODES = {
+    "up": KEY_UP,
+    "down": KEY_DOWN,
+    "left": KEY_LEFT,
+    "right": KEY_RIGHT,
+    "enter": KEY_ENTER,
+    "escape": KEY_ESC,
+    "backspace": KEY_BACKSPACE,
+}
 REL_WHEEL = 8
 
 DEFAULT_LOG = "/tmp/menu.log"
 REVEAL_TAG = " reveal"
 HIT_TAG = "click derecho"
 OVERLAY_TAG = "overlay:"
+KEY_TAG = "teclado:"
+CAL_TAG = "calendario:"
 
 
 def emit(fd, etype, code, value):
@@ -122,16 +152,49 @@ def last_overlay(path):
     return lines[-1].strip() if lines else None
 
 
+def last_key(path):
+    try:
+        with open(path, "r", errors="replace") as fh:
+            lines = [line for line in fh if KEY_TAG in line]
+    except OSError:
+        return None
+    return lines[-1].split(KEY_TAG, 1)[1].strip() if lines else None
+
+
+def last_calendar(path):
+    try:
+        with open(path, "r", errors="replace") as fh:
+            lines = [line for line in fh if CAL_TAG in line]
+    except OSError:
+        return None
+    return lines[-1].split(CAL_TAG, 1)[1].strip() if lines else None
+
+
 def make_keyboard(name=b"dockyrs-keys"):
     """Teclado virtual: el otro id de producto, para no confundirlo con el puntero."""
     fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
     fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
-    for code in (KEY_LEFTSHIFT, KEY_LEFT, KEY_RIGHT):
+    for code in (KEY_LEFTSHIFT, *KEY_CODES.values()):
         fcntl.ioctl(fd, UI_SET_KEYBIT, code)
     buf = bytearray(struct.pack("4H80sI", 0x03, 0x1234, 0x5679, 1, name[:79], 0))
     fcntl.ioctl(fd, UI_DEV_SETUP, buf)
     fcntl.ioctl(fd, UI_DEV_CREATE)
     return fd
+
+
+def tap_key(fd, key, times):
+    """Un tap por vez (release entre medio): N pasos discretos, sin auto-repeat.
+
+    El auto-repeat del kernel sería otra cosa: acá cada paso tiene que llegar
+    como un press suelto, que es lo que la app trata como una flecha.
+    """
+    for _ in range(times):
+        emit(fd, EV_KEY, key, 1)
+        sync(fd)
+        time.sleep(0.05)
+        emit(fd, EV_KEY, key, 0)
+        sync(fd)
+        time.sleep(0.12)
 
 
 def tap_shift_arrow(fd, key, times):
@@ -178,7 +241,17 @@ def park_away(fd):
 
 
 def reveal_and_click(
-    fd, log, extra, button, y_steps, then_dx=0, then_dy=0, double=False, wheel=None, times=1
+    fd,
+    log,
+    extra,
+    button,
+    y_steps,
+    then_dx=0,
+    then_dy=0,
+    double=False,
+    wheel=None,
+    times=1,
+    hover=False,
 ):
     """Se aleja, satisface la esquina, baja a la franja, barre hasta que el dock
     se revela, avanza `extra` pasos y clickea (o gira la rueda si wheel).
@@ -203,6 +276,11 @@ def reveal_and_click(
         rel(fd, 3, 0)
         time.sleep(0.012)
     time.sleep(0.25)
+    if hover:
+        # ----- sin click: lo que se prueba es el hover (el calendario se abre
+        # después de CALENDAR_HOVER_MS), así que hay que dejarlo quieto -----
+        time.sleep(1.0)
+        return revealed
     if wheel is not None:
         # ----- rueda en el punto alcanzado (REL_WHEEL: +1 arriba, -1 abajo) -----
         for _ in range(times):
@@ -256,9 +334,22 @@ def main():
     parser.add_argument("--then-dy", type=int, default=0)
     parser.add_argument("--double", action="store_true")
     parser.add_argument("--shift-arrow", choices=("left", "right"))
+    parser.add_argument("--key", choices=tuple(KEY_CODES))
     parser.add_argument("--scroll", choices=("up", "down"))
+    parser.add_argument("--hover", action="store_true")
     parser.add_argument("--times", type=int, default=1)
     args = parser.parse_args()
+
+    if args.key:
+        fd = make_keyboard()
+        try:
+            time.sleep(1.6)
+            tap_key(fd, KEY_CODES[args.key], args.times)
+        finally:
+            os.close(fd)
+        time.sleep(0.3)
+        print(last_key(args.log) or "la tecla no llegó a la app (¿hay un menú abierto?)")
+        return 0
 
     if args.shift_arrow:
         fd = make_keyboard()
@@ -287,6 +378,7 @@ def main():
             args.double,
             args.scroll,
             args.times,
+            args.hover,
         )
     finally:
         os.close(fd)
@@ -298,6 +390,10 @@ def main():
         )
         return 1
     time.sleep(0.2)
+    if args.hover:
+        line = last_calendar(args.log)
+        print(line or "el calendario no se abrió (¿quedó el puntero sobre el reloj?)")
+        return 0 if line else 1
     print(last_hit(args.log) or "el click no llegó al dock (fuera de la superficie)")
     return 0
 

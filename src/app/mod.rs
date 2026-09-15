@@ -3,13 +3,13 @@ use crate::desktop::{self, DesktopEntry};
 use crate::dock;
 use crate::dock::Dock;
 use crate::icon_browser;
-use dockyrs_canvas::IconCache;
 use crate::menu;
 use crate::menu_render;
 use crate::render;
-use dockyrs_canvas::{TextCache, ThumbnailCache};
 use crate::wallpaper::{self, WallpaperEntry};
 use crate::widgets;
+use dockyrs_canvas::IconCache;
+use dockyrs_canvas::{TextCache, ThumbnailCache};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_registry,
@@ -44,6 +44,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
 };
 
 mod app_search;
+mod calendar;
 mod clipboard_ui;
 mod dock_menu;
 mod dock_menu_input;
@@ -386,6 +387,10 @@ pub struct App {
     /// espurio: lo limpia cualquier Enter/Motion, así que el plazo (LEAVE_HIDE_MS)
     /// sólo vence si el puntero se fue de verdad.
     pub ptr_left_at: Option<std::time::Instant>,
+    /// Instante en que el puntero llegó al widget del reloj y se quedó: pasada la
+    /// ventana de `CALENDAR_HOVER_MS` el calendario se abre. Lo limpia cualquier
+    /// Enter/Motion que caiga fuera del reloj.
+    pub calendar_hover_at: Option<std::time::Instant>,
     pub autohide_hide_tx: std::sync::mpsc::Sender<u64>,
     pub pointer: Option<wl_pointer::WlPointer>,
     pub keyboard: Option<wl_keyboard::WlKeyboard>,

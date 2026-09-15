@@ -62,7 +62,16 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
    el selector de screenshot (`screenshot/mod.rs:79`) tienen superficie propia. Si un modo cambia el tamaño TIENE que
    anotarlo en `applied_size`/`applied_geom` (`apply_panel_size`) o restaurarlo con
    `relayout_dock` al cerrar: `sync_autohide_surfaces` reaplica anchor/margin pero
-   **nunca** el tamaño. De acá salieron dos bugs de "dock descentrado".
+   **nunca** el tamaño. De acá salieron tres bugs de "dock descentrado".
+   El tercero: cambiar un ajuste de layout ("Dock Width", "Dock Size") **con el
+   panel abierto**. `relayout_dock` se salteaba por estar la superficie prestada,
+   así que el buffer crecía pero niri seguía centrando la superficie con el ancho
+   viejo: el dock derivaba a la derecha (medido: 970.5 de centro contra 960 de la
+   pantalla, con `width_padding = 61`). Por eso `relayout_dock` ahora re-aplica el
+   reparto del panel cuando `dock_menu_mode` está abierto, y `apply_panel_size` es
+   idempotente (no re-setea anchor/size si no cambiaron: cada `set_*` dispara un
+   configure que puede perder el foco del puntero). Guard:
+   `app::dock_menu::panel_layout_tests`.
 2. **Nunca desmapear la superficie compartida del dock.** `attach(NULL)` hace que niri resetee el
    tamaño de la layer a 0 y el cliente muere por error de protocolo. Ocultar =
    buffer transparente (`draw_hidden`). El popup y el selector SÍ se desmapean al cerrar
@@ -130,23 +139,14 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
      anchas: "MUTE" medía ~23px contra los 19 estimados y se salía de la pastilla.
      Las etiquetas del volumen usan otro factor (`volume_label_len`).
 
-12. **La geometría de un widget que la calculan el reparto y el dibujo va en UNA
+ 1. **La geometría de un widget que la calculan el reparto y el dibujo va en UNA
    función** (`volume_content_len`, `VOLUME_ICON_*`), no duplicada: el ancho que
    reserva `widget_natural_len` y el content que centra `draw_icon_label` tienen
    que coincidir o el contenido se sale de la pastilla (le pasó al altavoz: medía
    ~10 unidades contra las 6 reservadas porque su `s` interno no estaba atado a
    `VOLUME_ICON_R`). Mismo criterio que `hit_scale` (trampa 10).
 
-## Mapa del código
-
-- `src/app/mod.rs` — `App`: campos de modo (`dock_menu_mode`, `ws_flash_mode`,
-  `osd_mode`, `popup_mode`, …), geometría (`applied_size`, `applied_geom`), autohide
-  (`last_ptr_event`, `ptr_left_at`, `autohide_armed`).
-- `src/app/pointer.rs`, `handlers.rs` — despacho por superficie: cada modo
-  intercepta antes de la rama general (`if self.x_mode.is_some() { …; return; }`).
-- `src/app/draw.rs` — `draw_ex` elige el modo, `relayout_dock` fija el tamaño,
-  `draw_icons` dibuja el dock normal.
-13. **La tabla de widgets: la exhaustividad del compilador pasó a ser un test.**
+ 2. **La tabla de widgets: la exhaustividad del compilador pasó a ser un test.**
    `src/render/widget_spec.rs` tiene `WIDGETS`, la única lista de widgets del
    render: un `WidgetSpec` por widget con su `natural_len` y su `draw`. Antes había
    dos `match` de 12 ramas (en `widget_natural_len` y en `draw_widgets`); ahora hay
@@ -154,7 +154,8 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
    son **4 lugares**: el enum, `WIDGETS`, `WIDGET_KIND_ORDER` y `widget_label` (los
    dos últimos en `menu/widget_chips.rs`). Antes eran 16 sitios en 7 archivos
    (medido con `KbdLayout`, commit `c458821`).
-   - **Lo que dejó de estar garantizado:** sin `match` no hay exhaustividad, así que
+
+- **Lo que dejó de estar garantizado:** sin `match` no hay exhaustividad, así que
      si el enum crece y la tabla no, nada avisa. Lo cubre
      `render::layout::hit_layout_tests::la_tabla_cubre_todos_los_widgets_del_panel`,
      que itera `WIDGET_KIND_ORDER` **y** exige que `WIDGETS` y el panel de ajustes
@@ -162,20 +163,20 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
      `widget_label` es un `match` sin `_`, así que sumar una variante es error de
      compilación, y el `assert_eq!` de tamaños agarra la desincronización en los
      dos sentidos.
-   - **El dibujo recibe el `WidgetRect` que produjo `layout_widgets`**, así que la
+- **El dibujo recibe el `WidgetRect` que produjo `layout_widgets`**, así que la
      trampa 10 pasa a ser estructural en vez de sostenida por un test.
-   - **`WidgetSnapshot` no se toca.** Derivar `PartialEq` para colapsar
+- **`WidgetSnapshot` no se toca.** Derivar `PartialEq` para colapsar
      `refresh_sys`/`refresh_clock` obligaría a clonar el struct entero (12 campos
      con `Vec` y `String`) cada 2 s sólo para comparar; el diff a mano compara los
      campos que acaba de releer.
-   - **`Canvas` lleva DOS flags de animación**: `advance` (marquee de Media) y
+- **`Canvas` lleva DOS flags de animación**: `advance` (marquee de Media) y
      `advance_ws` (animación de Workspaces). No son el mismo tick.
-   - Las funciones de `render/` **siguen** recibiendo `(zx, zy, zw, zh)` desarmado
+- Las funciones de `render/` **siguen** recibiendo `(zx, zy, zw, zh)` desarmado
      (19 firmas, 152 líneas de plumbing). Unificarlas a `&WidgetRect` ahorra ~95
      líneas pero toca ~57 sitios y no previene ningún fallo — la invariante ya vive
      en el adaptador. Medido y descartado: no repetir el análisis.
 
-14. **El workspace: `cargo test` en la raíz NO testea el crate.**
+ 1. **El workspace: `cargo test` en la raíz NO testea el crate.**
    Con `crates/dockyrs-canvas` como miembro, `cargo test --release` en la raíz corre
    sólo el paquete raíz, así que los guards del crate quedan invisibles para el
    comando que documenta este archivo. Lo arregla
@@ -186,9 +187,8 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
    alcanza a los miembros del workspace**, así que el crate del raster se compila en
    `opt-level = 1`.
 
+## Mapa del código
 
-- `src/app/dock_menu.rs`, `dock_menu_input.rs` — panel de ajustes: `panel_layout`
-  (reparto superficie/dock/panel), `panel_local` (traducción de coordenadas),
 - `src/render/widget_spec.rs` — la tabla `WIDGETS`: la única lista de widgets del
   render, con la medida y el dibujo de cada uno (trampa 13).
 - `crates/dockyrs-canvas/` — raster por CPU sobre tiny-skia: texto (`text.rs`),
@@ -196,12 +196,24 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
   GL: el costo de rasterizar por CPU sólo se paga cuando hay algo que redibujar,
   que es por qué el reposo está en el piso (1 tick de sistema cada 5 s).
 
+- `src/app/mod.rs` — `App`: campos de modo (`dock_menu_mode`, `ws_flash_mode`,
+  `osd_mode`, `popup_mode`, …), geometría (`applied_size`, `applied_geom`), autohide
+  (`last_ptr_event`, `ptr_left_at`, `autohide_armed`).
+- `src/app/pointer.rs`, `handlers.rs` — despacho por superficie: cada modo
+  intercepta antes de la rama general (`if self.x_mode.is_some() { …; return; }`).
+- `src/app/draw.rs` — `draw_ex` elige el modo, `relayout_dock` fija el tamaño,
+  `draw_icons` dibuja el dock normal.
+- `src/app/dock_menu.rs`, `dock_menu_input.rs` — panel de ajustes: `panel_layout`
+  (reparto superficie/dock/panel), `panel_local` (traducción de coordenadas),
   hit tests y el drag de widgets (`drop_widget_chip`).
 - `src/app/ws_flash.rs` — HUD de workspaces.
 - `src/app/volume_panel.rs` — panel de volumen: se abre en la superficie del popup
   y aplica los cambios (arrastre de la barra, mute por fila, cambio de salida).
 - `src/menu/volume_panel.rs` — geometría y hit tests del panel de volumen.
   `src/menu_render/volume_panel.rs` — su dibujo.
+- `src/app/calendar.rs`, `src/menu/calendar.rs`, `src/menu_render/calendar.rs` —
+  calendario del reloj: hover y cambio de mes / aritmética de fechas y geometría /
+  dibujo.
 - `src/menu/` — lógica, geometría y hit tests (sin dibujo). `src/menu_render/` — el
   dibujo. Se tocan de a pares.
 - `src/render/` — widgets de la barra (reloj/batería, workspaces, red, bluetooth,
@@ -246,6 +258,41 @@ del dock, así que no necesita saber la geometría.
   (`REL_WHEEL`): es lo que ejercita el volumen del dock (rueda = ±5% sobre el
   widget de volumen). Sin efecto si el puntero no está sobre el volumen, así que
   sirve también para barrer la barra y ubicar ese widget por su log.
+- `--key up|down|left|right|enter|escape|backspace [--times N]` teclea esa tecla
+  N veces (taps sueltos, sin auto-repeat) por el **teclado** virtual: es lo que
+  ejercita la navegación de los menús. No necesita el reveal (no hay click): sirve
+  con el panel de ajustes ya abierto por IPC. Imprime la última línea `teclado:`
+  del log, que es la que dice qué quedó resaltado o si ESC cerró. Necesita un modo
+  abierto (superficie con el teclado en `Exclusive`).
+
+  ```sh
+  dockyrs --toggle-dock-menu                     # abre el panel
+  sudo python3 scripts/pointer.py --key down --times 3
+  sudo python3 scripts/pointer.py --key escape   # cierra el panel
+  niri msg --json layers | grep dockyrs          # interactividad de vuelta en None
+  ```
+
+  ```sh
+  dockyrs --toggle-dock-menu                     # abre el panel
+  sudo python3 scripts/pointer.py --key down --times 3
+  sudo python3 scripts/pointer.py --key escape   # cierra el panel
+  niri msg --json layers | grep dockyrs          # interactividad de vuelta en None
+  ```
+
+- `--hover` deja el puntero donde llegó y espera en vez de clickear: es lo que
+  ejercita lo que se abre con hover, hoy el calendario del reloj. Imprime la última
+  línea `calendario:` del log (o el aviso de que no se abrió). Para saber dónde caer
+  primero se busca el widget con un click normal (`--button L`, que imprime el hit) y
+  después se repite el mismo `--extra` con `--hover`. El reloj está al final del
+  clúster derecho:
+
+  ```sh
+  sudo python3 scripts/pointer.py --extra 600 --button L   # -> Some(Clock)
+  sudo python3 scripts/pointer.py --extra 600 --hover      # calendario: abre center=…
+  sudo python3 scripts/pointer.py --key right --times 2    # → mes siguiente (x2)
+  sudo python3 scripts/pointer.py --key escape             # cierra el panel
+  ```
+
 - Ojo con la convención de signo: `REL_WHEEL +1` (rueda arriba) llega a la app como
   `discrete = -1`, porque en `wl_pointer` el eje vertical es positivo hacia abajo.
   Con el signo invertido la rueda hace lo contrario (ver trap 11).
@@ -257,7 +304,12 @@ Líneas de log útiles: `dock: click derecho (x,y) -> Some(Kind)`,
 `volumen: click panel (x,y) -> Some(VolumeTrack|VolumeMute|VolumeDevice)`,
 `dock: rueda (x,y) subir=bool -> Some(Kind)`,
 `autohide:N reveal|hide|leave (franja)|timeout … borrowed=`,
-`wsflash: show … visible= placed= borrowed=`, `popup: t=… frame=Xms`.
+`wsflash: show … visible= placed= borrowed=`, `popup: t=… frame=Xms`,
+`calendario: abre center=…` / `calendario: <mes> (+1)` (apertura por hover y cambio de
+mes, que es el sensor de `pointer.py --hover`),
+`teclado: panel|popup|menú de ícono <target viejo> -> <target nuevo>` (navegación de
+los menús con las flechas; es el sensor de `pointer.py --key`) y
+`teclado: Escape -> cierra …` (lo que cierra cada ESC).
 
 Para el estado de las superficies: `niri msg --json layers` expone por layer el
 `namespace`, el `layer` y el `keyboard_interactivity` (sin `--json` sale en texto).
@@ -413,6 +465,12 @@ reordenamiento de widgets) y lo posterior:
   falsa). Test: `power::power_tests::encadena_hasta_el_que_existe`
   (verifica el fallback con poll, porque `spawn` es fire-and-forget y el assert
   inmediato pierde la carrera).
+- **Dock Width con el panel abierto ya no descentra el dock**: cambiar cualquier
+  ajuste de layout mientras el panel de ajustes está abierto re-aplica el reparto de
+  la superficie compartida (`relayout_dock` → `apply_panel_size`, idempotente), así
+  que el dock queda centrado en cada paso del slider en vez de derivar a la derecha.
+  Verificado contra píxeles: centro del dock 959.5 con `width_padding = 61` (antes
+  970.5, con la superficie anclada en el ancho viejo).
 - **Bordes del dock y de los menús independientes**: `corner_radius`/`border_width`
   son solo del dock (`render/mod.rs`); los menús (power, volumen, launcher,
   clipboard, OSD, notificaciones, panel de ajustes) usan `menu_corner_radius` /
@@ -443,12 +501,107 @@ reordenamiento de widgets) y lo posterior:
   que es el estado seguro de la trampa 2); y el click de un app fija usa
   `icons.get()` en vez de `icons[idx]`. Tests: `widgets::percent_decode_tests`.
 
+- **Workspace vacío ⇒ dock fijo**: `WorkspaceInfo.empty` (niri:
+  `active_window_id == null`; hypr: `windows == 0`) y `render::active_is_empty()`.
+  Con el workspace activo vacío `should_hide()` no oculta y el dock se revela si
+  estaba oculto; al dejar de estar vacío vuelve al autohide normal. El watcher de
+  niri ahora engancha además eventos `Window*` para reevaluarlo al abrir/cerrar.
+  Test: `render::workspaces::workspace_hit_tests::solo_el_activo_vacio_cuenta`.
+  Dos cosas que costaron rondas y hay que respetar si se toca:
+  - **La regla se resuelve en `refresh_workspaces`, NO en `draw_ex`**
+    (`reveal_dock_if_empty` + ocultado inmediato al dejar de estar vacío).
+    `request_redraw` se saltea si hay un frame pendiente, y `show_ws_flash` decide
+    con `dock_visible` en el mismo bloque: dejarlo al dibujo hacía que el HUD
+    apareciera y el dock se revelara tarde (o al revés, que al pasar vacío →
+    ocupado no apareciera el selector y quedara el dock completo).
+  - **El HUD comparte la superficie y `show_ws_flash` sale si ve `dock_visible`**,
+    así que no cierra el HUD ya abierto: al revelar hay que pasar por
+    `close_ws_flash_for_dock()` (devuelve layer y tamaño), que también usa
+    `reveal_dock`.
+
+- **Teclado en los menús** (flechas para elegir, Enter para activar, ESC para
+  cerrar) en los cuatro menús que no lo tenían: panel de ajustes, dropdown de
+  esquema, menús del popup (tray, energía y **panel de volumen**) y el menú de un
+  ícono del dock. La pieza que lo hace chico es `menu/keynav.rs`:
+  `panel_targets()` enumera lo seleccionable de un panel **en el orden visual** y
+  `nav_step()` mueve el resaltado; como el resaltado es el MISMO `HitTarget` /
+  `hovered` que dibuja el hover del mouse, no hay un segundo sistema de foco que
+  se pueda desincronizar del dibujo (mismo criterio que `hit_scale`, trampa 10).
+  Enter reusa el click de cada menú (`handle_dock_menu_click`, `handle_popup_click`,
+  `volume_panel_hit` —extraído de `volume_panel_press` para que el mute y el cambio
+  de salida vivan en un solo lugar— y `handle_menu_click`).
+  - Panel de ajustes: ↑↓ recorren las pestañas y después los controles de la
+    pestaña activa, Enter activa/togglea/cambia de pestaña y ←→ mueven el slider
+    resaltado (un paso por evento, igual que el botón +/-). Dentro de un
+    desplegable las flechas navegan **la lista** y ESC cierra sólo el desplegable;
+    el segundo ESC cierra el panel.
+  - Panel de volumen: ←→ son ±5% de la fila resaltada (con el mismo throttle de
+    `VOLUME_APPLY_MS` que el arrastre, pero forzando el paso: acá no hay "soltar"
+    que aplique el valor final) y Enter mutea. `volume_x_from_pct()` es la inversa
+    de `volume_pct_from_x()` y vive al lado, para que no se despeguen.
+  - **El foco del teclado de esos menús lo tiene su propia superficie**
+    (`Exclusive` en `open_menu` y `create_popup_surface`) y el compositor lo suelta
+    cuando se desmapea. Con `OnDemand` no llegaba ninguna tecla (por eso el panel de
+    ajustes, que comparte la superficie del dock, pasa por `enforce_keyboard` y
+    estos no). Test: `niri msg --json layers` → el `dockyrs-menu` queda
+    `exclusive` mientras el menú está abierto y desaparece al cerrarse.
+  - Guardo: `menu::keynav_tests` (orden/extremos/deshabilitados del tray),
+    `menu::volume_panel::volume_panel_tests::el_x_de_un_porcentaje_da_la_vuelta_completa`.
+    A mano: `scripts/pointer.py --key up|down|enter|escape` (nuevo; necesita sudo
+    por `/dev/uinput`) y las líneas `teclado:` del log.
+
+- **Calendario del reloj por hover**: con el puntero encima del widget `Clock` (el
+  clúster derecho de la config de fábrica) se abre el mes actual debajo, igual que el
+  panel de volumen, en la superficie del popup. ←/→ cambian de mes con vuelta de año,
+  ESC cierra, y no hay nada clickeable. Piezas: `menu/calendar.rs` (mes y aritmética
+  de fechas con `libc` — `mktime` normaliza el día 1 y de paso da `tm_wday`, meses con
+  la regla de bisiesto: **sin traer chrono** —, geometría del panel y tests),
+  `menu_render/calendar.rs` (título + 6 semanas, hoy con pastilla de acento) y
+  `app/calendar.rs` (hover, apertura y cambio de mes). Dos cosas que hay que respetar
+  si se toca:
+  - **El mes viaja dentro del `Control`** (`ControlKind::Calendar(CalendarMonth)`), no
+    en un campo de `DockPopupMode`: así el mes que se dibuja y el que cambian las
+    flechas son el mismo dato (mismo criterio que `hit_scale`, trampa 10). El alto es
+    fijo (siempre 6 semanas) justamente para que cambiar de mes no redimensione la
+    superficie ni su input region.
+  - **El hover necesita plazo** (`CALENDAR_HOVER_MS = 450`): sin él el panel se abre
+    con sólo cruzar el reloj de camino a otro widget. El instante se registra UNA vez
+    por entrada al widget (`hover_step`, con test): resetearlo en cada `Motion` lo deja
+    sin abrir nunca. El tick es el del autohide (`autohide_timeout`), único que corre
+    con el popup abierto, y `arm_calendar_tick` lo agenda con envío directo al canal,
+    así que también funciona con el autohide apagado.
+  - Se cierra al salir del **reloj**, no del dock: `popup_should_dismiss` cambia de
+    objetivo según `p.screen` (quedarse sobre otro widget de la barra ya no lo mantiene
+    abierto) y reusa `ptr_left_at`, el mismo reloj de salida del autohide.
+  - **El popup toma el teclado en `Exclusive`**, que es lo que hace que las flechas
+    lleguen; el precio es que mientras el calendario está abierto el foco del teclado
+    es del dock (escribir en la ventana de abajo no anda hasta mover el puntero o
+    apretar ESC). Es el costo de tener flechas en un panel que se abre por hover: si
+    molesta, la salida es `OnDemand`, que pide un click antes de las flechas.
+  - Guardo: `menu::calendar::calendar_tests` (vuelta de año, bisiestos, `tm_wday`
+    contra `date +%u`, alto fijo) y `app::calendar::calendar_hover_tests` (el plazo no
+    se resetea con cada Motion). A mano: `scripts/pointer.py --hover` (nuevo) más las
+    líneas `calendario:` del log.
+
 ## Pendientes conocidos
+
+- Calendario del reloj: no se pasa de mes con el mouse (no tiene ‹ › clickeables,
+  sólo ←/→) y no selecciona días ni navega semanas: muestra el mes y marca hoy. El
+  popup va en `Exclusive` mientras está abierto (ver la nota del teclado abajo).
 
 - Panel de volumen: el selector de salida lista **4 dispositivos** como máximo y no
   tiene scroll (`VOLUME_MAX_DEVICES`); con más sinks habría que agregarlo. Los
   streams se releen cada 2s (tick de sistema), así que una app que empieza a
   sonar aparece en el panel siguiente, no al instante.
+
+- Teclado en los menús, límites conocidos: los campos de texto (hex y nombre de
+  paleta propia) no son stops de la navegación (su resaltado sale de
+  `custom_focus`, no de `hovered`, así que un stop ahí sería invisible): hay que
+  clickearlos para escribir. El panel de ajustes tampoco scrollea: si algún día
+  un contenido no entra en la pantalla, la navegación por flechas no lo alcanza.
+  El desplegable de fuentes arranca resaltando la primera fila (no la fuente
+  actual) porque `dropdown_scroll` es 0 y un índice alto dejaría el resaltado
+  fuera de la ventana visible.
 
 - El tray ignora wifi y bluetooth por heurística de nombre (`nm-*`,
   `blueman`, `bluetooth`): si el widget Network/Bluetooth está deshabilitado, esos

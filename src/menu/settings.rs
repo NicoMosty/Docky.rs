@@ -4,6 +4,13 @@ use super::*;
 pub enum SettingId {
     DockScale,
     WidgetScale,
+    FontScale,
+    /// Letra del widget elegido en el tab "Widgets" (multiplica a `FontScale`).
+    WidgetFontScale,
+    /// Símbolo del widget elegido (hoy sólo la bocina del botón de volumen).
+    WidgetIconScale,
+    /// Reloj en 24 h. Sólo aparece cuando el widget elegido es `Clock`.
+    WidgetClockFormat,
     IconSize,
     IconGap,
     WidthPadding,
@@ -31,6 +38,10 @@ impl SettingId {
         match self {
             SettingId::DockScale => "Dock Size",
             SettingId::WidgetScale => "Widget Size",
+            SettingId::FontScale => "Font Size",
+            SettingId::WidgetFontScale => "Widget Font",
+            SettingId::WidgetIconScale => "Widget Icon",
+            SettingId::WidgetClockFormat => "24-Hour Clock",
             SettingId::IconSize => "Icon Size",
             SettingId::IconGap => "Icon Gaps",
             SettingId::WidthPadding => "Dock Width",
@@ -58,6 +69,18 @@ impl SettingId {
         match self {
             SettingId::DockScale => (0.3, 2.0, 0.01),
             SettingId::WidgetScale => (0.3, 2.0, 0.01),
+            SettingId::FontScale => (0.5, 2.0, 0.05),
+            SettingId::WidgetFontScale => (
+                crate::config::SIZE_SCALE_MIN,
+                crate::config::SIZE_SCALE_MAX,
+                0.05,
+            ),
+            SettingId::WidgetIconScale => (
+                crate::config::SIZE_SCALE_MIN,
+                crate::config::SIZE_SCALE_MAX,
+                0.1,
+            ),
+            SettingId::WidgetClockFormat => (0.0, 1.0, 1.0),
             SettingId::IconSize => (28.0, 96.0, 1.0),
             SettingId::IconGap => (0.0, 40.0, 1.0),
             SettingId::WidthPadding => (0.0, 2400.0, 1.0),
@@ -86,6 +109,7 @@ impl SettingId {
                 | SettingId::BlurXray
                 | SettingId::MediaSmoothScroll
                 | SettingId::Autohide
+                | SettingId::WidgetClockFormat
         )
     }
 
@@ -93,6 +117,23 @@ impl SettingId {
         match self {
             SettingId::DockScale => s.dock_scale,
             SettingId::WidgetScale => s.widget_scale,
+            SettingId::FontScale => s.font_scale,
+            // ----- las dos filas del editor leen del widget elegido: sin
+            // selección muestran el valor neutro -----
+            SettingId::WidgetFontScale => s
+                .selected_widget
+                .and_then(|kind| s.widget_options(kind))
+                .and_then(|o| o.font_scale)
+                .unwrap_or(1.0),
+            SettingId::WidgetIconScale => s
+                .selected_widget
+                .and_then(|kind| s.widget_options(kind))
+                .and_then(|o| o.icon_scale)
+                .unwrap_or(1.0),
+            SettingId::WidgetClockFormat => bool_f(
+                s.selected_widget
+                    .is_some_and(|kind| s.widget_clock_24h(kind)),
+            ),
             SettingId::IconSize => s.icon_size,
             SettingId::IconGap => s.icon_gap,
             SettingId::WidthPadding => s.width_padding,
@@ -122,6 +163,28 @@ impl SettingId {
         match self {
             SettingId::DockScale => s.dock_scale = clamped,
             SettingId::WidgetScale => s.widget_scale = clamped,
+            SettingId::FontScale => s.font_scale = clamped,
+            SettingId::WidgetFontScale => {
+                if let Some(kind) = s.selected_widget {
+                    let mut options = s.widget_options(kind).cloned().unwrap_or_default();
+                    options.font_scale = Some(clamped);
+                    s.set_widget_options(kind, options);
+                }
+            }
+            SettingId::WidgetIconScale => {
+                if let Some(kind) = s.selected_widget {
+                    let mut options = s.widget_options(kind).cloned().unwrap_or_default();
+                    options.icon_scale = Some(clamped);
+                    s.set_widget_options(kind, options);
+                }
+            }
+            SettingId::WidgetClockFormat => {
+                if let Some(kind) = s.selected_widget {
+                    let mut options = s.widget_options(kind).cloned().unwrap_or_default();
+                    options.clock_24h = Some(clamped >= 0.5);
+                    s.set_widget_options(kind, options);
+                }
+            }
             SettingId::IconSize => s.icon_size = clamped,
             SettingId::IconGap => s.icon_gap = clamped,
             SettingId::WidthPadding => s.width_padding = clamped,
@@ -160,7 +223,12 @@ impl SettingId {
             | SettingId::MenuCornerRadius
             | SettingId::BlurSize => format!("{}px", self.get(s).round() as i32),
             SettingId::BlurPasses => format!("{}", self.get(s).round() as i32),
-            SettingId::DockScale | SettingId::WidgetScale | SettingId::MediaWidthScale => {
+            SettingId::DockScale
+            | SettingId::WidgetScale
+            | SettingId::FontScale
+            | SettingId::WidgetFontScale
+            | SettingId::WidgetIconScale
+            | SettingId::MediaWidthScale => {
                 format!("{}%", (self.get(s) * 100.0).round() as i32)
             }
             SettingId::Transparency | SettingId::BlurVibrancy => {
@@ -172,7 +240,8 @@ impl SettingId {
             SettingId::BlurEnabled
             | SettingId::BlurXray
             | SettingId::MediaSmoothScroll
-            | SettingId::Autohide => String::new(),
+            | SettingId::Autohide
+            | SettingId::WidgetClockFormat => String::new(),
         }
     }
 
@@ -181,6 +250,10 @@ impl SettingId {
             self,
             SettingId::DockScale
                 | SettingId::WidgetScale
+                | SettingId::FontScale
+                | SettingId::WidgetFontScale
+                | SettingId::WidgetIconScale
+                | SettingId::WidgetClockFormat
                 | SettingId::IconSize
                 | SettingId::IconGap
                 | SettingId::WidthPadding
@@ -250,6 +323,23 @@ mod menu_border_tests {
         assert_eq!(SettingId::MenuBorderWidth.get(&s), 2.5);
         SettingId::MenuBorderWidth.set(&mut s, -1.0);
         assert_eq!(SettingId::MenuBorderWidth.get(&s), 0.0);
+    }
+
+    /// El tamaño de letra existe, recorta a [0.5, 2.0], sale en Appearance y
+    /// fuerza relayout (los anchos de las pastillas dependen de la letra).
+    #[test]
+    fn el_tamano_de_letra_es_ajuste_de_layout() {
+        let mut s = DockSettings::default();
+        assert_eq!(s.font_scale, 1.0);
+        assert_eq!(SettingId::FontScale.label(), "Font Size");
+        SettingId::FontScale.set(&mut s, 1.5);
+        assert_eq!(SettingId::FontScale.get(&s), 1.5);
+        SettingId::FontScale.set(&mut s, 99.0);
+        assert_eq!(SettingId::FontScale.get(&s), 2.0);
+        SettingId::FontScale.set(&mut s, 0.0);
+        assert_eq!(SettingId::FontScale.get(&s), 0.5);
+        assert!(APPEARANCE_SETTINGS.contains(&SettingId::FontScale));
+        assert!(SettingId::FontScale.affects_layout());
     }
 
     /// Defaults que preservan el look actual: mismo radio que el dock, sin borde.

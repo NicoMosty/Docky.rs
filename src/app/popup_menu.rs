@@ -30,7 +30,11 @@ impl App {
         layer.set_anchor(anchor);
         layer.set_margin(margin.0, margin.1, margin.2, margin.3);
         layer.set_size(menu::MENU_WIDTH as u32, content_height as u32);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        // ----- Exclusive y no OnDemand: con OnDemand el compositor no le da el
+        // foco de teclado, así que las flechas y Escape no llegan nunca. La
+        // superficie se lleva el teclado y lo devuelve al desmapearse (el
+        // `menu` se dropea al cerrar), así que no hay estado que soltar a mano. -----
+        layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         layer.set_exclusive_zone(-1);
         layer.commit();
 
@@ -358,6 +362,12 @@ impl App {
         qh: &QueueHandle<Self>,
         force_external: bool,
     ) {
+        // ----- el formato del reloj cambia el TEXTO, no sólo el ancho: hay que
+        // releerlo ya, o el panel muestra el tamaño nuevo con la hora vieja
+        // hasta el tick de 20 s -----
+        if id == menu::SettingId::WidgetClockFormat {
+            self.refresh_clock(qh);
+        }
         if id.affects_layout() {
             self.relayout_dock(qh);
         } else {

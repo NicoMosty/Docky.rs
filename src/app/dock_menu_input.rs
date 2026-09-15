@@ -77,6 +77,59 @@ impl App {
         }
     }
 
+    /// Y de la fila de chips dentro del panel. Antes estaba duplicado con un
+    /// `unwrap_or(MENU_PADDING)` en cada lugar que lo necesitaba.
+    fn widget_chips_y(&self) -> Option<f32> {
+        self.dock_menu_mode.as_ref().and_then(|dm| {
+            dm.controls
+                .iter()
+                .find_map(|c| matches!(c.kind, menu::ControlKind::WidgetChips).then_some(c.y))
+        })
+    }
+
+    /// ¿El puntero quedó dentro del chip `kind`? Es lo que distingue elegir un
+    /// widget para el editor (soltar encima del mismo chip) de reordenarlo
+    /// (soltarlo en otro lado).
+    fn chip_under_pointer(&self, kind: crate::config::WidgetKind, x: f32, y: f32) -> bool {
+        let Some(chips_y) = self.widget_chips_y() else {
+            return false;
+        };
+        menu::widget_chip_hit_test(
+            &self.dock.config.settings,
+            chips_y,
+            menu::DOCK_MENU_RIGHT_COL_W,
+            x,
+            y,
+        ) == Some(kind)
+    }
+
+    /// Elige `kind` para el editor del tab "Widgets". Rearma las filas y el alto
+    /// del panel porque el editor cambia con el widget (el reloj tiene una fila
+    /// más).
+    fn select_widget_for_editor(
+        &mut self,
+        kind: crate::config::WidgetKind,
+        qh: &QueueHandle<Self>,
+    ) {
+        let chips_y = self.widget_chips_y();
+        self.dock.config.settings.selected_widget = Some(kind);
+        let Some(category) = self.dock_menu_mode.as_ref().map(|dm| dm.category) else {
+            return;
+        };
+        let panel_h = menu::dock_menu_content_height(category, &self.dock.config.settings);
+        let panel_w = self.dock_menu_mode.as_ref().map(|dm| dm.panel_w);
+        if let Some(dm) = self.dock_menu_mode.as_mut() {
+            dm.controls = menu::build_category_controls(category, &self.dock.config.settings);
+            dm.panel_h = panel_h;
+            dm.hovered = None;
+        }
+        if let Some(panel_w) = panel_w {
+            self.apply_panel_size(panel_w, panel_h);
+        }
+        log::debug!("widgets: elegido {kind:?} para el editor (chips_y={chips_y:?})");
+        self.request_redraw(qh);
+    }
+
     pub(super) fn drop_widget_chip(
         &mut self,
         kind: crate::config::WidgetKind,
@@ -84,15 +137,7 @@ impl App {
         y: f32,
         qh: &QueueHandle<Self>,
     ) {
-        let chips_y = self
-            .dock_menu_mode
-            .as_ref()
-            .and_then(|dm| {
-                dm.controls
-                    .iter()
-                    .find_map(|c| matches!(c.kind, menu::ControlKind::WidgetChips).then_some(c.y))
-            })
-            .unwrap_or(menu::MENU_PADDING);
+        let chips_y = self.widget_chips_y().unwrap_or(menu::MENU_PADDING);
         let target = menu::widget_drop_target(
             &self.dock.config.settings,
             chips_y,
@@ -248,6 +293,17 @@ impl App {
         which: menu::OpenDropdown,
         qh: &QueueHandle<Self>,
     ) {
+        // el esquema lista TODAS las opciones (no tiene ventana como las
+        // fuentes), así que el resaltado de teclado arranca en el actual en vez
+        // de en la primera fila. En las fuentes no: `dropdown_scroll` es 0 y un
+        // índice alto dejaría el resaltado fuera de la ventana visible.
+        let start = match which {
+            menu::OpenDropdown::Scheme => menu::MATUGEN_SCHEMES
+                .iter()
+                .position(|(id, _)| *id == self.dock.config.settings.matugen_scheme)
+                .unwrap_or(0),
+            _ => 0,
+        };
         if let Some(dm) = self.dock_menu_mode.as_mut() {
             dm.open_dropdown = if dm.open_dropdown == which {
                 menu::OpenDropdown::None
@@ -256,7 +312,7 @@ impl App {
             };
             dm.dropdown_scroll = 0;
             dm.font_query.clear();
-            dm.dropdown_selected = 0;
+            dm.dropdown_selected = start;
         }
         self.request_redraw(qh);
     }
@@ -538,7 +594,13 @@ impl App {
                     self.on_setting_changed(id, qh, true);
                 }
                 if let Some((kind, x, y)) = dropped {
-                    self.drop_widget_chip(kind, x, y, qh);
+                    // ----- soltar dentro del MISMO chip no es mover nada: es un
+                    // click, y elige ese widget para el editor de abajo -----
+                    if self.chip_under_pointer(kind, x, y) {
+                        self.select_widget_for_editor(kind, qh);
+                    } else {
+                        self.drop_widget_chip(kind, x, y, qh);
+                    }
                 }
             }
             PointerEventKind::Axis {
@@ -575,23 +637,156 @@ impl App {
             return;
         };
         let which = dm.open_dropdown;
-        if !matches!(
-            which,
-            menu::OpenDropdown::DockFont | menu::OpenDropdown::SystemFont
-        ) {
-            if dm.custom_name_focused {
-                self.handle_custom_name_key(event, qh);
-            } else if dm.custom_focus.is_some() {
-                self.handle_custom_hex_key(event, qh);
-            } else if event.keysym == Keysym::Escape {
+        match which {
+            menu::OpenDropdown::DockFont | menu::OpenDropdown::SystemFont => {
+                self.handle_font_dropdown_key(which, event, qh);
+                return;
+            }
+            menu::OpenDropdown::Scheme => {
+                self.handle_scheme_dropdown_key(event, qh);
+                return;
+            }
+            menu::OpenDropdown::None => {}
+        }
+        if dm.custom_name_focused {
+            self.handle_custom_name_key(event, qh);
+            return;
+        }
+        if dm.custom_focus.is_some() {
+            self.handle_custom_hex_key(event, qh);
+            return;
+        }
+        self.handle_dock_menu_nav_key(event, qh);
+    }
+
+    /// Navegación por filas del panel (sin desplegable abierto): ↑↓ recorren las
+    /// pestañas y después los controles de la pestaña activa, Enter activa lo
+    /// resaltado y ←/→ ajustan el slider resaltado. El resaltado es el mismo
+    /// `hovered` que dibuja el mouse, así que no hay nada nuevo que dibujar.
+    fn handle_dock_menu_nav_key(&mut self, event: KeyEvent, qh: &QueueHandle<Self>) {
+        use menu::HitTarget;
+        let Some(dm) = self.dock_menu_mode.as_ref() else {
+            return;
+        };
+        let cur = dm.hovered;
+        let dir = match event.keysym {
+            Keysym::Escape => {
                 // ----- Escape cierra el menu de ajustes. Antes este caso salia
                 // por el return de abajo sin mirar la tecla, asi que no habia
                 // ninguna forma de cerrar el menu con el teclado -----
                 self.close_dock_menu(qh);
+                return;
             }
+            Keysym::Down => 1,
+            Keysym::Up => -1,
+            Keysym::Left | Keysym::Right => {
+                // ←/→ no mueven la fila: ajustan el slider resaltado (un paso por
+                // evento, igual que un click en +/-)
+                if let Some(HitTarget::SliderTrack(id)) = cur {
+                    let (_, _, step) = id.range();
+                    let sign = if event.keysym == Keysym::Right {
+                        1.0
+                    } else {
+                        -1.0
+                    };
+                    let v = id.get(&self.dock.config.settings) + sign * step;
+                    id.set(&mut self.dock.config.settings, v);
+                    self.on_setting_changed(id, qh, true);
+                    self.request_redraw(qh);
+                }
+                return;
+            }
+            Keysym::Return | Keysym::KP_Enter => {
+                match cur {
+                    None | Some(HitTarget::SliderTrack(_)) => {}
+                    Some(HitTarget::Tab(category)) => {
+                        self.switch_dock_menu_category(category, qh);
+                        // la pestaña nueva limpia el hover: que siga resaltada
+                        if let Some(dm) = self.dock_menu_mode.as_mut() {
+                            dm.hovered = Some(HitTarget::Tab(category));
+                        }
+                        self.request_redraw(qh);
+                    }
+                    Some(target) => self.handle_dock_menu_click(Some(target), 0.0, qh),
+                }
+                return;
+            }
+            _ => return,
+        };
+        let mut targets: Vec<HitTarget> = menu::MENU_CATEGORIES
+            .iter()
+            .map(|&c| HitTarget::Tab(c))
+            .collect();
+        targets.extend(menu::panel_targets(
+            &dm.controls,
+            &self.dock.config.settings,
+            menu::DOCK_MENU_RIGHT_COL_W,
+            &[],
+        ));
+        let Some(next) = menu::nav_step(&targets, cur, dir) else {
             return;
+        };
+        log::debug!("teclado: panel {cur:?} -> {next:?}");
+        if let Some(dm) = self.dock_menu_mode.as_mut() {
+            dm.hovered = Some(next);
         }
+        self.request_redraw(qh);
+    }
 
+    /// Desplegable de esquema (matugen): ↑↓/←→ mueven el resaltado y Enter
+    /// aplica. Escape cierra SÓLO el desplegable (un segundo Escape cierra el
+    /// panel, que es lo que espera cualquiera que use un menú).
+    fn handle_scheme_dropdown_key(&mut self, event: KeyEvent, qh: &QueueHandle<Self>) {
+        let Some(dm) = self.dock_menu_mode.as_ref() else {
+            return;
+        };
+        let last = menu::MATUGEN_SCHEMES.len().saturating_sub(1);
+        let selected = dm.dropdown_selected;
+        match event.keysym {
+            Keysym::Escape => {
+                if let Some(dm) = self.dock_menu_mode.as_mut() {
+                    dm.open_dropdown = menu::OpenDropdown::None;
+                    dm.dropdown_selected = 0;
+                }
+                self.request_redraw(qh);
+            }
+            Keysym::Up | Keysym::Left => {
+                if let Some(dm) = self.dock_menu_mode.as_mut() {
+                    dm.dropdown_selected = selected.saturating_sub(1);
+                }
+                log::debug!("teclado: esquema -> {}", selected.saturating_sub(1));
+                self.request_redraw(qh);
+            }
+            Keysym::Down | Keysym::Right => {
+                if let Some(dm) = self.dock_menu_mode.as_mut() {
+                    dm.dropdown_selected = (selected + 1).min(last);
+                }
+                log::debug!("teclado: esquema -> {}", (selected + 1).min(last));
+                self.request_redraw(qh);
+            }
+            Keysym::Return | Keysym::KP_Enter => {
+                self.choose_matugen_scheme(selected, qh);
+                if let Some(dm) = self.dock_menu_mode.as_mut() {
+                    dm.open_dropdown = menu::OpenDropdown::None;
+                    dm.dropdown_selected = 0;
+                }
+                self.request_redraw(qh);
+            }
+            _ => {}
+        }
+    }
+
+    /// Desplegable de fuentes: la ventana visible la mueve `dropdown_scroll` y el
+    /// resaltado `dropdown_selected`; escribir filtra.
+    fn handle_font_dropdown_key(
+        &mut self,
+        which: menu::OpenDropdown,
+        event: KeyEvent,
+        qh: &QueueHandle<Self>,
+    ) {
+        let Some(dm) = self.dock_menu_mode.as_ref() else {
+            return;
+        };
         match event.keysym {
             Keysym::Escape => {
                 if let Some(dm) = self.dock_menu_mode.as_mut() {
@@ -637,7 +832,7 @@ impl App {
                 self.request_redraw(qh);
                 return;
             }
-            Keysym::Return => {
+            Keysym::Return | Keysym::KP_Enter => {
                 let matches = menu::filter_font_indices(&self.available_fonts, &dm.font_query);
                 let selected = dm.dropdown_selected;
                 if let Some(&global_index) = matches.get(selected) {

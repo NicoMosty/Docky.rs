@@ -339,6 +339,9 @@ impl KeyboardHandler for App {
             self.handle_wallpaper_key(event.keysym, qh);
         } else if self.dock_menu_mode.is_some() {
             self.handle_dock_menu_key(event, qh);
+        } else if self.popup_mode.is_some() {
+            // menús del tray, menú de energía y panel de volumen
+            self.handle_popup_key(event, qh);
         } else {
             self.handle_search_key(event, qh);
         }

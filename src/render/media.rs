@@ -377,6 +377,7 @@ pub(crate) fn draw_media_widget(
     bar_len: f32,
     smooth_scroll: bool,
     width_scale: f32,
+    text_px: f32,
 ) -> bool {
     if is_vertical {
         return draw_media_widget_vertical(
@@ -393,6 +394,7 @@ pub(crate) fn draw_media_widget(
             render_scale,
             colors,
             smooth_scroll,
+            text_px,
         );
     }
 
@@ -424,7 +426,7 @@ pub(crate) fn draw_media_widget(
         ),
     }
 
-    let title_size = 8.5 * render_scale;
+    let title_size = text_px;
     let glyphs = text_cache.get(title, title_size, colors.text_color, 600);
     let title_w = glyphs.as_ref().map(|p| p.width() as f32).unwrap_or(0.0);
     let (title_offset, title_anim) = marquee_step(
@@ -458,6 +460,7 @@ pub(super) fn draw_media_widget_vertical(
     render_scale: f32,
     colors: &WidgetColors,
     smooth_scroll: bool,
+    text_px: f32,
 ) -> bool {
     let media = widgets.media.as_ref();
     let title: &str = media
@@ -467,7 +470,7 @@ pub(super) fn draw_media_widget_vertical(
 
     let (cx, icon_cy, side) = media_vertical_icon(zx, zy, zw, zh, render_scale);
 
-    let title_size = 8.5 * render_scale;
+    let title_size = text_px;
     let title_budget = (zh - side - 22.0 * render_scale).max(20.0 * render_scale);
     let glyphs = text_cache.get(title, title_size, colors.text_color, 600);
     let title_w = glyphs.as_ref().map(|p| p.width() as f32).unwrap_or(0.0);

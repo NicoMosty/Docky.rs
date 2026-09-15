@@ -36,6 +36,14 @@ pub fn volume_pct_from_x(panel_width: f32, x: f32) -> u8 {
     (t * 100.0).round() as u8
 }
 
+/// Inversa de `volume_pct_from_x`: las flechas ajustan ±5% sin puntero, así que
+/// necesitan el x de un porcentaje. Las dos viven acá para que no se despeguen.
+pub fn volume_x_from_pct(panel_width: f32, pct: u8) -> f32 {
+    let x0 = volume_track_x0();
+    let x1 = volume_track_x1(panel_width);
+    x0 + (x1 - x0) * (pct.min(100) as f32 / 100.0)
+}
+
 /// Filas + separador + dispositivos, con el alto total del panel.
 pub fn build_volume_controls(rows: &[VolumeRow], devices: &[AudioDevice]) -> (Vec<Control>, f32) {
     let mut controls = Vec::new();
@@ -130,6 +138,16 @@ mod volume_panel_tests {
         // el medio, con la tolerancia del redondeo
         let mid = (volume_track_x0() + volume_track_x1(w)) / 2.0;
         assert!((volume_pct_from_x(w, mid) as i32 - 50).abs() <= 1);
+    }
+
+    #[test]
+    fn el_x_de_un_porcentaje_da_la_vuelta_completa() {
+        let w = MENU_WIDTH;
+        for pct in [0u8, 5, 37, 50, 95, 100] {
+            assert_eq!(volume_pct_from_x(w, volume_x_from_pct(w, pct)), pct);
+        }
+        // fuera de rango no se sale de la barra
+        assert_eq!(volume_x_from_pct(w, 200), volume_x_from_pct(w, 100));
     }
 
     #[test]

@@ -219,7 +219,7 @@ fn main() -> anyhow::Result<()> {
         widgets::set_pinned_output(output);
     }
     let mut dock = Dock::new(config);
-    let initial_widgets = widgets::WidgetSnapshot::refresh();
+    let initial_widgets = widgets::WidgetSnapshot::refresh(&dock.config.settings);
     if dock.icons.is_empty() {
         let is_vertical = dock.is_vertical();
         let cross_len = dock.cross_len();
@@ -308,6 +308,7 @@ fn main() -> anyhow::Result<()> {
         applied_size: None,
         last_ptr_event: None,
         ptr_left_at: None,
+        calendar_hover_at: None,
         autohide_hide_tx,
         pointer: None,
         keyboard: None,

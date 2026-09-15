@@ -209,7 +209,6 @@ pub(crate) fn draw_widget_button_bg(
 // borde de la pastilla — es el mismo tipo de bug que el de `hit_scale`. -----
 const VOLUME_ICON_R: f32 = 3.0;
 const VOLUME_ICON_GAP: f32 = 3.0;
-const VOLUME_LABEL_PX: f32 = 8.5;
 const VOLUME_PAD: f32 = 2.0;
 
 /// Ancho del texto del botón de volumen.
@@ -228,11 +227,21 @@ fn volume_label_len(label: &str, size: f32) -> f32 {
     label.chars().count() as f32 * size * per_char
 }
 
+/// Radio del símbolo del botón de volumen, en px lógicos ya escalados. Es la
+/// ÚNICA fuente del tamaño de la bocina: la usan el reparto (que reserva
+/// `2 * radio`) y el dibujo, así que un ajuste de "Widget Icon" no puede
+/// desincronizar el contenido de su pastilla (trampa 12).
+pub(crate) fn volume_icon_r(settings: &crate::config::DockSettings, render_scale: f32) -> f32 {
+    VOLUME_ICON_R * settings.widget_icon_scale(crate::config::WidgetKind::Volume) * render_scale
+}
+
 /// Ancho que necesita el contenido del botón de volumen con esa etiqueta.
-pub(crate) fn volume_content_len(label: &str, render_scale: f32) -> f32 {
-    VOLUME_ICON_R * 2.0 * render_scale
+/// `text_px` es el de `widget_text_px` e `icon_r` el de `volume_icon_r`: el
+/// reparto y el dibujo comparten los dos.
+pub(crate) fn volume_content_len(label: &str, render_scale: f32, text_px: f32, icon_r: f32) -> f32 {
+    icon_r * 2.0
         + VOLUME_ICON_GAP * render_scale
-        + volume_label_len(label, VOLUME_LABEL_PX * render_scale)
+        + volume_label_len(label, text_px)
         + VOLUME_PAD * 2.0 * render_scale
 }
 
@@ -556,6 +565,24 @@ pub(crate) fn text_width_estimate_render(text: &str, size: f32) -> f32 {
     text.chars().count() as f32 * size * 0.64
 }
 
+/// Base única de letra de la barra, en px lógicos (antes de escalas). Todos
+/// los widgets miden y dibujan su texto con este mismo tamaño: el reloj iba a
+/// 11/12 y la batería a 9/9.5, y por eso se veía desigual. El ajuste
+/// "Font Size" multiplica esta base sin tocar iconos ni paddings.
+pub(crate) const WIDGET_TEXT_PX: f32 = 8.5;
+
+/// Tamaño de letra ya escalado para medir Y dibujar. Medida y dibujo tienen
+/// que usar este mismo valor (trampa 12): la pastilla reserva lo que el texto
+/// ocupa. El `kind` importa porque el editor del panel puede escalar un widget
+/// solo, encima del `font_scale` general.
+pub(crate) fn widget_text_px(
+    settings: &crate::config::DockSettings,
+    kind: crate::config::WidgetKind,
+    render_scale: f32,
+) -> f32 {
+    WIDGET_TEXT_PX * settings.widget_font_scale(kind) * render_scale
+}
+
 fn draw_placeholder(pixmap: &mut Pixmap, name: &str, cx: f32, cy: f32, size: f32) {
     let hash = name
         .bytes()
@@ -575,4 +602,48 @@ fn draw_placeholder(pixmap: &mut Pixmap, name: &str, cx: f32, cy: f32, size: f32
         Transform::identity(),
         None,
     );
+}
+
+#[cfg(test)]
+mod volume_pill_tests {
+    use super::*;
+    use crate::config::{DockSettings, WidgetKind, WidgetOptions};
+
+    fn con_bocina(icon_scale: f32) -> DockSettings {
+        let mut s = DockSettings::default();
+        s.set_widget_options(
+            WidgetKind::Volume,
+            WidgetOptions {
+                icon_scale: Some(icon_scale),
+                ..Default::default()
+            },
+        );
+        s
+    }
+
+    /// El default no cambia nada: escala 1.0 es el radio de fábrica.
+    #[test]
+    fn la_escala_neutra_es_el_radio_de_siempre() {
+        assert_eq!(volume_icon_r(&con_bocina(1.0), 1.0), VOLUME_ICON_R);
+    }
+
+    /// La bocina y el ancho que le reserva la pastilla salen de la MISMA función,
+    /// así que agrandar el símbolo agranda la pastilla en la misma medida. Si
+    /// alguien escala sólo el dibujo, el número se sale de la pastilla (es el
+    /// mismo tipo de bug que el de `hit_scale`, trampa 12).
+    #[test]
+    fn la_bocina_y_su_lugar_crecen_juntos() {
+        let chico = volume_icon_r(&con_bocina(1.0), 1.0);
+        let grande = volume_icon_r(&con_bocina(1.6), 1.0);
+        assert!(
+            (grande - chico * 1.6).abs() < 0.001,
+            "el radio no siguió la escala: {grande} contra {chico}"
+        );
+        let w_chico = volume_content_len("100", 1.0, 8.5, chico);
+        let w_grande = volume_content_len("100", 1.0, 8.5, grande);
+        assert!(
+            (w_grande - w_chico - 2.0 * (grande - chico)).abs() < 0.001,
+            "la pastilla no reservó el doble de radio de más: {w_grande} contra {w_chico}"
+        );
+    }
 }

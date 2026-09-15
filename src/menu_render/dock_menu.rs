@@ -167,9 +167,13 @@ pub fn draw_dock_menu(
                 Pixmap::new(right_pixmap.width(), right_pixmap.height()).unwrap();
             let overlay_y = c.y + c.height + 4.0;
             match args.open_dropdown {
-                OpenDropdown::Scheme => {
-                    draw_scheme_overlay(&mut overlay_pixmap, text_cache, overlay_y, &right_args)
-                }
+                OpenDropdown::Scheme => draw_scheme_overlay(
+                    &mut overlay_pixmap,
+                    text_cache,
+                    overlay_y,
+                    &right_args,
+                    args.dropdown_selected,
+                ),
                 OpenDropdown::DockFont => draw_font_overlay(
                     &mut overlay_pixmap,
                     text_cache,

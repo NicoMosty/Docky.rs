@@ -11,7 +11,7 @@ pub(super) const LAYOUT_SETTINGS: [SettingId; 8] = [
     SettingId::AutohideDelay,
 ];
 
-pub(super) const APPEARANCE_SETTINGS: [SettingId; 11] = [
+pub(super) const APPEARANCE_SETTINGS: [SettingId; 12] = [
     SettingId::BorderWidth,
     SettingId::MenuCornerRadius,
     SettingId::MenuBorderWidth,
@@ -23,6 +23,7 @@ pub(super) const APPEARANCE_SETTINGS: [SettingId; 11] = [
     SettingId::BlurBrightness,
     SettingId::BlurContrast,
     SettingId::BlurXray,
+    SettingId::FontScale,
 ];
 
 fn row_height(id: SettingId) -> f32 {
@@ -156,6 +157,9 @@ pub fn build_controls(screen: MenuScreen, list_count: usize, scroll: usize) -> (
         // ----- el panel de volumen arma sus filas en `build_volume_controls`:
         // dependen de lo que esté sonando, no de un contador de items -----
         MenuScreen::VolumePanel => {}
+        // ----- el calendario arma su único control en `calendar_controls`: lleva
+        // el mes mostrado -----
+        MenuScreen::Calendar => {}
     }
 
     y += MENU_PADDING;

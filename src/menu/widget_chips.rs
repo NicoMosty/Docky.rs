@@ -216,6 +216,29 @@ mod drag_tests {
         s
     }
 
+    /// El editor del tab "Widgets" le escribe al chip que se elige, y tiene que
+    /// poder elegir CUALQUIERA: los que ya están en la barra y los que están en
+    /// "Available" (los que pueden aparecer). El hit test es el que decide a
+    /// quién, así que se cubren los dos grupos.
+    #[test]
+    fn el_hit_test_cubre_los_de_la_barra_y_los_disponibles() {
+        use WidgetKind::{Clock, Volume};
+        let s = settings_with(&[(Clock, WidgetSlot::Right), (Volume, WidgetSlot::Left)]);
+        let layout = widget_chip_layout(&s, 400.0, 0.0);
+        for r in &layout.rects {
+            let hit = widget_chip_hit_test(&s, 0.0, 400.0, r.x + r.w / 2.0, r.y + r.h / 2.0);
+            assert_eq!(hit, Some(r.kind), "{:?} quedó sin poder elegirse", r.kind);
+        }
+        assert!(
+            layout.rects.iter().any(|r| r.assigned),
+            "el caso no cubre ningún widget de la barra"
+        );
+        assert!(
+            layout.rects.iter().any(|r| !r.assigned),
+            "el caso no cubre ningún widget disponible"
+        );
+    }
+
     /// El caso reportado: el último de una columna no se podía subir al primero.
     #[test]
     fn subir_el_ultimo_al_principio() {

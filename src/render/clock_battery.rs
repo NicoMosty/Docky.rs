@@ -78,10 +78,11 @@ pub(crate) fn draw_clock_widget(
     render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    text_px: f32,
 ) {
     if is_vertical {
-        let time_size = 11.0 * render_scale;
-        let date_size = time_size;
+        let time_size = text_px;
+        let date_size = text_px;
         let clock_gap = 3.0 * render_scale;
         let time_px = text_cache.get(&widgets.time, time_size, colors.text_color, 700);
         let date_px = text_cache.get_with_family(
@@ -121,8 +122,8 @@ pub(crate) fn draw_clock_widget(
             DATE_FONT_FAMILY,
         );
     } else {
-        let time_size = 12.0 * render_scale;
-        let date_size = time_size;
+        let time_size = text_px;
+        let date_size = text_px;
         let clock_gap = 3.5 * render_scale;
         let time_px = text_cache.get(&widgets.time, time_size, colors.text_color, 700);
         let date_px = text_cache.get_with_family(
@@ -176,6 +177,7 @@ pub(crate) fn draw_battery_widget(
     render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    text_px: f32,
 ) {
     let Some((pct, state)) = widgets.battery else {
         return;
@@ -186,7 +188,7 @@ pub(crate) fn draw_battery_widget(
     if is_vertical {
         let bw = 18.0 * render_scale;
         let bh = 9.0 * render_scale;
-        let label_len = text_width_estimate_render(&label, 9.5 * render_scale);
+        let label_len = text_width_estimate_render(&label, text_px);
         let gap = 5.0 * render_scale;
         let total = bh + gap + label_len;
         let by = zy + (zh - total) / 2.0;
@@ -199,7 +201,7 @@ pub(crate) fn draw_battery_widget(
             &label,
             zx + zw / 2.0,
             ty,
-            9.5 * render_scale,
+            text_px,
             &tone_hex,
             600,
         );
@@ -210,7 +212,9 @@ pub(crate) fn draw_battery_widget(
         let bx = zx + (zw - bw) / 2.0;
         let by = zy + zh / 2.0 - bh / 2.0;
         draw_battery_icon(pixmap, render_scale, bx, by, bw, bh, pct, tone, fill_alpha);
-        let fs = 9.0 * render_scale;
+        // ----- el icono mide 30px fijos: si la letra supera lo que entra, se
+        // recorta al tamaño que entra en vez de pisar el borde -----
+        let fs = text_px.min(9.0 * render_scale);
         if let Some(txt) = text_cache.get(&label, fs, &tone_hex, 700) {
             let tx = bx + (bw - txt.width() as f32) / 2.0;
             let ty = by + (bh - txt.height() as f32) / 2.0;

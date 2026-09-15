@@ -78,10 +78,11 @@ pub(super) fn draw_labeled_widget(
     render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    text_px: f32,
 ) {
     let icon_side = 12.0 * render_scale;
     if is_vertical {
-        let label_len = text_width_estimate_render(label, 8.5 * render_scale);
+        let label_len = text_width_estimate_render(label, text_px);
         let gap = 5.0 * render_scale;
         let total = icon_side + gap + label_len;
         let block_start = zy + (zh - total) / 2.0;
@@ -100,18 +101,18 @@ pub(super) fn draw_labeled_widget(
             label,
             cx,
             ty,
-            8.5 * render_scale,
+            text_px,
             colors.text_color,
             600,
         );
     } else {
-        let label_w = text_width_estimate_render(label, 8.5 * render_scale);
+        let label_w = text_width_estimate_render(label, text_px);
         let gap = 6.0 * render_scale;
         let content_w = icon_side + gap + label_w;
         let bx = zx + (zw - content_w) / 2.0;
         let cy = zy + zh / 2.0;
         draw_icon(pixmap, render_scale, bx + icon_side / 2.0, cy, colors);
-        if let Some(txt) = text_cache.get(label, 8.5 * render_scale, colors.text_color, 600) {
+        if let Some(txt) = text_cache.get(label, text_px, colors.text_color, 600) {
             let tx = bx + icon_side + gap;
             let ty = cy - txt.height() as f32 / 2.0;
             pixmap.draw_pixmap(
@@ -138,6 +139,7 @@ pub(crate) fn draw_cpu_widget(
     render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    text_px: f32,
 ) {
     draw_percentage_widget(
         pixmap,
@@ -151,9 +153,11 @@ pub(crate) fn draw_cpu_widget(
         render_scale,
         colors,
         is_vertical,
+        text_px,
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_percentage_widget(
     pixmap: &mut Pixmap,
     text_cache: &mut TextCache,
@@ -166,6 +170,7 @@ pub(super) fn draw_percentage_widget(
     render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    text_px: f32,
 ) {
     let Some(pct) = pct else { return };
     draw_labeled_widget(
@@ -180,6 +185,7 @@ pub(super) fn draw_percentage_widget(
         render_scale,
         colors,
         is_vertical,
+        text_px,
     );
 }
 
@@ -195,6 +201,7 @@ pub(crate) fn draw_ram_widget(
     render_scale: f32,
     colors: &WidgetColors,
     is_vertical: bool,
+    text_px: f32,
 ) {
     let label = match widgets.ram_gb {
         Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),
@@ -215,5 +222,6 @@ pub(crate) fn draw_ram_widget(
         render_scale,
         colors,
         is_vertical,
+        text_px,
     );
 }

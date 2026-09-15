@@ -19,7 +19,7 @@ use crate::render::{
     draw_network_widget, draw_power_widget, draw_ram_widget, draw_text_widget, draw_tray_widget,
     draw_volume_widget, draw_widget_button_bg, draw_workspaces_widget, media_ideal_len,
     percentage_widget_len, text_widget_len, text_width_estimate_render, tray_geometry,
-    volume_content_len, workspaces_geometry,
+    volume_content_len, volume_icon_r, widget_text_px, workspaces_geometry,
 };
 use crate::widgets::WidgetSnapshot;
 use dockyrs_canvas::{IconCache, TextCache};
@@ -146,6 +146,10 @@ pub(crate) struct WidgetSpec {
     /// Que hace con un click. `None` = el widget no reacciona (hoy Clock,
     /// Battery y Cpu).
     pub(crate) click: Option<fn(&ClickCtx) -> Option<WidgetAction>>,
+    /// `true` si el widget dibuja texto propio. Lo mira el editor del panel para
+    /// no ofrecer la fila de letra donde no hay nada que escalar (Tray,
+    /// Workspaces, Bluetooth y Power son sólo símbolo).
+    pub(crate) text: bool,
 }
 
 /// Los 12 widgets fijos del enum más la entrada genérica para `Custom`. Esa
@@ -162,6 +166,8 @@ pub(crate) struct WidgetSpec {
 pub(crate) const WIDGETS: &[WidgetSpec] = &[
     WidgetSpec {
         kind: WidgetKind::Clock,
+
+        text: true,
         label: "Clock",
         natural_len: len_clock,
         draw: draw_clock,
@@ -169,6 +175,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::Battery,
+
+        text: true,
         label: "Battery",
         natural_len: len_battery,
         draw: draw_battery,
@@ -176,6 +184,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::Media,
+
+        text: true,
         label: "Media Player",
         natural_len: len_media,
         draw: draw_media,
@@ -183,6 +193,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::PowerMenu,
+
+        text: false,
         label: "Power Menu",
         natural_len: len_power,
         draw: draw_power,
@@ -190,6 +202,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::Bluetooth,
+
+        text: false,
         label: "Bluetooth",
         natural_len: len_bluetooth,
         draw: draw_bluetooth,
@@ -197,6 +211,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::Tray,
+
+        text: false,
         label: "System Tray",
         natural_len: len_tray,
         draw: draw_tray,
@@ -204,6 +220,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::Workspaces,
+
+        text: false,
         label: "Workspaces",
         natural_len: len_workspaces,
         draw: draw_workspaces,
@@ -211,6 +229,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::Cpu,
+
+        text: true,
         label: "CPU",
         natural_len: len_cpu,
         draw: draw_cpu,
@@ -218,6 +238,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::Ram,
+
+        text: true,
         label: "RAM",
         natural_len: len_ram,
         draw: draw_ram,
@@ -225,6 +247,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::Network,
+
+        text: true,
         label: "Network",
         natural_len: len_network,
         draw: draw_network,
@@ -232,6 +256,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::Volume,
+
+        text: true,
         label: "Volume",
         natural_len: len_volume,
         draw: draw_volume,
@@ -239,6 +265,8 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
     },
     WidgetSpec {
         kind: WidgetKind::KbdLayout,
+
+        text: true,
         label: "Keyboard Layout",
         natural_len: len_kblayout,
         draw: draw_kblayout,
@@ -250,6 +278,7 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
         natural_len: len_custom,
         draw: draw_custom,
         click: None,
+        text: true,
     },
 ];
 
@@ -284,6 +313,14 @@ pub(crate) fn widget_kind_order() -> Vec<WidgetKind> {
 /// Nombre que muestra Ajustes. Sale de la tabla, no de un `match` aparte.
 pub(crate) fn widget_label(kind: WidgetKind) -> &'static str {
     spec_for(kind).map(|s| s.label).unwrap_or("?")
+}
+
+/// `true` si el widget dibuja texto propio. Lo mira el editor del panel: la fila
+/// de letra no tiene sentido en un widget que es sólo símbolo (Tray, Workspaces,
+/// Bluetooth, Power), y ofrecerla igual hace que el usuario mueva un slider que
+/// no cambia nada.
+pub(crate) fn widget_has_text(kind: WidgetKind) -> bool {
+    spec_for(kind).is_some_and(|s| s.text)
 }
 
 // ----- clicks -----
@@ -370,13 +407,14 @@ fn click_kblayout(cx: &ClickCtx) -> Option<WidgetAction> {
 
 fn len_clock(cx: &Ctx) -> f32 {
     let s = cx.render_scale;
+    let tp = widget_text_px(cx.settings, cx.kind, s);
     if cx.is_vertical {
-        let time_w = text_width_estimate_render(&cx.widgets.time, 11.0 * s);
-        let date_w = text_width_estimate_render(&cx.widgets.date, 11.0 * s);
+        let time_w = text_width_estimate_render(&cx.widgets.time, tp);
+        let date_w = text_width_estimate_render(&cx.widgets.date, tp);
         time_w.max(date_w)
     } else {
-        let time_w = text_width_estimate_render(&cx.widgets.time, 12.0 * s);
-        let date_w = text_width_estimate_render(&cx.widgets.date, 12.0 * s);
+        let time_w = text_width_estimate_render(&cx.widgets.time, tp);
+        let date_w = text_width_estimate_render(&cx.widgets.date, tp);
         time_w + 3.5 * s + date_w
     }
 }
@@ -393,6 +431,7 @@ fn draw_clock(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         cx.render_scale,
         canvas.colors,
         cx.is_vertical,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
     );
     false
 }
@@ -428,6 +467,7 @@ fn draw_media(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         canvas.bar_len,
         cx.settings.media_smooth_scroll,
         cx.settings.media_width_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
     )
 }
 
@@ -495,7 +535,12 @@ fn len_volume(cx: &Ctx) -> f32 {
         Some((pct, false)) => pct.to_string(),
         None => return 0.0,
     };
-    volume_content_len(&label, cx.render_scale)
+    volume_content_len(
+        &label,
+        cx.render_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    )
 }
 
 fn draw_volume(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
@@ -511,6 +556,8 @@ fn draw_volume(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         canvas.colors,
         cx.is_vertical,
         canvas.is_hovered(r),
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
     );
     false
 }
@@ -518,7 +565,8 @@ fn draw_volume(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
 // ----- disposicion de teclado -----
 
 fn len_kblayout(cx: &Ctx) -> f32 {
-    let w = text_width_estimate_render(&cx.widgets.kblayout.short, 8.5 * cx.render_scale);
+    let tp = widget_text_px(cx.settings, cx.kind, cx.render_scale);
+    let w = text_width_estimate_render(&cx.widgets.kblayout.short, tp);
     w + 10.0 * cx.render_scale
 }
 
@@ -534,6 +582,7 @@ fn draw_kblayout(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         cx.render_scale,
         canvas.colors,
         cx.is_vertical,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
     );
     false
 }
@@ -544,7 +593,12 @@ fn len_custom(cx: &Ctx) -> f32 {
     let Some(text) = crate::widgets::custom_text_for(cx.settings, cx.widgets, cx.kind) else {
         return 0.0;
     };
-    text_widget_len(text, cx.is_vertical, cx.render_scale)
+    text_widget_len(
+        text,
+        cx.is_vertical,
+        cx.render_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+    )
 }
 
 fn draw_custom(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
@@ -563,6 +617,7 @@ fn draw_custom(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         canvas.colors,
         cx.is_vertical,
         canvas.is_hovered(r),
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
     );
     false
 }
@@ -575,7 +630,8 @@ fn len_battery(cx: &Ctx) -> f32 {
     };
     let label = format!("{pct}%");
     if cx.is_vertical {
-        let label_len = text_width_estimate_render(&label, 9.5 * cx.render_scale);
+        let tp = widget_text_px(cx.settings, cx.kind, cx.render_scale);
+        let label_len = text_width_estimate_render(&label, tp);
         9.0 * cx.render_scale + 5.0 * cx.render_scale + label_len
     } else {
         // ----- el porcentaje va dentro del icono: solo el ancho de este -----
@@ -595,6 +651,7 @@ fn draw_battery(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         cx.render_scale,
         canvas.colors,
         cx.is_vertical,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
     );
     false
 }
@@ -679,7 +736,12 @@ fn draw_workspaces(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
 // ----- cpu y ram -----
 
 fn len_cpu(cx: &Ctx) -> f32 {
-    percentage_widget_len(cx.widgets.cpu, cx.is_vertical, cx.render_scale)
+    percentage_widget_len(
+        cx.widgets.cpu,
+        cx.is_vertical,
+        cx.render_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+    )
 }
 
 fn draw_cpu(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
@@ -694,6 +756,7 @@ fn draw_cpu(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         cx.render_scale,
         canvas.colors,
         cx.is_vertical,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
     );
     false
 }
@@ -706,7 +769,12 @@ fn len_ram(cx: &Ctx) -> f32 {
             None => return 0.0,
         },
     };
-    text_widget_len(&label, cx.is_vertical, cx.render_scale)
+    text_widget_len(
+        &label,
+        cx.is_vertical,
+        cx.render_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+    )
 }
 
 fn draw_ram(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
@@ -721,6 +789,7 @@ fn draw_ram(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         cx.render_scale,
         canvas.colors,
         cx.is_vertical,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
     );
     false
 }
