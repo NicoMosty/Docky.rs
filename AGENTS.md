@@ -444,9 +444,14 @@ reordenamiento de widgets) y lo posterior:
   `render::workspaces::workspace_hit_tests` — con `widget_scale = 1.2166` y 8
   workspaces el extremo se corre >10 px, el click en el centro dibujado cae en el
   slot correcto y la tolerancia queda tangente al paso, sin robarle el click al
-  vecino. `ws_flash_dot_hit` reusa `slot_at` con `1.0` a propósito: el panel del
-  HUD se dimensiona con `workspaces_geometry(.., 1.0)` y `draw_ws_flash` mete el
-  `output_scale` en las dos puntas, así que se cancela.
+  vecino. `ws_flash_dot_hit` saca la escala de las settings (como
+  `workspace_slot_at` y no del call site) y `ws_flash_panel_len` mide el panel con
+  la MISMA escala: el contenido del HUD se dibuja con `render_scale * widget_scale`
+  en `draw_ws_flash`, así que el indicador del HUD coincide con el del dock y el
+  click cae en el punto dibujado. Antes el panel se medía con `1.0` y el punto
+  cambiaba de tamaño al ocultarse el dock (`widget_scale` 1,5 en el remoto: 42x19 px
+  en el dock contra 28x12 en el HUD). Test:
+  `render::workspaces::workspace_hit_tests::el_panel_del_hud_crece_con_widget_scale_y_el_click_lo_sigue`.
   Verificado contra pixeles: el centro que el app cree que
   tiene cada widget coincide con el icono dibujado (wifi local 152 vs 151.5,
   tray 465 vs 464.5) y clickear el centro visual de cada uno da el widget

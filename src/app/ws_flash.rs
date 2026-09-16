@@ -1,8 +1,5 @@
 use super::*;
 
-/// Relleno horizontal/vertical del panel alrededor del indicador.
-const WS_FLASH_PAD: f32 = 26.0;
-
 impl App {
     /// Muestra el HUD de workspaces: mismo panel y misma posición que el dock,
     /// pero con un único contenido (el indicador de workspaces).
@@ -33,7 +30,11 @@ impl App {
         if self.dock_visible || !self.widget_placed(crate::config::WidgetKind::Workspaces) {
             return;
         }
-        let len = render::workspaces_geometry(&self.widgets.workspaces, 1.0) + WS_FLASH_PAD;
+        // ----- el panel se mide con el mismo factor con el que se dibuja el
+        // indicador (lo saca `ws_flash_panel_len` de las settings): con `1.0` el HUD
+        // quedaba más chico que el widget del dock y el punto cambiaba de tamaño al
+        // ocultarse el dock. -----
+        let len = render::ws_flash_panel_len(&self.widgets.workspaces, &self.dock.config.settings);
         let thick = self.dock.thickness() as f32;
         let (panel_w, panel_h) = if self.dock.is_vertical() {
             (thick, len)
@@ -116,6 +117,10 @@ impl App {
             self.dock.is_vertical(),
             panel_w,
             panel_h,
+            // ----- la escala la saca el propio hit test de las settings (misma que
+            // el dibujo: el puntero llega en lógicas y el `output_scale` se cancela
+            // entre el panel y el buffer). -----
+            &self.dock.config.settings,
             x,
             y,
         ) else {

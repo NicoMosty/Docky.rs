@@ -462,7 +462,9 @@ pub(super) fn widget_palette(s: &crate::config::DockSettings) -> WidgetPalette {
 }
 
 /// HUD al cambiar de workspace: mismo panel y misma posición que el dock, pero
-/// con un único contenido: el indicador de workspaces.
+/// con un único contenido: el indicador de workspaces. El contenido se dibuja con
+/// el mismo factor que el widget del dock (`render_scale * widget_scale`), así que
+/// los puntos no cambian de tamaño cuando el dock se oculta y aparece el HUD.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_ws_flash(
     pixmap: &mut Pixmap,
@@ -510,7 +512,10 @@ pub fn draw_ws_flash(
         0.0,
         w,
         h,
-        render_scale,
+        // ----- mismo factor que el dock (`draw_widgets` también multiplica por
+        // `widget_scale`): el fondo usa `render_scale` pelado porque `panel_w` ya
+        // viene medido con `widget_scale` (`ws_flash_panel_len`). -----
+        render_scale * s.widget_scale,
         &colors,
         dock.is_vertical(),
     )

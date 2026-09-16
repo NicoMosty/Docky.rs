@@ -31,6 +31,23 @@ pub fn workspaces_geometry(workspaces: &[crate::widgets::WorkspaceInfo], render_
     ((n - 1.0) * WS_SLOT + WS_ACTIVE) * render_scale
 }
 
+/// Relleno del panel del HUD alrededor del indicador.
+const WS_FLASH_PAD: f32 = 26.0;
+
+/// Largo del panel del HUD de workspaces. La escala sale de las settings
+/// (`widget_scale`, vía `hit_scale`) y NO del call site: el contenido del HUD se
+/// dibuja con el MISMO factor que el widget del dock (el `output_scale` se cancela,
+/// está en el panel y en el buffer), así que el panel tiene que medirse con él. Una
+/// sola definición del panel: la usan el tamaño de la superficie y el hit test, que
+/// si no se despegan dejan puntos inclickeables (trampa 1). El relleno no se escala:
+/// es padding, no parte del indicador.
+pub fn ws_flash_panel_len(
+    workspaces: &[crate::widgets::WorkspaceInfo],
+    settings: &crate::config::DockSettings,
+) -> f32 {
+    workspaces_geometry(workspaces, hit_scale(settings)) + WS_FLASH_PAD
+}
+
 fn first_center(count: usize, bar_len: f32, bar_start: f32, render_scale: f32) -> f32 {
     let slot = WS_SLOT * render_scale;
     let content = (count.max(1) as f32 - 1.0) * slot + WS_ACTIVE * render_scale;
@@ -187,12 +204,17 @@ pub fn workspace_dot_hit(
 /// Mismo cálculo que `workspace_dot_hit`, pero sobre el panel del HUD: ahí los
 /// puntos van centrados en el panel entero (zx=0, zw=panel_w), no en la
 /// posición que ocupa el widget dentro del layout del dock. Coordenadas
-/// lógicas, igual que el dibujo (el factor de escala se cancela).
+/// lógicas, igual que el dibujo.
+///
+/// `settings` es de donde sale la escala, igual que en `workspace_slot_at`: si el
+/// call site pudiera pasar un `1.0`, al crecer el panel con `widget_scale` el click
+/// caería corrido y no habría nada que lo avise.
 pub fn ws_flash_dot_hit(
     workspaces: &[crate::widgets::WorkspaceInfo],
     is_vertical: bool,
     panel_w: f32,
     panel_h: f32,
+    settings: &crate::config::DockSettings,
     x: f64,
     y: f64,
 ) -> Option<i32> {
@@ -205,10 +227,7 @@ pub fn ws_flash_dot_hit(
         (panel_w, 0.0, x as f32)
     };
     let count = slot_count(workspaces);
-    // ----- scale 1.0: el panel del HUD se dimensiona con `workspaces_geometry(.., 1.0)`
-    // y `draw_ws_flash` mete el `output_scale` en las dos puntas, así que se
-    // cancela. Acá las coords del puntero son lógicas, igual que el dibujo. -----
-    let i = slot_at(count, bar_len, bar_start, main, 1.0)?;
+    let i = slot_at(count, bar_len, bar_start, main, hit_scale(settings))?;
     workspaces.get(i).map(|ws| ws.id)
 }
 
@@ -289,6 +308,45 @@ mod workspace_hit_tests {
                 hits,
                 vec![i],
                 "el slot {i} no debe robarle el click al vecino"
+            );
+        }
+    }
+
+    /// El HUD se dibuja con el MISMO factor que el widget del dock, así que su panel
+    /// crece con `widget_scale` y el hit test tiene que usar esa escala. Con el `1.0`
+    /// de antes el panel quedaba chico y el punto cambiaba de tamaño al ocultarse el
+    /// dock (el pedido era justamente que coincidan).
+    #[test]
+    fn el_panel_del_hud_crece_con_widget_scale_y_el_click_lo_sigue() {
+        let count = 6;
+        let con_escala = crate::config::DockSettings {
+            widget_scale: SCALE,
+            ..Default::default()
+        };
+        let sin_escala = crate::config::DockSettings::default();
+        let ws: Vec<_> = (0..count)
+            .map(|i| ws(i as i32 + 1, i == count - 1, false))
+            .collect();
+        let chico = ws_flash_panel_len(&ws, &sin_escala);
+        let grande = ws_flash_panel_len(&ws, &con_escala);
+        assert!(grande > chico, "el panel tiene que crecer con widget_scale");
+        // ----- y crecer exactamente lo que crece el indicador: el relleno no se escala
+        assert_eq!(
+            grande - chico,
+            workspaces_geometry(&ws, SCALE) - workspaces_geometry(&ws, 1.0)
+        );
+        for (s, scale) in [(&sin_escala, 1.0), (&con_escala, SCALE)] {
+            let panel = ws_flash_panel_len(&ws, s);
+            assert!(
+                workspaces_geometry(&ws, scale) <= panel,
+                "el contenido entra"
+            );
+            // ----- el centro DIBUJADO del último slot tiene que dar el último
+            let x = first_center(count, panel, 0.0, scale) + (count - 1) as f32 * WS_SLOT * scale;
+            assert_eq!(
+                ws_flash_dot_hit(&ws, false, panel, 26.0, s, x as f64, 13.0),
+                Some(count as i32),
+                "click en el centro dibujado ({x:.1}) con widget_scale {scale}"
             );
         }
     }
