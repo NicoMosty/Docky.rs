@@ -32,31 +32,43 @@ impl App {
         // con ella, en el eje que le toca a cada orientación -----
         let band = menu::overlay_tabs_h(is_vertical);
         let (panel_w, panel_h) = if is_vertical {
+            // ----- en el panel vertical el "ancho" es el cross: queda el de
+            // siempre (una columna angosta junto al dock) -----
             (cross, along + band)
         } else {
-            (along, cross + band)
+            // ----- mismo ancho que el launcher y el portapapeles -----
+            (menu::OVERLAY_PANEL_W, cross + band)
         };
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
-        let s = &self.dock.config.settings;
-        let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-        self.layer.set_anchor(anchor);
-        self.layer
-            .set_margin(margin.0, margin.1, margin.2, margin.3);
-        self.layer.set_size(panel_w as u32, panel_h as u32);
+        // ----- el panel va DEBAJO del dock, como el panel de ajustes -----
+        self.apply_panel_size(panel_w, panel_h);
 
         let (tw_logical, th_logical) = menu::wallpaper_thumb_size(panel_w, panel_h, is_vertical);
         let scale = self.output_scale.max(1) as f32;
         let thumb_w = (tw_logical * scale).round().max(1.0) as u32;
         let thumb_h = (th_logical * scale).round().max(1.0) as u32;
-        let thumb_radius = 11.0 * scale;
+        // ----- el radio va horneado en el pixmap y lo re-dibuja el anillo del
+        // hover, así que sale de la misma constante (si no, la esquina de la
+        // imagen y el anillo no coinciden) -----
+        let thumb_radius = menu::OVERLAY_RADIUS * scale;
 
         let (thumb_request_tx, request_rx) =
             std::sync::mpsc::channel::<(std::path::PathBuf, u32, u32)>();
         let (result_tx, thumb_result_rx) = std::sync::mpsc::channel();
+        // ----- el caché en disco vive en `~/.cache/dockyrs/thumbs`: decodificar el
+        // original (un 4K son ~85 ms y ~33 MB de pico) se paga una vez por imagen y
+        // tamaño, no en cada visita al selector. -----
+        let cache_dir = crate::usage::cache_dir().map(|d| d.join("thumbs"));
         std::thread::spawn(move || {
             while let Ok((path, w, h)) = request_rx.recv() {
-                let pixmap = dockyrs_canvas::load_thumbnail(&path, w, h, thumb_radius);
+                let pixmap = dockyrs_canvas::load_thumbnail_cached(
+                    &path,
+                    w,
+                    h,
+                    thumb_radius,
+                    cache_dir.as_deref(),
+                );
                 if result_tx.send((path, w, h, pixmap)).is_err() {
                     return;
                 }
@@ -68,15 +80,17 @@ impl App {
             hovered: None,
             scroll_x: 0.0,
             scroll_target: 0.0,
-            anim: 0.0,
+            anim: self.initial_panel_anim(),
             target_anim: 1.0,
             closing: false,
             panel_w,
             panel_h,
             is_vertical,
+            slide_dir: 0.0,
             thumb_w,
             thumb_h,
             thumb_requested: std::collections::HashSet::new(),
+            thumbs_pending: 0,
             thumb_request_tx,
             thumb_result_rx,
         });
@@ -112,9 +126,13 @@ impl App {
                 continue;
             }
             wp.thumb_requested.insert(entry.path.clone());
-            let _ = wp
+            if wp
                 .thumb_request_tx
-                .send((entry.path.clone(), wp.thumb_w, wp.thumb_h));
+                .send((entry.path.clone(), wp.thumb_w, wp.thumb_h))
+                .is_ok()
+            {
+                wp.thumbs_pending += 1;
+            }
         }
     }
 
@@ -180,11 +198,7 @@ impl App {
         self.wallpaper_mode = None;
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::None);
-        let (w, h) = self.dock.base_size();
-        self.layer.set_size(w, h);
-        // ----- anotarlo: `sync_autohide_surfaces` nunca restaura el tamaño -----
-        self.applied_size = Some((w, h));
-        self.thumbnail_cache.clear();
+        self.restore_dock_size();
         self.draw(qh);
         trim_heap();
     }
@@ -252,13 +266,23 @@ impl App {
     }
     pub(super) fn draw_wallpaper_mode(&mut self, qh: &QueueHandle<Self>) {
         let scale = self.output_scale.max(1) as f32;
+        let mut received = 0usize;
         if let Some(wp) = self.wallpaper_mode.as_ref() {
             while let Ok((path, w, h, pixmap)) = wp.thumb_result_rx.try_recv() {
                 self.thumbnail_cache.insert(&path, w, h, pixmap);
+                received += 1;
             }
+        }
+        if let Some(wp) = self.wallpaper_mode.as_mut() {
+            wp.thumbs_pending = wp.thumbs_pending.saturating_sub(received);
         }
         self.request_visible_thumbnails();
         let transparency = self.dock.config.settings.transparency;
+        // ----- el reparto (dock arriba, panel abajo) se calcula ANTES de tomar
+        // prestado el modo: `overlay_layout` necesita `&self` entero -----
+        let Some(layout) = self.overlay_layout() else {
+            return;
+        };
         let Some(wp) = self.wallpaper_mode.as_mut() else {
             return;
         };
@@ -298,55 +322,22 @@ impl App {
             overlay_tabs: Some(OverlayMode::Wallpaper.tab_index()),
             volume_rows: &[],
             volume_devices: &[],
+            slide_offset: menu::overlay_slide_offset(wp.slide_dir, wp.anim),
+            body_opacity: anim_opacity(transparency, eased),
         };
         let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-        if eased >= 0.999 {
-            menu_render::draw_content(
-                &mut pixmap,
-                &mut self.icon_cache,
-                &mut self.text_cache,
-                &self.thumbnail_cache,
-                &args,
-            );
-        } else {
-            let mut content = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-            menu_render::draw_content(
-                &mut content,
-                &mut self.icon_cache,
-                &mut self.text_cache,
-                &self.thumbnail_cache,
-                &args,
-            );
-            let paint = tiny_skia::PixmapPaint {
-                opacity: anim_opacity(transparency, eased),
-                ..Default::default()
-            };
-            pixmap.draw_pixmap(
-                0,
-                0,
-                content.as_ref(),
-                &paint,
-                tiny_skia::Transform::identity(),
-                None,
-            );
-        }
-
-        let stride = width * 4;
-        let (buffer, canvas) = self
-            .pool
-            .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
-            .expect("failed to create shm buffer");
-        bgra_from_rgba(pixmap.data(), canvas);
-
-        let surface = self.layer.wl_surface();
-        surface.set_buffer_scale(self.output_scale.max(1));
-        buffer.attach_to(surface).expect("failed to attach buffer");
-        surface.damage_buffer(0, 0, width, height);
-        surface.frame(qh, surface.clone());
-        self.awaiting_frame = true;
-        surface.commit();
+        menu_render::draw_content(
+            &mut pixmap,
+            &mut self.icon_cache,
+            &mut self.text_cache,
+            &self.thumbnail_cache,
+            &args,
+        );
+        self.show_panel_surface(qh, &pixmap, layout, 1.0);
     }
     pub(super) fn tick_wallpaper_frame(&mut self, qh: &QueueHandle<Self>) {
+        // ----- transiciones apagadas: el filmstrip salta, no se desliza -----
+        let smooth = self.dock.config.settings.smooth_transitions;
         let Some(wp) = self.wallpaper_mode.as_mut() else {
             return;
         };
@@ -360,7 +351,7 @@ impl App {
             false
         };
         let scroll_delta = wp.scroll_target - wp.scroll_x;
-        let scroll_animating = if scroll_delta.abs() > 0.5 {
+        let scroll_animating = if smooth && scroll_delta.abs() > 0.5 {
             wp.scroll_x += scroll_delta * 0.28;
             true
         } else {
@@ -369,15 +360,14 @@ impl App {
         };
         let closing = wp.closing;
         let anim = wp.anim;
+        let thumbs_pending = wp.thumbs_pending;
 
         if closing && anim <= 0.0 {
             self.wallpaper_mode = None;
             self.layer
                 .set_keyboard_interactivity(KeyboardInteractivity::None);
-            let (w, h) = self.dock.base_size();
-            self.layer.set_size(w, h);
+            self.restore_dock_size();
             self.draw(qh);
-            self.thumbnail_cache.clear();
             trim_heap();
             return;
         }
@@ -389,7 +379,12 @@ impl App {
             }
         }
 
-        if !fade_animating && !scroll_animating && !key_repeating {
+        if !wallpaper_needs_frames(
+            fade_animating,
+            scroll_animating,
+            key_repeating,
+            thumbs_pending,
+        ) {
             return;
         }
         self.draw_wallpaper_mode(qh);
@@ -401,7 +396,7 @@ impl App {
     ) {
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                let (x, y) = event.position;
+                let (x, y) = self.panel_local(event.position.0, event.position.1);
                 if let Some(wp) = self.wallpaper_mode.as_mut() {
                     wp.hovered = menu::wallpaper_hit_test(
                         wp.wallpapers.len(),
@@ -422,7 +417,7 @@ impl App {
                 self.request_redraw(qh);
             }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
-                let (x, y) = event.position;
+                let (x, y) = self.panel_local(event.position.0, event.position.1);
                 let hit = self.wallpaper_mode.as_ref().and_then(|wp| {
                     menu::wallpaper_hit_test(
                         wp.wallpapers.len(),
@@ -464,5 +459,42 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+/// ----- ¿hay que seguir dando frames? -----
+/// Sí mientras haya algo animándose (la apertura, el scroll, una tecla
+/// repetida) o **miniaturas pedidas sin respuesta**. Ese último término es el
+/// que faltaba: las miniaturas llegan por un canal desde el hilo que decodifica,
+/// y un canal no genera ningún evento de Wayland, así que si el loop se apagaba
+/// antes de que llegaran, el selector quedaba en negro hasta que cualquier otra
+/// cosa (mover el scroll, un click) forzara un redraw. El loop se apaga solo
+/// cuando `thumbs_pending` llega a 0.
+fn wallpaper_needs_frames(
+    fade_animating: bool,
+    scroll_animating: bool,
+    key_repeating: bool,
+    thumbs_pending: usize,
+) -> bool {
+    fade_animating || scroll_animating || key_repeating || thumbs_pending > 0
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::wallpaper_needs_frames;
+
+    /// El término de las miniaturas es el que hacía que el selector se abriera
+    /// en negro: sin él, con todo quieto el loop se apagaba y las miniaturas que
+    /// ya estaban en el canal no se dibujaban nunca.
+    #[test]
+    fn con_miniaturas_en_vuelo_sigue_dando_frames() {
+        assert!(wallpaper_needs_frames(false, false, false, 1));
+        assert!(wallpaper_needs_frames(false, false, false, 7));
+        // ----- y se apaga cuando no queda nada: si no, sería un loop eterno -----
+        assert!(!wallpaper_needs_frames(false, false, false, 0));
+        // ----- lo de siempre sigue mandando -----
+        assert!(wallpaper_needs_frames(true, false, false, 0));
+        assert!(wallpaper_needs_frames(false, true, false, 0));
+        assert!(wallpaper_needs_frames(false, false, true, 0));
     }
 }

@@ -330,9 +330,10 @@ impl App {
             A::OpenVolumeControl => widgets::open_volume_control(),
             A::VolumeStep { up } => {
                 widgets::volume_step(up);
-                // ----- releer ya: el tick de sistema corre cada 2s y si no el
-                // número quedaría viejo hasta el próximo -----
-                self.refresh_sys(qh);
+                // ----- releer ya, y SÓLO el volumen: con el tick de sistema el
+                // número quedaba hasta 2 s viejo, y `refresh_sys` de paso relee
+                // red y layout de teclado (~20 ms por muesca de rueda). -----
+                self.refresh_volume(qh);
             }
             A::NextKbdLayout => widgets::kblayout_next(),
             A::OpenDockMenu => self.open_dock_menu(qh),

@@ -248,17 +248,37 @@ impl WidgetSnapshot {
         }
     }
 
-    /// true si cambió algo visible (requiere relayout)
+    /// true si cambió algo visible (requiere relayout). Ya NO relee el layout de
+    /// teclado: ese llega por el event-stream (`refresh_kblayout`).
     pub fn refresh_sys(&mut self) -> bool {
-        let volume = read_volume();
+        let volume = self.refresh_volume();
         let network = read_network();
-        let kblayout = read_kblayout();
-        let changed = volume != self.volume
-            || network.label != self.network.label
-            || kblayout.short != self.kblayout.short;
-        self.volume = volume;
+        let changed = volume || network.label != self.network.label;
         self.network = network;
+        changed
+    }
+
+    /// Sólo el layout de teclado. Lo dispara el event-stream de niri
+    /// (`KeyboardLayoutsChanged`), no el tick: el widget se actualiza al instante y el
+    /// tick de 2 s se ahorra el `niri msg -j keyboard-layouts` (~14 ms por spawn,
+    /// medidos). Ver `ipc::niri_mensaje`.
+    pub fn refresh_kblayout(&mut self) -> bool {
+        let kblayout = read_kblayout();
+        let changed = kblayout.short != self.kblayout.short;
         self.kblayout = kblayout;
+        changed
+    }
+
+    /// Sólo el volumen. Es lo único que puede cambiar en dos caminos que corren
+    /// muy seguido: el evento de PipeWire (las teclas de volumen del sistema
+    /// corren `wpctl` por fuera del dock) y la rueda sobre el widget, que viene en
+    /// ráfaga. `refresh_sys` de paso relee la red (`iw`, ~2 ms medidos) que no tiene
+    /// nada que ver. Una sola definición de la comparación: `refresh_sys` la usa para
+    /// no duplicarla.
+    pub fn refresh_volume(&mut self) -> bool {
+        let volume = read_volume();
+        let changed = volume != self.volume;
+        self.volume = volume;
         changed
     }
 

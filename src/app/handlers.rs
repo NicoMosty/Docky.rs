@@ -173,6 +173,12 @@ impl LayerShellHandler for App {
             .is_some_and(|p| p.layer.wl_surface() == layer.wl_surface() && !p.closing)
         {
             self.draw_popup_mode(qh);
+        } else if self
+            .click_catcher
+            .as_ref()
+            .is_some_and(|c| c.surface() == layer.wl_surface())
+        {
+            self.catcher_configure(configure.new_size);
         }
     }
 }
@@ -258,10 +264,17 @@ impl PointerHandler for App {
                 .as_ref()
                 .map(|p| event.surface == *p.layer.wl_surface())
                 .unwrap_or(false);
+            let is_catcher = self
+                .click_catcher
+                .as_ref()
+                .map(|c| event.surface == *c.surface())
+                .unwrap_or(false);
             if is_menu {
                 self.handle_menu_pointer_event(event, qh);
             } else if is_popup {
                 self.handle_popup_pointer_event(event, qh);
+            } else if is_catcher {
+                self.handle_catcher_pointer_event(event, qh);
             } else if event.surface == *self.layer.wl_surface() {
                 self.handle_dock_pointer_event(event, qh);
             }

@@ -1,8 +1,8 @@
 use crate::desktop::DesktopEntry;
 use crate::dock::Dock;
 use crate::menu::{
-    ButtonKind, Control, ControlKind, HitTarget, MENU_PADDING, MenuScreen, OsdKind, STEP_BTN_SIZE,
-    WALLPAPER_BACK_ZONE_W, WALLPAPER_GAP, WALLPAPER_PADDING, WallpaperHit,
+    ButtonKind, Control, ControlKind, HitTarget, MENU_PADDING, MenuScreen, OVERLAY_RADIUS, OsdKind,
+    STEP_BTN_SIZE, WALLPAPER_BACK_ZONE_W, WALLPAPER_GAP, WALLPAPER_PADDING, WallpaperHit,
 };
 use crate::wallpaper::WallpaperEntry;
 use dockyrs_canvas::IconCache;
@@ -179,6 +179,83 @@ fn draw_text(
     }
 }
 
+/// Caja de búsqueda de los paneles que la tienen: el launcher, el portapapeles y
+/// el panel de ajustes. Estaba dibujada dos veces (el launcher centraba el texto
+/// y el portapapeles lo alineaba a la izquierda, con inset y radios distintos),
+/// así que ahora hay una sola: radio, inset del texto y lupa salen de acá y no
+/// se pueden despegar del hit test, que sigue siendo el rectángulo del control.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_search_field(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    settings: &crate::config::DockSettings,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    text: &str,
+    placeholder: bool,
+    hot: bool,
+    scale: f32,
+) {
+    let fg = if placeholder {
+        text_dim_rgb(settings)
+    } else {
+        text_rgb(settings)
+    };
+    let bg = if hot {
+        (255, 255, 255, 30)
+    } else {
+        track_bg(settings)
+    };
+    fill_rrect(pixmap, x, y, w, h, OVERLAY_RADIUS * scale, bg);
+
+    // ----- lupa: círculo + mango en tiny-skia, sin depender del tema de iconos
+    // (un icono que falte dejaría la caja sin la única señal de que se busca) -----
+    let pad = 8.0 * scale;
+    let icon = 11.0 * scale;
+    let r = icon * 0.30;
+    let cx = x + pad + icon * 0.5 - r * 0.4;
+    let cy = y + h * 0.5 - icon * 0.06;
+    let arm = r * 0.72;
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.push_circle(cx, cy, r);
+    pb.move_to(cx + arm, cy + arm);
+    pb.line_to(cx + arm * 2.1, cy + arm * 2.1);
+    if let Some(path) = pb.finish() {
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(fg.0, fg.1, fg.2, 220);
+        paint.anti_alias = true;
+        let stroke = tiny_skia::Stroke {
+            width: (icon * 0.14).max(1.0),
+            line_cap: tiny_skia::LineCap::Round,
+            ..Default::default()
+        };
+        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+    }
+
+    let tx = x + pad + icon + 6.0 * scale;
+    let avail = (x + w - pad) - tx;
+    let shown = truncate_label(
+        text,
+        (avail / (9.5 * 0.56 * scale)).floor().max(4.0) as usize,
+    );
+    draw_text(
+        pixmap,
+        text_cache,
+        &shown,
+        tx,
+        y + centered_text_y(h / scale, 9.5) * scale,
+        9.5 * scale,
+        &if placeholder {
+            text_dim_hex(settings)
+        } else {
+            text_hex(settings)
+        },
+        if placeholder { 400 } else { 500 },
+    );
+}
+
 fn draw_value_rtl(
     pixmap: &mut Pixmap,
     text_cache: &mut TextCache,
@@ -263,10 +340,17 @@ fn text_hex(settings: &crate::config::DockSettings) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
+fn text_dim_rgb(settings: &crate::config::DockSettings) -> (u8, u8, u8, u8) {
+    (
+        blend_u8(settings.text_dim_r, settings.accent2_r, 0.25),
+        blend_u8(settings.text_dim_g, settings.accent2_g, 0.25),
+        blend_u8(settings.text_dim_b, settings.accent2_b, 0.25),
+        255,
+    )
+}
+
 fn text_dim_hex(settings: &crate::config::DockSettings) -> String {
-    let r = blend_u8(settings.text_dim_r, settings.accent2_r, 0.25);
-    let g = blend_u8(settings.text_dim_g, settings.accent2_g, 0.25);
-    let b = blend_u8(settings.text_dim_b, settings.accent2_b, 0.25);
+    let (r, g, b, _) = text_dim_rgb(settings);
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
@@ -316,6 +400,11 @@ pub struct DrawArgs<'a> {
     /// Modo del overlay (`OVERLAY_TABS`) en el que está el panel. `None` = sin
     /// banda de pestañas (los menus que no son parte del ciclo de Shift+←/→).
     pub overlay_tabs: Option<usize>,
+    /// Deslizamiento horizontal del **cuerpo** del panel (cambio de pestaña) y su
+    /// opacidad. El fondo y la banda no se mueven: si se movieran, el panel
+    /// dejaría un hueco en el borde mientras el contenido corre.
+    pub slide_offset: f32,
+    pub body_opacity: f32,
 }
 pub fn draw_content(
     pixmap: &mut Pixmap,
@@ -349,7 +438,6 @@ pub fn draw_content(
     stroke_menu_border(pixmap, &path, settings, s);
 
     if is_wallpaper_picker {
-        draw_wallpaper_filmstrip(pixmap, thumb_cache, text_cache, args);
         if let Some(index) = args.overlay_tabs {
             draw_overlay_tabs(
                 pixmap,
@@ -361,10 +449,15 @@ pub fn draw_content(
                 args.dock.is_vertical(),
             );
         }
+        draw_body(pixmap, args.slide_offset * s, args.body_opacity, |dst| {
+            draw_wallpaper_filmstrip(dst, thumb_cache, text_cache, args);
+        });
         return;
     }
 
-    draw_control_rows(pixmap, icon_cache, text_cache, args.controls, args);
+    draw_body(pixmap, args.slide_offset * s, args.body_opacity, |dst| {
+        draw_control_rows(dst, icon_cache, text_cache, args.controls, args);
+    });
 }
 fn truncate_label(name: &str, max_chars: usize) -> String {
     if name.chars().count() <= max_chars {
@@ -492,4 +585,113 @@ fn draw_control_rows(
 }
 fn text_width_estimate(text: &str, size: f32) -> f32 {
     text.chars().count() as f32 * size * 0.56
+}
+
+/// Dibuja el cuerpo del panel (lo que va entre el fondo y la banda) corrido `dx`
+/// px y/o con opacidad. Se dibuja en un pixmap aparte y se pega traducido: el
+/// fondo y la banda quedan fijos, así que el panel no deja un hueco en el borde
+/// mientras el contenido se desliza. Sin corrimiento ni transparencia dibuja
+/// derecho sobre `pixmap` (ni asigna el pixmap de más).
+pub(crate) fn draw_body(
+    pixmap: &mut Pixmap,
+    dx: f32,
+    opacity: f32,
+    draw: impl FnOnce(&mut Pixmap),
+) {
+    if dx.abs() < 0.5 && opacity >= 0.999 {
+        draw(pixmap);
+        return;
+    }
+    let Some(mut tmp) = Pixmap::new(pixmap.width().max(1), pixmap.height().max(1)) else {
+        draw(pixmap);
+        return;
+    };
+    draw(&mut tmp);
+    let paint = tiny_skia::PixmapPaint {
+        opacity,
+        ..Default::default()
+    };
+    pixmap.draw_pixmap(
+        0,
+        0,
+        tmp.as_ref(),
+        &paint,
+        Transform::from_translate(dx, 0.0),
+        None,
+    );
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::*;
+
+    fn px(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8) {
+        let p = pixmap.pixel(x, y).expect("dentro del pixmap");
+        (p.red(), p.green(), p.blue())
+    }
+
+    /// El contrato del primitivo: el cuerpo se corre `dx` y el **fondo no se
+    /// toca** (si se borrara, el panel dejaría un hueco en el borde). Sin
+    /// corrimiento dibuja derecho sobre el pixmap que recibe.
+    #[test]
+    fn el_cuerpo_se_corre_y_el_fondo_queda() {
+        let fondo = (10, 10, 10);
+        let cuerpo = (255, 0, 0);
+        let mut dst = Pixmap::new(40, 8).unwrap();
+        fill_rrect(
+            &mut dst,
+            0.0,
+            0.0,
+            40.0,
+            8.0,
+            0.0,
+            (fondo.0, fondo.1, fondo.2, 255),
+        );
+        draw_body(&mut dst, 3.0, 1.0, |p| {
+            fill_rrect(
+                p,
+                2.0,
+                2.0,
+                4.0,
+                4.0,
+                0.0,
+                (cuerpo.0, cuerpo.1, cuerpo.2, 255),
+            );
+        });
+        assert_eq!(px(&dst, 6, 4), cuerpo, "el cuerpo va en x=5..9 (2+3)");
+        assert_eq!(
+            px(&dst, 3, 4),
+            fondo,
+            "no tiene que quedar tambien en x=2..6"
+        );
+        assert_eq!(px(&dst, 20, 4), fondo, "y el resto del fondo sigue ahi");
+
+        // ----- dx = 0 y opaco: dibuja derecho, sin pixmap de mas -----
+        let mut directo = Pixmap::new(40, 8).unwrap();
+        fill_rrect(
+            &mut directo,
+            0.0,
+            0.0,
+            40.0,
+            8.0,
+            0.0,
+            (fondo.0, fondo.1, fondo.2, 255),
+        );
+        draw_body(&mut directo, 0.0, 1.0, |p| {
+            fill_rrect(
+                p,
+                2.0,
+                2.0,
+                4.0,
+                4.0,
+                0.0,
+                (cuerpo.0, cuerpo.1, cuerpo.2, 255),
+            );
+        });
+        assert_eq!(
+            px(&directo, 4, 4),
+            cuerpo,
+            "sin corrimiento queda donde se pidio"
+        );
+    }
 }

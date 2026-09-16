@@ -1,8 +1,6 @@
 use super::*;
 
-use crate::menu_render::{
-    CLIP_PANEL_W, CLIP_ROW_H, CLIP_VISIBLE_ROWS, ClipArgs, clip_content_y, clip_panel_h,
-};
+use crate::menu_render::{CLIP_ROW_H, CLIP_VISIBLE_ROWS, ClipArgs, clip_content_y, clip_panel_h};
 
 impl App {
     pub(crate) fn toggle_clipboard(&mut self, qh: &QueueHandle<Self>) {
@@ -25,16 +23,12 @@ impl App {
         self.clipboard_history.ensure_loaded();
 
         self.layer.set_layer(Layer::Top);
-        let panel_w = CLIP_PANEL_W;
+        let panel_w = menu::OVERLAY_PANEL_W;
         let panel_h = clip_panel_h();
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
-        let s = &self.dock.config.settings;
-        let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-        self.layer.set_anchor(anchor);
-        self.layer
-            .set_margin(margin.0, margin.1, margin.2, margin.3);
-        self.layer.set_size(panel_w as u32, panel_h as u32);
+        // ----- el panel va DEBAJO del dock, como el panel de ajustes -----
+        self.apply_panel_size(panel_w, panel_h);
 
         self.clipboard_mode = Some(ClipboardMode {
             query: String::new(),
@@ -43,11 +37,12 @@ impl App {
             scroll_y: 0.0,
             scroll_target: 0.0,
             hovered: None,
-            anim: 0.0,
+            anim: self.initial_panel_anim(),
             target_anim: 1.0,
             closing: false,
             panel_w,
             panel_h,
+            slide_dir: 0.0,
             previews: std::collections::HashMap::new(),
         });
         self.refresh_clipboard_filter(qh);
@@ -64,10 +59,7 @@ impl App {
         self.held_key = None;
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::None);
-        let (w, h) = self.dock.base_size();
-        self.layer.set_size(w, h);
-        // ----- anotarlo: `sync_autohide_surfaces` nunca restaura el tamaño -----
-        self.applied_size = Some((w, h));
+        self.restore_dock_size();
         self.draw(qh);
         trim_heap();
     }
@@ -196,7 +188,9 @@ impl App {
         event: &PointerEvent,
         qh: &QueueHandle<Self>,
     ) {
-        let (px, py) = event.position;
+        // ----- coordenadas de la superficie -> del panel (el panel va debajo del
+        // dock cuando el dock está arriba) -----
+        let (px, py) = self.panel_local(event.position.0, event.position.1);
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 let hit = self.clipboard_row_at(px as f32, py as f32);
@@ -254,6 +248,8 @@ impl App {
     }
 
     pub(super) fn tick_clipboard_frame(&mut self, qh: &QueueHandle<Self>) {
+        // ----- transiciones apagadas: el scroll salta, no se anima -----
+        let smooth = self.dock.config.settings.smooth_transitions;
         let Some(cm) = self.clipboard_mode.as_mut() else {
             return;
         };
@@ -267,7 +263,7 @@ impl App {
             false
         };
         let scroll_delta = cm.scroll_target - cm.scroll_y;
-        let scroll_animating = if scroll_delta.abs() > 0.5 {
+        let scroll_animating = if smooth && scroll_delta.abs() > 0.5 {
             cm.scroll_y += scroll_delta * 0.3;
             true
         } else {
@@ -281,13 +277,7 @@ impl App {
             self.clipboard_mode = None;
             self.layer
                 .set_keyboard_interactivity(KeyboardInteractivity::None);
-            let (w, h) = self.dock.base_size();
-            let s = &self.dock.config.settings;
-            let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-            self.layer.set_anchor(anchor);
-            self.layer
-                .set_margin(margin.0, margin.1, margin.2, margin.3);
-            self.layer.set_size(w, h);
+            self.restore_dock_size();
             self.draw(qh);
             trim_heap();
             return;
@@ -318,6 +308,11 @@ impl App {
         let scale = self.output_scale.max(1) as f32;
         let transparency = self.dock.config.settings.transparency;
         let tabs = self.current_overlay().map(OverlayMode::tab_index);
+        // ----- el reparto (dock arriba, panel abajo) se calcula ANTES de tomar
+        // prestado el modo: `overlay_layout` necesita `&self` entero -----
+        let Some(layout) = self.overlay_layout() else {
+            return;
+        };
         let Some(cm) = self.clipboard_mode.as_mut() else {
             return;
         };
@@ -329,7 +324,7 @@ impl App {
             return;
         }
 
-        let mut content = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
+        let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
         let args = ClipArgs {
             settings: &self.dock.config.settings,
             entries: self.clipboard_history.entries(),
@@ -343,36 +338,14 @@ impl App {
             panel_w: cm.panel_w,
             panel_h: cm.panel_h,
             overlay_tabs: tabs,
+            // ----- el fondo y la banda los deja fijos el render; el cuerpo se
+            // corre (cambio de pestaña) y/o se funde (transparency < 1) -----
+            slide_offset: menu::overlay_slide_offset(cm.slide_dir, cm.anim),
+            body_opacity: anim_opacity(transparency, eased),
         };
-        crate::menu_render::draw_clipboard(&mut content, &mut self.text_cache, args);
-
-        let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-        let paint = tiny_skia::PixmapPaint {
-            opacity: anim_opacity(transparency, eased),
-            ..Default::default()
-        };
-        pixmap.draw_pixmap(
-            0,
-            0,
-            content.as_ref(),
-            &paint,
-            tiny_skia::Transform::identity(),
-            None,
-        );
-
-        let stride = width * 4;
-        let (buffer, canvas) = self
-            .pool
-            .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
-            .expect("failed to create shm buffer");
-        bgra_from_rgba(pixmap.data(), canvas);
-
-        let surface = self.layer.wl_surface();
-        surface.set_buffer_scale(self.output_scale.max(1));
-        buffer.attach_to(surface).expect("failed to attach buffer");
-        surface.damage_buffer(0, 0, width, height);
-        surface.frame(qh, surface.clone());
-        self.awaiting_frame = true;
-        surface.commit();
+        crate::menu_render::draw_clipboard(&mut pixmap, &mut self.text_cache, args);
+        // ----- el panel ya trae su propio fundido; la superficie va opaca con el
+        // dock nítido arriba -----
+        self.show_panel_surface(qh, &pixmap, layout, 1.0);
     }
 }

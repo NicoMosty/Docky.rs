@@ -22,6 +22,10 @@ impl App {
             return;
         }
         self.enforce_keyboard();
+        // ----- el catcher de clicks afuera sigue al panel abierto: se crea al
+        // abrir, recalcula el agujero cuando cambia el alto (cambio de pestaña) y
+        // se desmapea al cerrar. Ver `click_catcher.rs`. -----
+        self.sync_click_catcher(qh);
         // ----- se cerró el último modo que usaba la superficie: el estado del
         // puntero quedó viejo (lo capturó el modo, no el dock) y con `pointer_pos`
         // en `Some` el dock no se oculta nunca más. Se refresca como una salida: si
@@ -591,13 +595,26 @@ impl App {
         }
     }
 
+    /// Relee SÓLO el volumen y lo dibuja. Son los dos caminos que corren muy
+    /// seguido: el evento de PipeWire (las teclas de volumen del sistema corren
+    /// `wpctl` por fuera del dock) y la rueda sobre el widget, que viene en ráfaga.
+    /// `refresh_sys` de paso relee red y layout de teclado (`iw` + `niri msg`, ~20 ms
+    /// medidos por lectura) y no hay por qué pagarlos en cada muesca.
+    pub(crate) fn refresh_volume(&mut self, qh: &QueueHandle<Self>) {
+        if !self.widget_placed(crate::config::WidgetKind::Volume) {
+            return;
+        }
+        if self.widgets.refresh_volume() {
+            self.sync_widget_bar_len();
+            self.relayout_dock(qh);
+        }
+    }
+
     pub(crate) fn refresh_sys(&mut self, qh: &QueueHandle<Self>) {
         let active = self.dock.config.settings.widgets.iter().any(|w| {
             matches!(
                 w.kind,
-                crate::config::WidgetKind::Volume
-                    | crate::config::WidgetKind::Network
-                    | crate::config::WidgetKind::KbdLayout
+                crate::config::WidgetKind::Volume | crate::config::WidgetKind::Network
             )
         });
         if !active {

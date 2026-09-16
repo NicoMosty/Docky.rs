@@ -1,8 +1,11 @@
 use super::overlay_tabs_h;
 
 pub const WALLPAPER_BACK_ZONE_W: f32 = 30.0;
-pub const WALLPAPER_PADDING: f32 = 6.0;
-pub const WALLPAPER_GAP: f32 = 6.0;
+/// El filmstrip usa el mismo inset y la misma separación que los otros paneles
+/// del overlay (la caja de búsqueda del launcher y del portapapeles), y las
+/// miniaturas el mismo radio (`OVERLAY_RADIUS`).
+pub const WALLPAPER_PADDING: f32 = super::MENU_PADDING;
+pub const WALLPAPER_GAP: f32 = super::MENU_PADDING;
 pub const WALLPAPER_ASPECT: f32 = 1.6;
 
 // ----- always landscape -----

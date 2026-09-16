@@ -45,6 +45,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
 
 mod app_search;
 mod calendar;
+mod click_catcher;
 mod clipboard_ui;
 mod dock_menu;
 mod dock_menu_input;
@@ -62,6 +63,7 @@ mod wallpaper_picker;
 mod ws_flash;
 use fonts::{apply_kitty_font, apply_system_gtk_font, apply_system_qt_font};
 mod handlers;
+use self::click_catcher::ClickCatcher;
 
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -225,9 +227,18 @@ pub(crate) struct WallpaperMode {
     panel_w: f32,
     panel_h: f32,
     is_vertical: bool,
+    /// Ver `AppSearchMode::slide_dir`.
+    slide_dir: f32,
     thumb_w: u32,
     thumb_h: u32,
     thumb_requested: std::collections::HashSet<std::path::PathBuf>,
+    /// Cuántas miniaturas se pidieron y todavía no volvieron. El hilo que las
+    /// decodifica avisa por el canal, y un canal NO despierta el loop de
+    /// Wayland: si el loop se apaga mientras hay pedidos en vuelo, las
+    /// miniaturas quedan en la cola hasta que cualquier evento (un scroll, un
+    /// click) fuerce un redraw. Por eso `tick_wallpaper_frame` sigue dando
+    /// frames mientras esto no llegue a 0.
+    thumbs_pending: usize,
     thumb_request_tx: std::sync::mpsc::Sender<(std::path::PathBuf, u32, u32)>,
     thumb_result_rx:
         std::sync::mpsc::Receiver<(std::path::PathBuf, u32, u32, Option<tiny_skia::Pixmap>)>,
@@ -241,11 +252,15 @@ pub(crate) struct AppSearchMode {
     filtered: Vec<DesktopEntry>,
     controls: Vec<menu::Control>,
     selected: usize,
-    hovered: Option<menu::HitTarget>,
     scroll_x: f32,
     scroll_target: f32,
+    /// Posición de la pastilla del resaltado dentro del strip. Con la grilla de
+    /// dos filas hace falta la y: si no, la pastilla se dibuja en la fila de
+    /// arriba aunque la tarjeta elegida esté abajo.
     highlight_x: f32,
     highlight_target: f32,
+    highlight_y: f32,
+    highlight_target_y: f32,
     content_anim: f32,
     anim: f32,
     target_anim: f32,
@@ -253,6 +268,11 @@ pub(crate) struct AppSearchMode {
     panel_w: f32,
     panel_h: f32,
     is_vertical: bool,
+    /// Dirección del deslizamiento del contenido al cambiar de pestaña con
+    /// Shift+←/→ (+1 = viene de la derecha). 0 = sin deslizamiento (abrir la
+    /// pestaña directo, por IPC). El progreso es el `anim` de siempre. Ver
+    /// `menu::overlay_slide_offset`.
+    slide_dir: f32,
 }
 
 /// Qué lista muestra el panel de búsqueda. Es lo que permite que el cambiador de
@@ -334,7 +354,64 @@ impl App {
             OverlayMode::Wallpaper => self.open_wallpaper_picker(qh),
             OverlayMode::Windows => self.open_windows_mode(qh),
         }
+        // ----- la dirección del deslizamiento la sabe recién acá: los `open_*`
+        // abren sin dirección (0) y esto la anota en el modo que acaba de abrir. -----
+        self.start_overlay_slide(dir as f32);
         true
+    }
+
+    /// Con qué arranca el fundido del strip de tarjetas: 0 = se funde (lo anima
+    /// `tick_app_search_frame`), 1 = ya está. Con las transiciones apagadas tiene que
+    /// arrancar terminado **también acá**: el primer draw es anterior al tick, así que
+    /// si no el strip se dibujaría invisible un frame.
+    fn initial_content_anim(&self) -> f32 {
+        if self.dock.config.settings.smooth_transitions {
+            0.0
+        } else {
+            1.0
+        }
+    }
+
+    /// Anota la dirección del deslizamiento en el modo abierto y reinicia su
+    /// `anim`: es el mismo progreso de la apertura, así que los ~15 frames que
+    /// antes se gastaban redibujando el mismo cuadro opaco pasan a correr el
+    /// contenido. Abrir una pestaña por IPC deja la dirección en 0 (sin
+    /// deslizamiento).
+    fn start_overlay_slide(&mut self, dir: f32) {
+        // ----- con las transiciones apagadas no hay deslizamiento (y no hace falta
+        // reiniciar el `anim`: el panel ya arrancó terminado) -----
+        if dir == 0.0 || !self.dock.config.settings.smooth_transitions {
+            return;
+        }
+        if let Some(m) = self.app_search_mode.as_mut() {
+            m.slide_dir = dir;
+            m.anim = 0.0;
+        } else if let Some(m) = self.clipboard_mode.as_mut() {
+            m.slide_dir = dir;
+            m.anim = 0.0;
+        } else if let Some(m) = self.wallpaper_mode.as_mut() {
+            m.slide_dir = dir;
+            m.anim = 0.0;
+        }
+    }
+
+    /// Con el panel opaco (`transparency = 1.0`, el default) `anim_opacity`
+    /// devuelve 1.0 siempre, así que la animación de apertura dibujaría el MISMO
+    /// cuadro ~15 veces (110 ms de CPU medidos por cambio de pestaña, ~7 ms por
+    /// frame). Si no hay nada que fundir, arranca terminada.
+    /// `start_overlay_slide` la reinicia cuando sí hay algo que animar.
+    ///
+    /// Y con `smooth_transitions` apagado arranca terminada siempre: no hay fundido
+    /// ni deslizamiento, así que el panel se dibuja **una** vez.
+    fn initial_panel_anim(&self) -> f32 {
+        if !self.dock.config.settings.smooth_transitions {
+            return 1.0;
+        }
+        if self.dock.config.settings.transparency >= 0.999 {
+            1.0
+        } else {
+            0.0
+        }
     }
 }
 
@@ -399,6 +476,9 @@ pub struct App {
     pub text_cache: TextCache,
     pub frame_pixmap: Option<tiny_skia::Pixmap>,
     pub thumbnail_cache: ThumbnailCache,
+    /// Superficie transparente a pantalla completa con la input region recortada
+    /// alrededor del dock, mientras hay un panel abierto. Ver `click_catcher.rs`.
+    pub click_catcher: Option<ClickCatcher>,
     pub available_fonts: std::rc::Rc<Vec<String>>,
     pub output_scale: i32,
     pub pinned_output: Option<wl_output::WlOutput>,
@@ -466,6 +546,8 @@ pub(crate) struct ClipboardMode {
     closing: bool,
     panel_w: f32,
     panel_h: f32,
+    /// Ver `AppSearchMode::slide_dir`.
+    slide_dir: f32,
     previews: std::collections::HashMap<usize, crate::clipboard::ScaledPreview>,
 }
 

@@ -18,7 +18,9 @@ mod thumbnail_cache;
 
 pub use icon_cache::IconCache;
 pub use text::{TextCache, list_font_families};
-pub use thumbnail_cache::{ThumbnailCache, load as load_thumbnail};
+pub use thumbnail_cache::{
+    ThumbnailCache, load as load_thumbnail, load_cached as load_thumbnail_cached,
+};
 
 use tiny_skia::Path;
 

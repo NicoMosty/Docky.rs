@@ -144,6 +144,8 @@ impl App {
             overlay_tabs: None,
             volume_rows: &[],
             volume_devices: &[],
+            slide_offset: 0.0,
+            body_opacity: 1.0,
         };
 
         if !menu.closing && linear >= 0.999 {

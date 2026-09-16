@@ -11,6 +11,7 @@ pub enum IpcMessage {
     OsdVolume,
     OsdBrightness,
     MediaChanged,
+    VolumeChanged,
     BatteryChanged,
     BluetoothChanged,
     WorkspacesChanged,
@@ -178,10 +179,19 @@ pub fn spawn_battery_watcher(
                     revents: 0,
                 })
                 .collect();
+            // ----- `poll` con POLLPRI es lo correcto (los sysfs de batería avisan
+            // cuando el driver los soporta), pero hay laptops donde NO avisan nunca:
+            // medido en la de desarrollo, `poll(POLLPRI)` sobre `capacity`/`status`/
+            // `energy_now` vuelve a los 30 s con 0 eventos. Con un timeout de 30 s
+            // eso dejaba el `BatteryChanged` cada ~30,5 s, y como el widget no dibuja
+            // NADA mientras no tenga dato, era un hueco de hasta 30 s al arrancar y
+            // al colocar el widget. Leer cuesta 3 ms (medido), así que el timeout
+            // baja a 3 s: en las que sí notifican sigue siendo instantáneo, y en
+            // estas el dato queda a lo sumo 3 s viejo. -----
             if pfds.is_empty() {
-                std::thread::sleep(std::time::Duration::from_secs(30));
+                std::thread::sleep(std::time::Duration::from_secs(3));
             } else {
-                unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, 30_000) };
+                unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, 3_000) };
             }
 
             if tx.send(IpcMessage::BatteryChanged).is_ok() {
@@ -231,6 +241,49 @@ pub fn spawn_media_watcher(
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     let _ = line;
                     if tx.send(IpcMessage::MediaChanged).is_ok() {
+                        conn.display().sync(&qh, ());
+                        let _ = conn.flush();
+                    }
+                }
+            }
+            let _ = child.wait();
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
+    });
+}
+
+/// Escucha los cambios de volumen de PipeWire/PulseAudio en vez de esperar al
+/// tick de sistema. Las teclas de volumen del sistema corren `wpctl` **por fuera
+/// del dock**, así que el widget sólo se enteraba en el próximo sondeo: hasta 2 s
+/// de atraso y salteándose los pasos intermedios de una ráfaga. `pactl subscribe`
+/// imprime una línea por evento; interesan los `sink` (cambió el volumen o el
+/// mute de una salida) y el `server` (cambió la salida por defecto).
+///
+/// Ojo con el filtro: `on sink #N` y `on sink-input #N` comparten el prefijo, y
+/// los `sink-input` son los streams de las apps (eso lo relee el panel de volumen
+/// cada 2 s, no acá: hacerlo en cada evento lo volvería lento al arrastrar).
+pub fn spawn_volume_watcher(
+    tx: Sender<IpcMessage>,
+    conn: Connection,
+    qh: QueueHandle<crate::app::App>,
+) {
+    std::thread::spawn(move || {
+        loop {
+            let mut cmd = std::process::Command::new("pactl");
+            cmd.arg("subscribe")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            let Ok(mut child) = die_with_parent(&mut cmd).spawn() else {
+                // ----- sin pactl (o sin audio) queda el sondeo de 2 s -----
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                continue;
+            };
+            if let Some(stdout) = child.stdout.take() {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    if !(line.contains("on sink #") || line.contains("on server")) {
+                        continue;
+                    }
+                    if tx.send(IpcMessage::VolumeChanged).is_ok() {
                         conn.display().sync(&qh, ());
                         let _ = conn.flush();
                     }
@@ -328,7 +381,6 @@ fn spawn_niri_workspace_watcher(
                     }
                 }
             }
-            let _ = child.wait();
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
     });

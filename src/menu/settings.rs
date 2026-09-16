@@ -19,6 +19,9 @@ pub enum SettingId {
     BorderWidth,
     MenuCornerRadius,
     MenuBorderWidth,
+    /// Deslizamiento/fundido de los paneles (overlay y ajustes). Ver
+    /// `DockSettings::smooth_transitions`.
+    SmoothTransitions,
     Transparency,
     BlurEnabled,
     BlurPasses,
@@ -50,6 +53,7 @@ impl SettingId {
             SettingId::BorderWidth => "Dock Border",
             SettingId::MenuCornerRadius => "Menu Roundness",
             SettingId::MenuBorderWidth => "Menu Border",
+            SettingId::SmoothTransitions => "Smooth Transitions",
             SettingId::Transparency => "Transparency",
             SettingId::BlurEnabled => "Blur",
             SettingId::BlurPasses => "Blur Passes",
@@ -96,6 +100,7 @@ impl SettingId {
             SettingId::BlurEnabled | SettingId::BlurXray | SettingId::MediaSmoothScroll => {
                 (0.0, 1.0, 1.0)
             }
+            SettingId::SmoothTransitions => (0.0, 1.0, 1.0),
             SettingId::Autohide => (0.0, 1.0, 1.0),
             SettingId::MediaWidthScale => (0.3, 2.0, 0.01),
             SettingId::AutohideDelay => (100.0, 2000.0, 50.0),
@@ -109,6 +114,7 @@ impl SettingId {
                 | SettingId::BlurXray
                 | SettingId::MediaSmoothScroll
                 | SettingId::Autohide
+                | SettingId::SmoothTransitions
                 | SettingId::WidgetClockFormat
         )
     }
@@ -142,6 +148,7 @@ impl SettingId {
             SettingId::BorderWidth => s.border_width,
             SettingId::MenuCornerRadius => s.menu_corner_radius,
             SettingId::MenuBorderWidth => s.menu_border_width,
+            SettingId::SmoothTransitions => bool_f(s.smooth_transitions),
             SettingId::Transparency => s.transparency,
             SettingId::BlurEnabled => bool_f(s.blur_enabled),
             SettingId::BlurPasses => s.blur_passes as f32,
@@ -195,6 +202,7 @@ impl SettingId {
             SettingId::MenuBorderWidth => s.menu_border_width = clamped,
             SettingId::Transparency => s.transparency = clamped,
             SettingId::BlurEnabled => s.blur_enabled = clamped >= 0.5,
+            SettingId::SmoothTransitions => s.smooth_transitions = clamped >= 0.5,
             SettingId::BlurPasses => s.blur_passes = clamped.round() as i32,
             SettingId::BlurSize => s.blur_size = clamped.round() as i32,
             SettingId::BlurVibrancy => s.blur_vibrancy = clamped,
@@ -241,6 +249,7 @@ impl SettingId {
             | SettingId::BlurXray
             | SettingId::MediaSmoothScroll
             | SettingId::Autohide
+            | SettingId::SmoothTransitions
             | SettingId::WidgetClockFormat => String::new(),
         }
     }
@@ -340,6 +349,38 @@ mod menu_border_tests {
         assert_eq!(SettingId::FontScale.get(&s), 0.5);
         assert!(APPEARANCE_SETTINGS.contains(&SettingId::FontScale));
         assert!(SettingId::FontScale.affects_layout());
+    }
+
+    /// Las transiciones suaves se apagan desde el panel: si el ajuste existe pero
+    /// no está en la lista, el usuario no lo puede tocar (el mismo caso que Menu
+    /// Roundness).
+    #[test]
+    fn las_transiciones_estan_en_appearance_y_son_toggle() {
+        assert!(APPEARANCE_SETTINGS.contains(&SettingId::SmoothTransitions));
+        assert!(SettingId::SmoothTransitions.is_toggle());
+        // ----- no pide relayout: no cambia ninguna medida del dock -----
+        assert!(!SettingId::SmoothTransitions.affects_layout());
+        // ----- y el default es prendidas (el comportamiento de siempre) -----
+        let mut s = DockSettings::default();
+        assert!(s.smooth_transitions);
+        assert_eq!(SettingId::SmoothTransitions.get(&s), 1.0);
+        SettingId::SmoothTransitions.set(&mut s, 0.0);
+        assert!(!s.smooth_transitions);
+        assert_eq!(SettingId::SmoothTransitions.get(&s), 0.0);
+        SettingId::SmoothTransitions.toggle(&mut s);
+        assert!(s.smooth_transitions);
+        // ----- y el panel la arma como fila de TOGGLE, no de slider -----
+        let controls = crate::menu::build_category_controls(
+            crate::menu::MenuCategory::Appearance,
+            &DockSettings::default(),
+        );
+        assert!(
+            controls.iter().any(|c| matches!(
+                c.kind,
+                crate::menu::ControlKind::Toggle(SettingId::SmoothTransitions)
+            )),
+            "tiene que estar en el panel de Appearance"
+        );
     }
 
     /// Defaults que preservan el look actual: mismo radio que el dock, sin borde.

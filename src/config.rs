@@ -247,6 +247,11 @@ pub struct DockSettings {
     pub menu_corner_radius: f32,
     #[serde(default = "default_menu_border")]
     pub menu_border_width: f32,
+    /// Transiciones suaves de los paneles: el deslizamiento al cambiar de pestaña
+    /// (overlay y panel de ajustes) y el fundido de apertura. Apagado, cada panel se
+    /// dibuja **una** vez y sin deslizar: menos CPU y menos movimiento en pantalla.
+    /// No toca el OSD, las notificaciones ni el revelado del autohide.
+    pub smooth_transitions: bool,
     pub pos_y: i32,
     pub dock_align: DockAlign,
     pub transparency: f32,
@@ -335,6 +340,7 @@ impl Default for DockSettings {
             border_width: 0.0,
             menu_corner_radius: default_menu_radius(),
             menu_border_width: default_menu_border(),
+            smooth_transitions: true,
             pos_y: 0,
             dock_align: DockAlign::Middle,
             transparency: 1.0,

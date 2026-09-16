@@ -45,7 +45,7 @@ pub fn draw_overlay_tabs(
                 slot_y + 3.0 * scale,
                 pill_w,
                 (slot_h - 6.0 * scale).max(1.0),
-                6.0 * scale,
+                crate::menu::OVERLAY_RADIUS * scale,
                 acc,
             );
         }

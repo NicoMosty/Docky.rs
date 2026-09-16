@@ -135,6 +135,10 @@ pub fn draw_dock_menu(
         overlay_tabs: None,
         volume_rows: &[],
         volume_devices: &[],
+        // ----- la columna derecha la corre y la funde el panel de ajustes con su
+        // propio `slide_offset` (DockMenuArgs), así que acá va fijo -----
+        slide_offset: 0.0,
+        body_opacity: 1.0,
     };
     draw_control_rows(
         &mut right_pixmap,

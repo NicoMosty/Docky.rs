@@ -44,6 +44,23 @@ pub const APP_ENTRY_HEIGHT: f32 = 30.0;
 pub const LIST_ROW_GAP: f32 = 2.0;
 pub const LIST_MAX_VISIBLE_ROWS: usize = 8;
 pub const TAB_SLIDE_DISTANCE: f32 = 28.0;
+
+/// Desplazamiento horizontal del contenido en un cambio de pestaña del overlay:
+/// máximo (`TAB_SLIDE_DISTANCE`) al arrancar y 0 al terminar, para que el
+/// contenido entre desde el lado hacia el que viajás con Shift+←/→.
+///
+/// `dir` es la dirección del ciclo (0 = abrir una pestaña directo, por IPC: sin
+/// deslizamiento) y `t` el progreso 0..1 de la animación que cada modo **ya**
+/// tenía (`anim`), así que no hace falta un temporizador ni un campo nuevos: los
+/// frames que antes se gastaban redibujando el mismo cuadro opaco pasan a correr
+/// el contenido. Misma fórmula que el panel de ajustes (`dock_menu.rs`).
+pub fn overlay_slide_offset(dir: f32, t: f32) -> f32 {
+    if dir == 0.0 {
+        return 0.0;
+    }
+    let eased = 0.5 - 0.5 * (std::f32::consts::PI * t.clamp(0.0, 1.0)).cos();
+    dir * (1.0 - eased) * TAB_SLIDE_DISTANCE
+}
 pub const WIDGETS_TAB_FIXED_H: f32 = 484.0;
 pub const SEARCH_BOX_HEIGHT: f32 = 26.0;
 pub const HEX_FIELD_H: f32 = 26.0;
@@ -68,13 +85,35 @@ pub const NOTIFICATION_TIMEOUT_MS: u64 = 4000;
 pub const NOTIFICATION_GROWTH_W: f32 = 60.0;
 pub const NOTIFICATION_GROWTH_H: f32 = 24.0;
 pub const NOTIFICATION_BODY_MAX_LINES: usize = 8;
-pub const APP_SEARCH_WIDTH_GROWTH: f32 = 180.0;
+
+/// Ancho de los tres paneles del overlay (launcher/ventanas, portapapeles y
+/// selector de fondos). Los tres van centrados con el mismo anclaje
+/// (`edge_anchor_margin`), así que con el mismo ancho los bordes no se mueven al
+/// ciclar con Shift+←/→: antes medían 809 (dock + 180), 440 y 640 y el panel
+/// "saltaba" de tamaño entre pestaña y pestaña.
+///
+/// Sale del dock a propósito: el valor no cambia porque el usuario agregue un
+/// widget. 640 está elegido para que la grilla del launcher dé 6 columnas x 2
+/// filas (6*92 + 5*10 = 602 contra los 620 disponibles).
+pub const OVERLAY_PANEL_W: f32 = 640.0;
 
 /// Barra de pestañas compartida por los modos del overlay. El orden es el de
 /// `OVERLAY_ORDER` (Shift+←/→ cicla) y cada panel la dibuja arriba de su
 /// contenido: es la única señal de en qué mini-app estás.
 pub const OVERLAY_TABS: [&str; 4] = ["Apps", "Clipboard", "Wallpapers", "Windows"];
 pub const OVERLAY_TABS_H: f32 = 26.0;
+
+/// Radio de todo lo que va DENTRO de un panel del overlay: la caja de búsqueda,
+/// la pastilla de la tarjeta de app, la fila del portapapeles, la pestaña de la
+/// banda y la miniatura de fondo. Antes eran 6/8/7/11 según el panel (y el 11
+/// estaba repetido en tres lugares del filmstrip), así que los paneles no
+/// parecían la misma familia. El inset lateral de esos mismos paneles es
+/// `MENU_PADDING`.
+///
+/// El radio de la miniatura se hornea en el pixmap (`open_wallpaper_picker`),
+/// así que el anillo del hover tiene que salir de acá también o no coincide con
+/// la esquina de la imagen.
+pub const OVERLAY_RADIUS: f32 = 8.0;
 
 /// Cuánto corre la banda al contenido. En un panel vertical (angosto) las cuatro
 /// etiquetas no entran en una fila, así que se apilan y la banda crece.
@@ -370,5 +409,32 @@ pub fn stepper_speed(hold_frames: u32) -> f32 {
         15..=44 => 3.0,
         45..=89 => 8.0,
         _ => 18.0,
+    }
+}
+
+#[cfg(test)]
+mod slide_tests {
+    use super::*;
+
+    /// El contrato del deslizamiento: arranca corrido al máximo hacia el lado del
+    /// viaje, llega a 0 (si no, el panel quedaría desalineado para siempre) y con
+    /// `dir == 0` no se mueve nada (abrir una pestaña directo).
+    #[test]
+    fn el_deslizamiento_arranca_corrido_y_termina_en_cero() {
+        assert_eq!(overlay_slide_offset(0.0, 0.0), 0.0);
+        assert_eq!(overlay_slide_offset(0.0, 0.5), 0.0);
+        assert_eq!(overlay_slide_offset(0.0, 1.0), 0.0);
+        assert_eq!(overlay_slide_offset(1.0, 0.0), TAB_SLIDE_DISTANCE);
+        assert_eq!(overlay_slide_offset(-1.0, 0.0), -TAB_SLIDE_DISTANCE);
+        assert_eq!(overlay_slide_offset(1.0, 1.0), 0.0);
+        assert_eq!(overlay_slide_offset(-1.0, 1.0), 0.0);
+        // ----- y baja monótono: un valor que volviera a subir se vería como un
+        // rebote en medio del cambio de pestaña -----
+        let mut prev = overlay_slide_offset(1.0, 0.0);
+        for i in 1..=10 {
+            let v = overlay_slide_offset(1.0, i as f32 / 10.0);
+            assert!(v <= prev, "t={i}: {v} > {prev}");
+            prev = v;
+        }
     }
 }

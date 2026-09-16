@@ -363,48 +363,29 @@ pub(crate) fn draw_search_box(
     let s = args.render_scale;
     let settings = &args.dock.config.settings;
     let hot = matches!(args.hovered, Some(HitTarget::SearchBox));
-    let box_color = if hot {
-        (255, 255, 255, 30)
-    } else {
-        track_bg(settings)
-    };
-    let box_x = MENU_PADDING * s;
-    let box_w = (args.panel_width - MENU_PADDING * 2.0) * s;
-    fill_rrect(
-        pixmap,
-        box_x,
-        y,
-        box_w,
-        control.height * s,
-        6.0 * s,
-        box_color,
-    );
-
-    let ty = y + centered_text_y(control.height, 9.5) * s;
-    let (text, color, weight) = if args.search_query.is_empty() {
-        let placeholder = match args.screen {
+    let placeholder = args.search_query.is_empty();
+    let text = if placeholder {
+        match args.screen {
             MenuScreen::IconPicker(_) => "Search icons\u{2026}",
             MenuScreen::AddApp => "Search apps\u{2026}",
             _ => "Search\u{2026}",
-        };
-        (placeholder, text_dim_hex(settings), 400)
+        }
     } else {
-        (args.search_query, text_hex(settings), 500)
+        args.search_query
     };
-    if let Some(glyphs) = text_cache.get(text, 9.5 * s, &color, weight) {
-        let text_w = glyphs.width() as f32;
-        // ----- overflow guard -----
-        let tx = (box_x + (box_w - text_w) / 2.0).max(box_x + 2.0 * s);
-        let paint = tiny_skia::PixmapPaint::default();
-        pixmap.draw_pixmap(
-            0,
-            0,
-            glyphs.as_ref().as_ref(),
-            &paint,
-            Transform::from_translate(tx, ty),
-            None,
-        );
-    }
+    draw_search_field(
+        pixmap,
+        text_cache,
+        settings,
+        MENU_PADDING * s,
+        y,
+        (args.panel_width - MENU_PADDING * 2.0) * s,
+        control.height * s,
+        text,
+        placeholder,
+        hot,
+        s,
+    );
 }
 pub(crate) fn draw_icon_choice(
     pixmap: &mut Pixmap,

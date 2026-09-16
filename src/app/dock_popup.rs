@@ -311,6 +311,8 @@ impl App {
             volume_rows: &p.volume_rows,
             volume_devices: &p.volume_devices,
             overlay_tabs: None,
+            slide_offset: 0.0,
+            body_opacity: 1.0,
         };
         // ----- el contenido se renderiza UNA vez por apertura/cambio de estado:
         // rehacerlo en cada frame de la animación saturaba el hilo principal y

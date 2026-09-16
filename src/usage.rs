@@ -11,8 +11,14 @@ struct Usage {
     apps: HashMap<String, (u32, u64)>,
 }
 
+/// Carpeta de caché del dock (`~/.cache/dockyrs`): se puede borrar entera sin
+/// perder nada. La usan el historial de uso y el caché de miniaturas de fondos.
+pub fn cache_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join("dockyrs"))
+}
+
 fn file() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("dockyrs").join("app-usage.json"))
+    Some(cache_dir()?.join("app-usage.json"))
 }
 
 fn load() -> Usage {

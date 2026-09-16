@@ -7,15 +7,19 @@ use crate::config::DockSettings;
 use dockyrs_canvas::TextCache;
 
 use super::{
-    centered_text_y, draw_text, fill_rrect, menu_radius, panel_bg, rounded_rect_path,
+    draw_body, draw_search_field, draw_text, fill_rrect, menu_radius, panel_bg, rounded_rect_path,
     stroke_menu_border, text_dim_hex, text_hex,
 };
 
 pub const CLIP_ROW_H: f32 = 54.0;
-pub const CLIP_HEADER_H: f32 = 42.0;
+/// Inset del contenido dentro de la pastilla de una fila. La pastilla arranca en
+/// `CLIP_PAD` (= el inset de la caja de búsqueda) y el contenido va 6px adentro.
+const ROW_INSET: f32 = 6.0;
+/// Encabezado = lo que corre al contenido: el padding de arriba, la caja de
+/// búsqueda (la misma altura que en el launcher) y el de abajo.
+pub const CLIP_HEADER_H: f32 = crate::menu::MENU_PADDING * 2.0 + crate::menu::SEARCH_BOX_HEIGHT;
 pub const CLIP_PAD: f32 = 10.0;
 pub const CLIP_VISIBLE_ROWS: usize = 7;
-pub const CLIP_PANEL_W: f32 = 440.0;
 
 pub fn clip_panel_h() -> f32 {
     clip_content_y() + CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32 + CLIP_PAD
@@ -40,10 +44,14 @@ pub struct ClipArgs<'a> {
     pub panel_w: f32,
     pub panel_h: f32,
     pub overlay_tabs: Option<usize>,
+    /// Ver `DrawArgs::slide_offset` / `body_opacity`.
+    pub slide_offset: f32,
+    pub body_opacity: f32,
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: ClipArgs) {
+    use crate::menu::{MENU_PADDING, OVERLAY_RADIUS, OVERLAY_TABS_H, SEARCH_BOX_HEIGHT};
     let s = args.render_scale;
     let settings = args.settings;
     let w = args.panel_w * s;
@@ -71,158 +79,159 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
     // ----- search box: vive en el encabezado, o sea debajo de la banda. Ojo,
     // `clip_content_y()` es la PRIMERA fila, no el encabezado -----
     let top = clip_content_y();
-    let box_x = CLIP_PAD * s;
-    let box_w = (args.panel_w - CLIP_PAD * 2.0) * s;
-    let box_y = crate::menu::OVERLAY_TABS_H + 5.0;
-    let box_h = (CLIP_HEADER_H - 10.0) * s;
-    fill_rrect(
-        pixmap,
-        box_x,
-        box_y * s,
-        box_w,
-        box_h,
-        6.0 * s,
-        super::track_bg(settings),
-    );
-    let ty = box_y * s + centered_text_y(box_h / s, 9.5) * s;
-    let (query_text, qcolor): (&str, String) = if args.query.is_empty() {
-        ("Search clipboard\u{2026}", text_dim_hex(settings))
-    } else {
-        (args.query, text_hex(settings))
-    };
-    draw_text(
-        pixmap,
-        text_cache,
-        query_text,
-        (CLIP_PAD + 6.0) * s,
-        ty,
-        9.5 * s,
-        &qcolor,
-        if args.query.is_empty() { 400 } else { 500 },
-    );
-
-    if args.filtered.is_empty() {
-        let msg = if args.query.is_empty() {
-            "Clipboard is empty"
-        } else {
-            "No matching clipboard items"
-        };
-        draw_text(
+    let placeholder = args.query.is_empty();
+    // ----- el cuerpo (caja de búsqueda + filas) se corre en un cambio de
+    // pestaña; la banda y la barra de scroll quedan fijas. El parámetro de la
+    // closure se llama `pixmap` a propósito: adentro se dibuja en el destino. -----
+    let accent = super::accent(settings);
+    draw_body(pixmap, args.slide_offset * s, args.body_opacity, |pixmap| {
+        draw_search_field(
             pixmap,
             text_cache,
-            msg,
+            settings,
             CLIP_PAD * s,
-            (top + 24.0) * s,
-            10.0 * s,
-            &text_dim_hex(settings),
-            400,
-        );
-        return;
-    }
-
-    let accent = super::accent(settings);
-    let title_c = text_hex(settings);
-    let dim_c = text_dim_hex(settings);
-    let on_accent = super::on_accent_hex(settings);
-
-    let start = (args.scroll_y / CLIP_ROW_H).floor().max(0.0) as usize;
-    let end = (start + CLIP_VISIBLE_ROWS + 1).min(args.filtered.len());
-    for pos in start..end {
-        let entry_index = args.filtered[pos];
-        let Some(entry) = args.entries.get(entry_index) else {
-            continue;
-        };
-        let row_y = (top + pos as f32 * CLIP_ROW_H - args.scroll_y) * s;
-        if row_y + CLIP_ROW_H * s < top * s || row_y > h {
-            continue;
-        }
-        let selected = pos == args.selected;
-        let hovered = args.hovered == Some(pos);
-        if selected || hovered {
-            let fill = if selected {
-                accent
+            (OVERLAY_TABS_H + MENU_PADDING) * s,
+            (args.panel_w - CLIP_PAD * 2.0) * s,
+            SEARCH_BOX_HEIGHT * s,
+            if placeholder {
+                "Search clipboard\u{2026}"
             } else {
-                (255, 255, 255, 22)
+                args.query
+            },
+            placeholder,
+            false,
+            s,
+        );
+
+        if args.filtered.is_empty() {
+            let msg = if args.query.is_empty() {
+                "Clipboard is empty"
+            } else {
+                "No matching clipboard items"
             };
-            fill_rrect(
-                pixmap,
-                4.0 * s,
-                row_y + 3.0 * s,
-                w - 8.0 * s,
-                (CLIP_ROW_H - 6.0) * s,
-                7.0 * s,
-                fill,
-            );
-        }
-
-        if let Some(thumbnail) = entry.thumbnail.clone() {
-            let px = 12.0 * s;
-            let py = row_y + 6.0 * s;
-            let pw = (args.panel_w - 24.0) * s;
-            let ph = (CLIP_ROW_H - 12.0) * s;
-            let want_w = pw.round().max(1.0) as u32;
-            let want_h = ph.round().max(1.0) as u32;
-            let needs = args
-                .previews
-                .get(&entry_index)
-                .map(|p| p.width != want_w || p.height != want_h)
-                .unwrap_or(true);
-            if needs && let Some(scaled) = thumbnail.scale_to(want_w, want_h) {
-                args.previews.insert(entry_index, scaled);
-            }
-            fill_rrect(pixmap, px, py, pw, ph, 4.0 * s, (0, 0, 0, 90));
-            if let Some(preview) = args.previews.get(&entry_index) {
-                blit_preview(pixmap, preview, px, py);
-            }
-        } else {
-            let icon_x = 16.0 * s;
-            fill_rrect(
-                pixmap,
-                icon_x,
-                row_y + 10.0 * s,
-                34.0 * s,
-                34.0 * s,
-                8.0 * s,
-                super::track_bg(settings),
-            );
             draw_text(
                 pixmap,
                 text_cache,
-                "T",
-                icon_x + 11.0 * s,
-                row_y + 15.0 * s,
-                15.0 * s,
-                if selected { &on_accent } else { &dim_c },
-                700,
-            );
-
-            let text_x = 62.0 * s;
-            let title = fit(entry.title.trim(), &entry.title, 11.0, args.panel_w - 74.0);
-            let desc = &entry.description;
-            let tcol = if selected { &on_accent } else { &title_c };
-            let dcol = if selected { &on_accent } else { &dim_c };
-            draw_text(
-                pixmap,
-                text_cache,
-                &title,
-                text_x,
-                row_y + 12.0 * s,
-                11.0 * s,
-                tcol,
-                600,
-            );
-            draw_text(
-                pixmap,
-                text_cache,
-                desc,
-                text_x,
-                row_y + 30.0 * s,
-                8.0 * s,
-                dcol,
+                msg,
+                CLIP_PAD * s,
+                (top + 24.0) * s,
+                10.0 * s,
+                &text_dim_hex(settings),
                 400,
             );
+            return;
         }
-    }
+
+        let title_c = text_hex(settings);
+        let dim_c = text_dim_hex(settings);
+        let on_accent = super::on_accent_hex(settings);
+
+        let start = (args.scroll_y / CLIP_ROW_H).floor().max(0.0) as usize;
+        let end = (start + CLIP_VISIBLE_ROWS + 1).min(args.filtered.len());
+        for pos in start..end {
+            let entry_index = args.filtered[pos];
+            let Some(entry) = args.entries.get(entry_index) else {
+                continue;
+            };
+            let row_y = (top + pos as f32 * CLIP_ROW_H - args.scroll_y) * s;
+            if row_y + CLIP_ROW_H * s < top * s || row_y > h {
+                continue;
+            }
+            let selected = pos == args.selected;
+            let hovered = args.hovered == Some(pos);
+            if selected || hovered {
+                let fill = if selected {
+                    accent
+                } else {
+                    (255, 255, 255, 22)
+                };
+                fill_rrect(
+                    pixmap,
+                    CLIP_PAD * s,
+                    row_y + 3.0 * s,
+                    w - CLIP_PAD * 2.0 * s,
+                    (CLIP_ROW_H - 6.0) * s,
+                    OVERLAY_RADIUS * s,
+                    fill,
+                );
+            }
+
+            if let Some(thumbnail) = entry.thumbnail.clone() {
+                let px = (CLIP_PAD + ROW_INSET) * s;
+                let py = row_y + 6.0 * s;
+                let pw = (args.panel_w - (CLIP_PAD + ROW_INSET) * 2.0) * s;
+                let ph = (CLIP_ROW_H - 12.0) * s;
+                let want_w = pw.round().max(1.0) as u32;
+                let want_h = ph.round().max(1.0) as u32;
+                let needs = args
+                    .previews
+                    .get(&entry_index)
+                    .map(|p| p.width != want_w || p.height != want_h)
+                    .unwrap_or(true);
+                if needs && let Some(scaled) = thumbnail.scale_to(want_w, want_h) {
+                    args.previews.insert(entry_index, scaled);
+                }
+                fill_rrect(pixmap, px, py, pw, ph, 4.0 * s, (0, 0, 0, 90));
+                if let Some(preview) = args.previews.get(&entry_index) {
+                    blit_preview(pixmap, preview, px, py);
+                }
+            } else {
+                let icon_x = (CLIP_PAD + ROW_INSET) * s;
+                fill_rrect(
+                    pixmap,
+                    icon_x,
+                    row_y + 10.0 * s,
+                    34.0 * s,
+                    34.0 * s,
+                    OVERLAY_RADIUS * s,
+                    super::track_bg(settings),
+                );
+                draw_text(
+                    pixmap,
+                    text_cache,
+                    "T",
+                    icon_x + 11.0 * s,
+                    row_y + 15.0 * s,
+                    15.0 * s,
+                    if selected { &on_accent } else { &dim_c },
+                    700,
+                );
+
+                // ----- la misma relación que la miniatura: caja en CLIP_PAD+ROW_INSET,
+                // texto 12px a la derecha de la caja (los 34 del icono) -----
+                let text_x = CLIP_PAD + ROW_INSET + 46.0;
+                let title = fit(
+                    entry.title.trim(),
+                    &entry.title,
+                    11.0,
+                    args.panel_w - text_x - (CLIP_PAD + ROW_INSET),
+                );
+                let desc = &entry.description;
+                let tcol = if selected { &on_accent } else { &title_c };
+                let dcol = if selected { &on_accent } else { &dim_c };
+                draw_text(
+                    pixmap,
+                    text_cache,
+                    &title,
+                    text_x * s,
+                    row_y + 12.0 * s,
+                    11.0 * s,
+                    tcol,
+                    600,
+                );
+                draw_text(
+                    pixmap,
+                    text_cache,
+                    desc,
+                    text_x * s,
+                    row_y + 30.0 * s,
+                    8.0 * s,
+                    dcol,
+                    400,
+                );
+            }
+        }
+    });
 
     // ----- scrollbar -----
     let total = args.filtered.len() as f32 * CLIP_ROW_H;

@@ -43,17 +43,18 @@ impl App {
                 menu::app_search_vertical_along(),
             )
         } else {
-            let dock_along = self.dock.base_size().0 as f32;
-            (dock_along + menu::APP_SEARCH_WIDTH_GROWTH, cross_fixed)
+            // ----- mismo ancho que el portapapeles y el selector de fondos
+            // (`OVERLAY_PANEL_W`): los tres van centrados con el mismo anclaje, así
+            // que al ciclar con Shift+←/→ los bordes no se mueven. -----
+            (menu::OVERLAY_PANEL_W, cross_fixed)
         };
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
-        let s = &self.dock.config.settings;
-        let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-        self.layer.set_anchor(anchor);
-        self.layer
-            .set_margin(margin.0, margin.1, margin.2, margin.3);
-        self.layer.set_size(panel_w as u32, panel_h as u32);
+        // ----- el panel va DEBAJO del dock, misma composición que el panel de
+        // ajustes (`panel_layout`): la superficie pasa a ser [dock][8px][panel] y el
+        // dock se queda a la vista en vez de quedar tapado. -----
+        self.apply_panel_size(panel_w, panel_h);
+        let content_anim = self.initial_content_anim();
         self.app_search_mode = Some(AppSearchMode {
             list,
             query: String::new(),
@@ -61,18 +62,20 @@ impl App {
             filtered: Vec::new(),
             controls,
             selected: 0,
-            hovered: None,
             scroll_x: 0.0,
             scroll_target: 0.0,
             highlight_x: 0.0,
             highlight_target: 0.0,
-            content_anim: 0.0,
-            anim: 0.0,
+            highlight_y: 0.0,
+            highlight_target_y: 0.0,
+            content_anim,
+            anim: self.initial_panel_anim(),
             target_anim: 1.0,
             closing: false,
             panel_w,
             panel_h,
             is_vertical,
+            slide_dir: 0.0,
         });
         self.refresh_app_search(qh);
     }
@@ -88,15 +91,13 @@ impl App {
         self.held_key = None;
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::None);
-        let (w, h) = self.dock.base_size();
-        self.layer.set_size(w, h);
-        // ----- anotarlo: `sync_autohide_surfaces` nunca restaura el tamaño -----
-        self.applied_size = Some((w, h));
+        self.restore_dock_size();
         self.draw(qh);
         trim_heap();
     }
 
     pub(super) fn refresh_app_search(&mut self, qh: &QueueHandle<Self>) {
+        let content_anim = self.initial_content_anim();
         let Some(m) = self.app_search_mode.as_mut() else {
             return;
         };
@@ -133,7 +134,9 @@ impl App {
         m.scroll_target = 0.0;
         m.highlight_x = 0.0;
         m.highlight_target = 0.0;
-        m.content_anim = 0.0;
+        m.highlight_y = 0.0;
+        m.highlight_target_y = 0.0;
+        m.content_anim = content_anim;
         self.request_redraw(qh);
     }
 
@@ -141,17 +144,24 @@ impl App {
         let Some(m) = self.app_search_mode.as_mut() else {
             return;
         };
-        let cx = menu::app_search_card_along(index);
+        // ----- el scroll se mide en tramos (la página entera en el horizontal, la
+        // tarjeta en el vertical), pero el resaltado va a la tarjeta exacta: si no,
+        // la pastilla quedaría en el borde de la página en vez de sobre la app. -----
+        let along = menu::app_search_card_along(index, m.panel_w, m.is_vertical);
+        let along_len = menu::app_search_along_len(m.panel_w, m.is_vertical);
         let viewport_along = menu::app_search_viewport_along(m.panel_w, m.panel_h, m.is_vertical);
         let mut target = m.scroll_target;
-        if cx < target {
-            target = cx;
-        } else if cx + menu::APP_CARD_W > target + viewport_along {
-            target = cx + menu::APP_CARD_W - viewport_along;
+        if along < target {
+            target = along;
+        } else if along + along_len > target + viewport_along {
+            target = along + along_len - viewport_along;
         }
-        let max_scroll = menu::app_search_strip_max_scroll(m.filtered.len(), viewport_along);
+        let max_scroll =
+            menu::app_search_max_scroll(m.filtered.len(), m.panel_w, m.panel_h, m.is_vertical);
         m.scroll_target = target.clamp(0.0, max_scroll);
-        m.highlight_target = cx;
+        let (ox, oy) = menu::app_search_card_offset(index, m.panel_w, m.is_vertical);
+        m.highlight_target = ox;
+        m.highlight_target_y = oy;
         self.request_redraw(qh);
     }
 
@@ -188,9 +198,16 @@ impl App {
     pub(super) fn draw_app_search_mode(&mut self, qh: &QueueHandle<Self>) {
         let scale = self.output_scale.max(1) as f32;
         let transparency = self.dock.config.settings.transparency;
+        // ----- con las transiciones apagadas el strip no funde: va directo a 1.0 -----
+        let smooth = self.dock.config.settings.smooth_transitions;
         // ----- la banda marca el modo: launcher y ventanas son la misma lista y se
         // distinguen sólo por la pestaña encendida -----
         let tabs = self.current_overlay().map(OverlayMode::tab_index);
+        // ----- el reparto (dock arriba, panel abajo) se calcula ANTES de tomar
+        // prestado el modo: `overlay_layout` necesita `&self` entero -----
+        let Some(layout) = self.overlay_layout() else {
+            return;
+        };
         let Some(m) = self.app_search_mode.as_mut() else {
             return;
         };
@@ -203,11 +220,6 @@ impl App {
             return;
         }
 
-        let effective_hovered = m.hovered.or(if m.filtered.is_empty() {
-            None
-        } else {
-            Some(menu::HitTarget::AppEntry(m.selected))
-        });
         let args = menu_render::DrawArgs {
             screen: menu::MenuScreen::AddApp,
             controls: &m.controls,
@@ -220,7 +232,9 @@ impl App {
             wallpapers: &[],
             wallpaper_hovered: None,
             wallpaper_scroll_x: m.scroll_x,
-            hovered: effective_hovered,
+            // ----- las tarjetas no usan el hover del args: el resaltado y el color
+            // de la etiqueta los decide la pastilla (ver `app_search_hot_card`). -----
+            hovered: None,
             render_scale: scale,
             available_fonts: &[],
             open_dropdown: menu::OpenDropdown::None,
@@ -235,58 +249,29 @@ impl App {
             overlay_tabs: tabs,
             volume_rows: &[],
             volume_devices: &[],
+            slide_offset: menu::overlay_slide_offset(m.slide_dir, m.anim),
+            body_opacity: anim_opacity(transparency, eased),
         };
         let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-        if eased >= 0.999 {
-            menu_render::draw_app_search(
-                &mut pixmap,
-                &mut self.icon_cache,
-                &mut self.text_cache,
-                &args,
-                m.highlight_x,
-                m.content_anim,
-            );
-        } else {
-            let mut content = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-            menu_render::draw_app_search(
-                &mut content,
-                &mut self.icon_cache,
-                &mut self.text_cache,
-                &args,
-                m.highlight_x,
-                m.content_anim,
-            );
-            let paint = tiny_skia::PixmapPaint {
-                opacity: anim_opacity(transparency, eased),
-                ..Default::default()
-            };
-            pixmap.draw_pixmap(
-                0,
-                0,
-                content.as_ref(),
-                &paint,
-                tiny_skia::Transform::identity(),
-                None,
-            );
-        }
-
-        let stride = width * 4;
-        let (buffer, canvas) = self
-            .pool
-            .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
-            .expect("failed to create shm buffer");
-        bgra_from_rgba(pixmap.data(), canvas);
-
-        let surface = self.layer.wl_surface();
-        surface.set_buffer_scale(self.output_scale.max(1));
-        buffer.attach_to(surface).expect("failed to attach buffer");
-        surface.damage_buffer(0, 0, width, height);
-        surface.frame(qh, surface.clone());
-        self.awaiting_frame = true;
-        surface.commit();
+        menu_render::draw_app_search(
+            &mut pixmap,
+            &mut self.icon_cache,
+            &mut self.text_cache,
+            &args,
+            (m.highlight_x, m.highlight_y),
+            if smooth { m.content_anim } else { 1.0 },
+        );
+        // ----- el panel ya trae su propio fundido en el cuerpo; la superficie se
+        // compone opaca, con el dock nítido arriba -----
+        self.show_panel_surface(qh, &pixmap, layout, 1.0);
     }
 
     pub(super) fn tick_app_search_frame(&mut self, qh: &QueueHandle<Self>) {
+        // ----- con las transiciones apagadas nada de acá adentro se anima: el
+        // scroll, el resaltado y el fundido del strip saltan directo al valor
+        // final, así cada interacción cuesta UN frame en vez de ~8 (el lerp del
+        // resaltado es el que más se paga, porque sigue al puntero) -----
+        let smooth = self.dock.config.settings.smooth_transitions;
         let Some(m) = self.app_search_mode.as_mut() else {
             return;
         };
@@ -300,7 +285,7 @@ impl App {
             false
         };
         let scroll_delta = m.scroll_target - m.scroll_x;
-        let scroll_animating = if scroll_delta.abs() > 0.5 {
+        let scroll_animating = if smooth && scroll_delta.abs() > 0.5 {
             m.scroll_x += scroll_delta * 0.28;
             true
         } else {
@@ -308,17 +293,22 @@ impl App {
             false
         };
         let highlight_delta = m.highlight_target - m.highlight_x;
-        let highlight_animating = if highlight_delta.abs() > 0.5 {
-            m.highlight_x += highlight_delta * 0.35;
-            true
-        } else {
-            m.highlight_x = m.highlight_target;
-            false
-        };
-        let content_animating = if m.content_anim < 1.0 {
+        let highlight_delta_y = m.highlight_target_y - m.highlight_y;
+        let highlight_animating =
+            if smooth && (highlight_delta.abs() > 0.5 || highlight_delta_y.abs() > 0.5) {
+                m.highlight_x += highlight_delta * 0.35;
+                m.highlight_y += highlight_delta_y * 0.35;
+                true
+            } else {
+                m.highlight_x = m.highlight_target;
+                m.highlight_y = m.highlight_target_y;
+                false
+            };
+        let content_animating = if smooth && m.content_anim < 1.0 {
             m.content_anim = (m.content_anim + 0.16).min(1.0);
             true
         } else {
+            m.content_anim = 1.0;
             false
         };
         let closing = m.closing;
@@ -328,8 +318,7 @@ impl App {
             self.app_search_mode = None;
             self.layer
                 .set_keyboard_interactivity(KeyboardInteractivity::None);
-            let (w, h) = self.dock.base_size();
-            self.layer.set_size(w, h);
+            self.restore_dock_size();
             self.draw(qh);
             trim_heap();
             return;
@@ -366,39 +355,42 @@ impl App {
         event: &PointerEvent,
         qh: &QueueHandle<Self>,
     ) {
+        // ----- las coordenadas del puntero son de la SUPERFICIE, y el panel ya no
+        // arranca en el origen cuando el dock se dibuja arriba -----
+        let (px, py) = self.panel_local(event.position.0, event.position.1);
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                let (x, y) = event.position;
+                let (x, y) = (px, py);
                 if let Some(m) = self.app_search_mode.as_mut() {
                     let strip_hit = menu::app_search_strip_hit_test(
                         m.filtered.len(),
                         m.panel_w,
-                        m.panel_h,
                         m.is_vertical,
                         m.scroll_x,
                         x as f32,
                         y as f32,
                     );
-                    m.hovered = strip_hit.map(menu::HitTarget::AppEntry);
                     if let Some(i) = strip_hit {
-                        m.highlight_target = menu::app_search_card_along(i);
+                        // ----- pasar el mouse por una tarjeta también la elige: si no,
+                        // Enter lanzaba la 1ª (la seleccionada por teclado) mientras la
+                        // pastilla marcaba la que estabas mirando. Es lo que hace rofi, y
+                        // es lo que deja a la pastilla como única fuente de verdad.
+                        // Ojo: al SALIR de las tarjetas no se toca nada, así que el
+                        // resaltado se queda donde estaba en vez de saltar a la 1ª. -----
+                        m.selected = i;
+                        let (ox, oy) = menu::app_search_card_offset(i, m.panel_w, m.is_vertical);
+                        m.highlight_target = ox;
+                        m.highlight_target_y = oy;
                     }
                 }
                 self.request_redraw(qh);
             }
-            PointerEventKind::Leave { .. } => {
-                if let Some(m) = self.app_search_mode.as_mut() {
-                    m.hovered = None;
-                }
-                self.request_redraw(qh);
-            }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
-                let (x, y) = event.position;
+                let (x, y) = (px, py);
                 let hit = self.app_search_mode.as_ref().and_then(|m| {
                     menu::app_search_strip_hit_test(
                         m.filtered.len(),
                         m.panel_w,
-                        m.panel_h,
                         m.is_vertical,
                         m.scroll_x,
                         x as f32,
@@ -423,10 +415,12 @@ impl App {
                     vertical.absolute
                 };
                 if let Some(m) = self.app_search_mode.as_mut() {
-                    let viewport_along =
-                        menu::app_search_viewport_along(m.panel_w, m.panel_h, m.is_vertical);
-                    let max_scroll =
-                        menu::app_search_strip_max_scroll(m.filtered.len(), viewport_along);
+                    let max_scroll = menu::app_search_max_scroll(
+                        m.filtered.len(),
+                        m.panel_w,
+                        m.panel_h,
+                        m.is_vertical,
+                    );
                     m.scroll_target = (m.scroll_target + delta as f32).clamp(0.0, max_scroll);
                 }
                 self.request_redraw(qh);
@@ -450,33 +444,26 @@ impl App {
                 self.launch_search_result(selected, qh);
                 return;
             }
-            Keysym::Right | Keysym::Down => {
-                let next = self
-                    .app_search_mode
-                    .as_ref()
-                    .filter(|m| !m.filtered.is_empty())
-                    .map(|m| (m.selected + 1).min(m.filtered.len() - 1));
-                if let Some(next) = next {
-                    if let Some(m) = self.app_search_mode.as_mut() {
-                        m.selected = next;
-                        m.hovered = None;
-                    }
-                    self.scroll_search_into_view(next, qh);
-                }
+            // ----- ←/→ siguen el orden de lectura (la fila) y ↑/↓ saltan a la
+            // otra fila de la grilla: con dos filas, ±1 arriba/abajo repetiría el
+            // vecino de al lado. En el panel vertical hay una sola columna. -----
+            Keysym::Right | Keysym::Left => {
+                let delta = if event.keysym == Keysym::Right { 1 } else { -1 };
+                self.step_app_search(delta, qh);
                 return;
             }
-            Keysym::Left | Keysym::Up => {
-                let next = self
+            Keysym::Down | Keysym::Up => {
+                let cols = self
                     .app_search_mode
                     .as_ref()
-                    .map(|m| m.selected.saturating_sub(1));
-                if let Some(next) = next {
-                    if let Some(m) = self.app_search_mode.as_mut() {
-                        m.selected = next;
-                        m.hovered = None;
-                    }
-                    self.scroll_search_into_view(next, qh);
-                }
+                    .map(|m| menu::app_search_row_step(m.panel_w, m.is_vertical))
+                    .unwrap_or(1);
+                let delta = if event.keysym == Keysym::Down {
+                    cols
+                } else {
+                    -cols
+                };
+                self.step_app_search(delta, qh);
                 return;
             }
             _ => {}
@@ -493,5 +480,23 @@ impl App {
             }
         }
         self.refresh_app_search(qh);
+    }
+
+    /// Mueve el resaltado `delta` tarjetas, saturado en los extremos (no da la
+    /// vuelta) y scrolleando para que quede visible.
+    fn step_app_search(&mut self, delta: isize, qh: &QueueHandle<Self>) {
+        let next = self.app_search_mode.as_ref().and_then(|m| {
+            if m.filtered.is_empty() {
+                return None;
+            }
+            let last = m.filtered.len() as isize - 1;
+            Some((m.selected as isize + delta).clamp(0, last) as usize)
+        });
+        if let Some(next) = next {
+            if let Some(m) = self.app_search_mode.as_mut() {
+                m.selected = next;
+            }
+            self.scroll_search_into_view(next, qh);
+        }
     }
 }

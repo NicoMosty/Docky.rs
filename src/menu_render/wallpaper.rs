@@ -114,7 +114,7 @@ pub(crate) fn draw_wallpaper_filmstrip_horizontal(
                 None,
             );
 
-            let path = rounded_rect_path(tx, ty, tw, th, 11.0 * s);
+            let path = rounded_rect_path(tx, ty, tw, th, crate::menu::OVERLAY_RADIUS * s);
             let mut ring = Paint::default();
             ring.set_color_rgba8(
                 if hot { acc.0 } else { 255 },
@@ -129,7 +129,15 @@ pub(crate) fn draw_wallpaper_filmstrip_horizontal(
             };
             pixmap.stroke_path(&path, &ring, &stroke, Transform::identity(), None);
         } else {
-            fill_rrect(pixmap, tx, ty, tw, th, 5.0 * s, (255, 255, 255, 18));
+            fill_rrect(
+                pixmap,
+                tx,
+                ty,
+                tw,
+                th,
+                crate::menu::OVERLAY_RADIUS * s,
+                (255, 255, 255, 18),
+            );
         }
     }
 }
@@ -236,7 +244,7 @@ pub(crate) fn draw_wallpaper_filmstrip_vertical(
                 None,
             );
 
-            let path = rounded_rect_path(tx, ty, tw, th, 11.0 * s);
+            let path = rounded_rect_path(tx, ty, tw, th, crate::menu::OVERLAY_RADIUS * s);
             let mut ring = Paint::default();
             ring.set_color_rgba8(
                 if hot { acc.0 } else { 255 },

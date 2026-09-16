@@ -53,6 +53,56 @@ pub(super) fn panel_layout(
     }
 }
 
+/// Dibuja el dock en `dst`, en la posición `at` (unidades lógicas). Va en su propio
+/// pixmap porque `render::draw` pinta siempre desde (0,0) y la superficie compartida
+/// puede ser más ancha y más alta que él. Es lo que deja el dock a la vista arriba
+/// mientras el panel se abre debajo.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_dock_into(
+    dst: &mut tiny_skia::Pixmap,
+    dock: &crate::dock::Dock,
+    icon_cache: &mut IconCache,
+    text_cache: &mut TextCache,
+    widgets: &crate::widgets::WidgetSnapshot,
+    tray: &crate::tray::TrayState,
+    marquee: &mut crate::render::MarqueeState,
+    at: (f32, f32),
+    scale: f32,
+) {
+    let (dock_w, dock_h) = dock.base_size();
+    let dw = (dock_w as f32 * scale).round() as i32;
+    let dh = (dock_h as f32 * scale).round() as i32;
+    if dw <= 0 || dh <= 0 {
+        return;
+    }
+    let Some(mut dock_pixmap) = tiny_skia::Pixmap::new(dw as u32, dh as u32) else {
+        return;
+    };
+    {
+        let tray_icons = tray.lock().unwrap();
+        let _ = crate::render::draw(
+            &mut dock_pixmap,
+            dock,
+            icon_cache,
+            text_cache,
+            widgets,
+            &tray_icons,
+            marquee,
+            false,
+            false,
+            scale,
+        );
+    }
+    dst.draw_pixmap(
+        (at.0 * scale).round() as i32,
+        (at.1 * scale).round() as i32,
+        dock_pixmap.as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        tiny_skia::Transform::identity(),
+        None,
+    );
+}
+
 impl App {
     pub(crate) fn toggle_dock_menu(&mut self, qh: &QueueHandle<Self>) {
         if self.dock_menu_mode.is_some() {
@@ -62,20 +112,115 @@ impl App {
         }
     }
 
-    /// Coordenadas de la superficie -> coordenadas del panel. El panel ya no está
-    /// en el origen cuando el dock se dibuja arriba, y sin esta resta los
-    /// controles quedan corridos justo esa distancia (y por lo tanto muertos).
-    pub(super) fn panel_local(&self, x: f64, y: f64) -> (f64, f64) {
-        let Some(dm) = self.dock_menu_mode.as_ref() else {
-            return (x, y);
-        };
-        let layout = panel_layout(
+    /// Tamaño lógico del panel del modo que comparte la superficie con el dock
+    /// (el panel de ajustes y los tres del overlay).
+    pub(super) fn overlay_panel_size(&self) -> Option<(f32, f32)> {
+        if let Some(m) = self.app_search_mode.as_ref() {
+            Some((m.panel_w, m.panel_h))
+        } else if let Some(m) = self.clipboard_mode.as_ref() {
+            Some((m.panel_w, m.panel_h))
+        } else if let Some(m) = self.wallpaper_mode.as_ref() {
+            Some((m.panel_w, m.panel_h))
+        } else {
+            self.dock_menu_mode.as_ref().map(|m| (m.panel_w, m.panel_h))
+        }
+    }
+
+    /// Reparto de la superficie compartida del modo abierto: con el dock arriba el
+    /// panel va debajo (ver `panel_layout`), así el dock queda a la vista. `None` si
+    /// no hay ningún panel abierto.
+    pub(super) fn overlay_layout(&self) -> Option<PanelLayout> {
+        let (w, h) = self.overlay_panel_size()?;
+        Some(panel_layout(
             &self.dock.config.settings,
             self.dock.base_size(),
-            dm.panel_w,
-            dm.panel_h,
+            w,
+            h,
+        ))
+    }
+
+    /// Coordenadas de la superficie -> coordenadas del panel. El panel ya no está en
+    /// el origen cuando el dock se dibuja arriba, y sin esta resta los controles de
+    /// TODOS los paneles que comparten la superficie quedan corridos justo esa
+    /// distancia (y por lo tanto muertos).
+    pub(super) fn panel_local(&self, x: f64, y: f64) -> (f64, f64) {
+        match self.overlay_layout() {
+            Some(l) => (x - l.panel_at.0 as f64, y - l.panel_at.1 as f64),
+            None => (x, y),
+        }
+    }
+
+    /// Muestra un panel ya dibujado en la superficie compartida: el dock arriba (si
+    /// el panel va debajo) y el panel en su offset. Un solo camino para el panel de
+    /// ajustes y los tres del overlay, así el tamaño de la superficie, la posición
+    /// del panel y el `attach` no se pueden desincronizar entre sí.
+    pub(super) fn show_panel_surface(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        panel: &tiny_skia::Pixmap,
+        layout: PanelLayout,
+        opacity: f32,
+    ) {
+        let scale = self.output_scale.max(1) as f32;
+        let width = (layout.surf.0 * scale).round() as i32;
+        let height = (layout.surf.1 * scale).round() as i32;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        let Some(mut pixmap) = tiny_skia::Pixmap::new(width as u32, height as u32) else {
+            return;
+        };
+        if let Some((dock_x, dock_y)) = layout.dock_at {
+            draw_dock_into(
+                &mut pixmap,
+                &self.dock,
+                &mut self.icon_cache,
+                &mut self.text_cache,
+                &self.widgets,
+                &self.tray,
+                &mut self.marquee,
+                (dock_x, dock_y),
+                scale,
+            );
+        }
+        pixmap.draw_pixmap(
+            (layout.panel_at.0 * scale).round() as i32,
+            (layout.panel_at.1 * scale).round() as i32,
+            panel.as_ref(),
+            &tiny_skia::PixmapPaint {
+                opacity,
+                ..Default::default()
+            },
+            tiny_skia::Transform::identity(),
+            None,
         );
-        (x - layout.panel_at.0 as f64, y - layout.panel_at.1 as f64)
+        let stride = width * 4;
+        let Ok((buffer, canvas)) =
+            self.pool
+                .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
+        else {
+            log::error!("no pude crear el buffer del panel ({width}x{height})");
+            return;
+        };
+        bgra_from_rgba(pixmap.data(), canvas);
+        let surface = self.layer.wl_surface();
+        surface.set_buffer_scale(self.output_scale.max(1));
+        if buffer.attach_to(surface).is_err() {
+            return;
+        }
+        surface.damage_buffer(0, 0, width, height);
+        surface.frame(qh, surface.clone());
+        self.awaiting_frame = true;
+        surface.commit();
+    }
+
+    /// Devuelve la superficie compartida al tamaño del dock. Anota `applied_size`
+    /// porque `sync_autohide_surfaces` nunca lo restaura (ver `apply_panel_size`):
+    /// sin la anotación el dock queda dibujado dentro del rectángulo del panel.
+    pub(super) fn restore_dock_size(&mut self) {
+        let (w, h) = self.dock.base_size();
+        self.layer.set_size(w, h);
+        self.applied_size = Some((w, h));
     }
 
     /// Aplicar a la superficie el tamaño que necesita el panel de ajustes,
@@ -144,6 +289,9 @@ impl App {
         // Es el mismo modo que usan app_search, clipboard y el resto. -----
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+        // ----- el fundido de apertura: con las transiciones apagadas (o el panel
+        // opaco) arranca terminado, así se dibuja UNA vez -----
+        let anim = self.initial_panel_anim();
         self.dock_menu_mode = Some(DockMenuMode {
             category,
             controls,
@@ -151,7 +299,7 @@ impl App {
             dragging_slider: None,
             held_stepper: None,
             dragging_widget: None,
-            anim: 0.0,
+            anim,
             target_anim: 1.0,
             closing: false,
             panel_w,
@@ -248,10 +396,14 @@ impl App {
         let panel_w = self.dock_menu_mode.as_ref().map(|dm| dm.panel_w);
         if let Some(dm) = self.dock_menu_mode.as_mut() {
             if category != dm.category {
-                dm.slide_dir = (menu::category_order_index(category)
+                let dir = (menu::category_order_index(category)
                     - menu::category_order_index(dm.category))
                 .signum() as f32;
-                dm.slide_anim = 0.0;
+                // ----- con las transiciones apagadas no se desliza: el panel se
+                // redibuja ya terminado (offset 0) -----
+                let smooth = self.dock.config.settings.smooth_transitions;
+                dm.slide_dir = if smooth { dir } else { 0.0 };
+                dm.slide_anim = if smooth { 0.0 } else { 1.0 };
                 dm.panel_h = menu::dock_menu_content_height(category, &self.dock.config.settings);
             }
             dm.category = category;
@@ -285,48 +437,10 @@ impl App {
             dm.panel_w,
             dm.panel_h,
         );
-        let width = (layout.surf.0 * scale).round() as i32;
-        let height = (layout.surf.1 * scale).round() as i32;
         let panel_w_px = (dm.panel_w * scale).round() as i32;
         let panel_h_px = (dm.panel_h * scale).round() as i32;
-        if width <= 0 || height <= 0 || panel_w_px <= 0 || panel_h_px <= 0 {
+        if panel_w_px <= 0 || panel_h_px <= 0 {
             return;
-        }
-        let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-        // ----- el dock, arriba y a opacidad plena: es lo que se mira mientras se
-        // mueven los controles. Se dibuja en su propio pixmap porque `render::draw`
-        // pinta siempre desde (0,0) y la superficie puede ser más ancha que él. -----
-        if let Some((dock_x, dock_y)) = layout.dock_at {
-            let (dock_w, dock_h) = self.dock.base_size();
-            let dock_w_px = (dock_w as f32 * scale).round() as i32;
-            let dock_h_px = (dock_h as f32 * scale).round() as i32;
-            if dock_w_px > 0 && dock_h_px > 0 {
-                let mut dock_pixmap =
-                    tiny_skia::Pixmap::new(dock_w_px as u32, dock_h_px as u32).unwrap();
-                {
-                    let tray_icons = self.tray.lock().unwrap();
-                    let _ = render::draw(
-                        &mut dock_pixmap,
-                        &self.dock,
-                        &mut self.icon_cache,
-                        &mut self.text_cache,
-                        &self.widgets,
-                        &tray_icons,
-                        &mut self.marquee,
-                        false,
-                        false,
-                        scale,
-                    );
-                }
-                pixmap.draw_pixmap(
-                    (dock_x * scale).round() as i32,
-                    (dock_y * scale).round() as i32,
-                    dock_pixmap.as_ref(),
-                    &tiny_skia::PixmapPaint::default(),
-                    tiny_skia::Transform::identity(),
-                    None,
-                );
-            }
         }
 
         let slide_t = dm.slide_anim.clamp(0.0, 1.0);
@@ -356,8 +470,8 @@ impl App {
             custom_name_focused: dm.custom_name_focused,
             custom_panel_blend: dm.custom_panel_blend,
         };
-        // ----- el panel se compone en su offset: el fade de apertura ya no toca
-        // al dock (que tiene que verse nítido desde el primer frame) -----
+        // ----- el panel se dibuja aparte y `show_panel_surface` lo pega en su
+        // offset, con el dock nítido arriba: el fade de apertura no toca al dock -----
         let mut content = tiny_skia::Pixmap::new(panel_w_px as u32, panel_h_px as u32).unwrap();
         menu_render::draw_dock_menu(
             &mut content,
@@ -370,33 +484,7 @@ impl App {
         } else {
             anim_opacity(transparency, eased)
         };
-        let paint = tiny_skia::PixmapPaint {
-            opacity,
-            ..Default::default()
-        };
-        pixmap.draw_pixmap(
-            (layout.panel_at.0 * scale).round() as i32,
-            (layout.panel_at.1 * scale).round() as i32,
-            content.as_ref(),
-            &paint,
-            tiny_skia::Transform::identity(),
-            None,
-        );
-
-        let stride = width * 4;
-        let (buffer, canvas) = self
-            .pool
-            .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
-            .expect("failed to create shm buffer");
-        bgra_from_rgba(pixmap.data(), canvas);
-
-        let surface = self.layer.wl_surface();
-        surface.set_buffer_scale(self.output_scale.max(1));
-        buffer.attach_to(surface).expect("failed to attach buffer");
-        surface.damage_buffer(0, 0, width, height);
-        surface.frame(qh, surface.clone());
-        self.awaiting_frame = true;
-        surface.commit();
+        self.show_panel_surface(qh, &content, layout, opacity);
     }
 
     pub(super) fn tick_dock_menu_frame(&mut self, qh: &QueueHandle<Self>) {
@@ -714,6 +802,38 @@ mod panel_layout_tests {
                 dx + dock_w as f32 <= l.surf.0 + 0.01,
                 "el dock se sale de la superficie"
             );
+        }
+    }
+
+    /// El contrato vertical del que dependen los CUATRO paneles que comparten la
+    /// superficie (ajustes, launcher/ventanas, portapapeles y fondos): con el dock
+    /// arriba el panel va debajo, y el offset del panel es el alto del dock más la
+    /// separación. El dibujo y los hit tests salen del MISMO reparto
+    /// (`overlay_layout` / `panel_local`), así que si esto se rompe el panel se ve en
+    /// un lado y los clicks responden en otro.
+    #[test]
+    fn con_el_dock_arriba_el_panel_va_debajo() {
+        let s = settings();
+        let l = panel_layout(&s, (603, 26), 640.0, 460.0);
+        assert_eq!(
+            l.surf,
+            (640.0, 26.0 + PANEL_GAP + 460.0),
+            "la superficie es [dock][gap][panel]"
+        );
+        assert_eq!(l.dock_at.map(|(_, y)| y), Some(0.0), "el dock va arriba");
+        assert_eq!(
+            l.panel_at.1,
+            26.0 + PANEL_GAP,
+            "el panel va debajo del dock"
+        );
+        // ----- en los otros bordes el panel sigue ocupando todo, sin dock arriba -----
+        for edge in [DockEdge::Bottom, DockEdge::Left, DockEdge::Right] {
+            let mut s2 = settings();
+            s2.dock_edge = edge;
+            let l2 = panel_layout(&s2, (603, 26), 640.0, 460.0);
+            assert_eq!(l2.surf, (640.0, 460.0), "{edge:?}: sigue ocupando todo");
+            assert_eq!(l2.dock_at, None, "{edge:?}: no hay dock arriba");
+            assert_eq!(l2.panel_at, (0.0, 0.0), "{edge:?}: sin offset");
         }
     }
 }

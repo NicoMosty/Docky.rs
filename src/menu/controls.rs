@@ -11,10 +11,11 @@ pub(super) const LAYOUT_SETTINGS: [SettingId; 8] = [
     SettingId::AutohideDelay,
 ];
 
-pub(super) const APPEARANCE_SETTINGS: [SettingId; 12] = [
+pub(super) const APPEARANCE_SETTINGS: [SettingId; 13] = [
     SettingId::BorderWidth,
     SettingId::MenuCornerRadius,
     SettingId::MenuBorderWidth,
+    SettingId::SmoothTransitions,
     SettingId::Transparency,
     SettingId::BlurEnabled,
     SettingId::BlurPasses,
