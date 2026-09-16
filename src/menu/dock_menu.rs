@@ -78,6 +78,10 @@ pub fn build_category_controls(category: MenuCategory, settings: &DockSettings) 
             });
             y += SCHEME_DROPDOWN_H + ROW_GAP * 2.0;
 
+            push_setting_row(&mut controls, &mut y, SettingId::MatugenApps);
+            push_setting_row(&mut controls, &mut y, SettingId::MatugenLight);
+            y += ROW_GAP;
+
             controls.push(Control {
                 kind: ControlKind::Section("Color Theme"),
                 y,

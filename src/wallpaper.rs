@@ -238,7 +238,31 @@ fn apply_with_awww(path: &Path) {
         .status();
 }
 
-pub fn apply_wallpaper(path: PathBuf) {
+/// Corre el matugen del usuario (`~/.config/matugen/config.toml` → sus templates:
+/// kitty, waybar, rofi, niri, gtk, …) con el esquema y el modo del dock. Bloquea
+/// (1-2 s): el que lo llame decide el hilo.
+pub fn run_matugen(path: &Path, scheme: &str, mode: &str) -> bool {
+    std::process::Command::new("matugen")
+        .args([
+            "image",
+            &path.to_string_lossy(),
+            "--source-color-index",
+            "0",
+            "--type",
+            scheme,
+            "--mode",
+            mode,
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Aplica el fondo. Con `matugen` (esquema, modo) corre el matugen del usuario
+/// **después** de aplicar: con swaybg se espera al `wallpaper-change.service`
+/// (`start` bloquea el oneshot), así el esquema del dock gana sobre el `type`
+/// del config.toml que ese service ya corrió.
+pub fn apply_wallpaper(path: PathBuf, matugen: Option<(String, String)>) {
     std::thread::spawn(move || {
         let programa = wallpaper_program();
         let usa_swaybg =
@@ -252,6 +276,13 @@ pub fn apply_wallpaper(path: PathBuf) {
             apply_with_swaybg(&path);
         } else {
             apply_with_awww(&path);
+        }
+        if let Some((scheme, mode)) = matugen {
+            log::debug!(
+                "wallpaper: matugen apps ({scheme}/{mode}) sobre {}",
+                path.display()
+            );
+            run_matugen(&path, &scheme, &mode);
         }
     });
 }
@@ -289,7 +320,14 @@ pub struct ColorScheme {
     pub outline: (u8, u8, u8),
 }
 
-pub fn extract_color_scheme(path: &std::path::Path, scheme: &str) -> Option<ColorScheme> {
+/// Roles de matugen para el dock. `mode` es `"dark"`/`"light"`: matugen los
+/// publica en `colors.<role>.<mode>.color`, así que la clave del JSON sigue al
+/// `--mode`.
+pub fn extract_color_scheme(
+    path: &std::path::Path,
+    scheme: &str,
+    mode: &str,
+) -> Option<ColorScheme> {
     let output = std::process::Command::new("matugen")
         .args([
             "--type",
@@ -301,7 +339,7 @@ pub fn extract_color_scheme(path: &std::path::Path, scheme: &str) -> Option<Colo
             "--json",
             "hex",
             "--mode",
-            "dark",
+            mode,
         ])
         .output()
         .ok()?;
@@ -310,7 +348,7 @@ pub fn extract_color_scheme(path: &std::path::Path, scheme: &str) -> Option<Colo
     }
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     let role = |name: &str| -> Option<(u8, u8, u8)> {
-        hex_to_rgb(json["colors"][name]["dark"]["color"].as_str()?)
+        hex_to_rgb(json["colors"][name][mode]["color"].as_str()?)
     };
     Some(ColorScheme {
         primary: role("primary")?,

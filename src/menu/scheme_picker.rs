@@ -10,6 +10,7 @@ pub const MATUGEN_SCHEMES: &[(&str, &str)] = &[
     ("scheme-monochrome", "Monochrome"),
     ("scheme-neutral", "Neutral"),
     ("scheme-rainbow", "Rainbow"),
+    ("scheme-smart", "Smart"),
 ];
 
 pub const SCHEME_DROPDOWN_H: f32 = 32.0;

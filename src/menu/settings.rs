@@ -22,6 +22,11 @@ pub enum SettingId {
     /// Deslizamiento/fundido de los paneles (overlay y ajustes). Ver
     /// `DockSettings::smooth_transitions`.
     SmoothTransitions,
+    /// Aplica el matugen del usuario a las apps (kitty, waybar, rofi, …) con el
+    /// "Matugen Style" del dock. Ver `DockSettings::matugen_apps`.
+    MatugenApps,
+    /// Modo light para matugen (dock y apps). Ver `DockSettings::matugen_light`.
+    MatugenLight,
     Transparency,
     BlurEnabled,
     BlurPasses,
@@ -54,6 +59,8 @@ impl SettingId {
             SettingId::MenuCornerRadius => "Menu Roundness",
             SettingId::MenuBorderWidth => "Menu Border",
             SettingId::SmoothTransitions => "Smooth Transitions",
+            SettingId::MatugenApps => "Matugen Apps",
+            SettingId::MatugenLight => "Light Mode",
             SettingId::Transparency => "Transparency",
             SettingId::BlurEnabled => "Blur",
             SettingId::BlurPasses => "Blur Passes",
@@ -100,7 +107,9 @@ impl SettingId {
             SettingId::BlurEnabled | SettingId::BlurXray | SettingId::MediaSmoothScroll => {
                 (0.0, 1.0, 1.0)
             }
-            SettingId::SmoothTransitions => (0.0, 1.0, 1.0),
+            SettingId::SmoothTransitions | SettingId::MatugenApps | SettingId::MatugenLight => {
+                (0.0, 1.0, 1.0)
+            }
             SettingId::Autohide => (0.0, 1.0, 1.0),
             SettingId::MediaWidthScale => (0.3, 2.0, 0.01),
             SettingId::AutohideDelay => (100.0, 2000.0, 50.0),
@@ -115,6 +124,8 @@ impl SettingId {
                 | SettingId::MediaSmoothScroll
                 | SettingId::Autohide
                 | SettingId::SmoothTransitions
+                | SettingId::MatugenApps
+                | SettingId::MatugenLight
                 | SettingId::WidgetClockFormat
         )
     }
@@ -149,6 +160,8 @@ impl SettingId {
             SettingId::MenuCornerRadius => s.menu_corner_radius,
             SettingId::MenuBorderWidth => s.menu_border_width,
             SettingId::SmoothTransitions => bool_f(s.smooth_transitions),
+            SettingId::MatugenApps => bool_f(s.matugen_apps),
+            SettingId::MatugenLight => bool_f(s.matugen_light),
             SettingId::Transparency => s.transparency,
             SettingId::BlurEnabled => bool_f(s.blur_enabled),
             SettingId::BlurPasses => s.blur_passes as f32,
@@ -203,6 +216,8 @@ impl SettingId {
             SettingId::Transparency => s.transparency = clamped,
             SettingId::BlurEnabled => s.blur_enabled = clamped >= 0.5,
             SettingId::SmoothTransitions => s.smooth_transitions = clamped >= 0.5,
+            SettingId::MatugenApps => s.matugen_apps = clamped >= 0.5,
+            SettingId::MatugenLight => s.matugen_light = clamped >= 0.5,
             SettingId::BlurPasses => s.blur_passes = clamped.round() as i32,
             SettingId::BlurSize => s.blur_size = clamped.round() as i32,
             SettingId::BlurVibrancy => s.blur_vibrancy = clamped,
@@ -250,6 +265,8 @@ impl SettingId {
             | SettingId::MediaSmoothScroll
             | SettingId::Autohide
             | SettingId::SmoothTransitions
+            | SettingId::MatugenApps
+            | SettingId::MatugenLight
             | SettingId::WidgetClockFormat => String::new(),
         }
     }
@@ -380,6 +397,58 @@ mod menu_border_tests {
                 crate::menu::ControlKind::Toggle(SettingId::SmoothTransitions)
             )),
             "tiene que estar en el panel de Appearance"
+        );
+    }
+
+    /// La opción de matugen para las apps vive en Colors, es toggle y no pide
+    /// relayout. Apagada por default: prenderla reescribe configs de otras apps.
+    #[test]
+    fn matugen_apps_esta_en_colors_y_arranca_apagado() {
+        assert!(SettingId::MatugenApps.is_toggle());
+        assert!(!SettingId::MatugenApps.affects_layout());
+        let mut s = DockSettings::default();
+        assert!(!s.matugen_apps);
+        assert_eq!(SettingId::MatugenApps.get(&s), 0.0);
+        SettingId::MatugenApps.toggle(&mut s);
+        assert!(s.matugen_apps);
+        assert_eq!(SettingId::MatugenApps.get(&s), 1.0);
+        assert!(SettingId::MatugenApps.display_value(&s).is_empty());
+        let controls = crate::menu::build_category_controls(
+            crate::menu::MenuCategory::Colors,
+            &DockSettings::default(),
+        );
+        assert!(
+            controls.iter().any(|c| matches!(
+                c.kind,
+                crate::menu::ControlKind::Toggle(SettingId::MatugenApps)
+            )),
+            "tiene que estar en el panel de Colors"
+        );
+    }
+
+    /// El modo light de matugen: toggle en Colors, apagado por default, y
+    /// `matugen_mode()` traduce el bool a lo que espera el CLI.
+    #[test]
+    fn matugen_light_esta_en_colors_y_es_toggle() {
+        assert!(SettingId::MatugenLight.is_toggle());
+        assert!(!SettingId::MatugenLight.affects_layout());
+        let mut s = DockSettings::default();
+        assert!(!s.matugen_light);
+        assert_eq!(s.matugen_mode(), "dark");
+        SettingId::MatugenLight.toggle(&mut s);
+        assert_eq!(SettingId::MatugenLight.get(&s), 1.0);
+        assert_eq!(s.matugen_mode(), "light");
+        assert!(SettingId::MatugenLight.display_value(&s).is_empty());
+        let controls = crate::menu::build_category_controls(
+            crate::menu::MenuCategory::Colors,
+            &DockSettings::default(),
+        );
+        assert!(
+            controls.iter().any(|c| matches!(
+                c.kind,
+                crate::menu::ControlKind::Toggle(SettingId::MatugenLight)
+            )),
+            "tiene que estar en el panel de Colors"
         );
     }
 

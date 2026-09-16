@@ -211,6 +211,7 @@ impl App {
                 let _ = std::process::Command::new(dir.join("sync-dolphin-theme.sh")).spawn();
                 let _ = std::process::Command::new(dir.join("sync-kitty-theme.sh")).spawn();
                 let _ = std::process::Command::new(dir.join("sync-p10k-theme.sh")).spawn();
+                self.apply_matugen_to_apps();
             }
             Some(index) if index < menu::THEME_PRESETS.len() => {
                 let Some(preset) = menu::THEME_PRESETS.get(index) else {
@@ -250,6 +251,7 @@ impl App {
                 let _ = std::process::Command::new(dir.join("sync-dolphin-theme.sh")).spawn();
                 let _ = std::process::Command::new(dir.join("sync-kitty-theme.sh")).spawn();
                 let _ = std::process::Command::new(dir.join("sync-p10k-theme.sh")).spawn();
+                self.apply_matugen_to_apps();
             }
             // ----- exact colors -----
             Some(index) => {
@@ -285,6 +287,7 @@ impl App {
                 let _ = std::process::Command::new(dir.join("sync-dolphin-theme.sh")).spawn();
                 let _ = std::process::Command::new(dir.join("sync-kitty-theme.sh")).spawn();
                 let _ = std::process::Command::new(dir.join("sync-p10k-theme.sh")).spawn();
+                self.apply_matugen_to_apps();
             }
         }
         self.request_redraw(qh);
@@ -299,6 +302,7 @@ impl App {
         if self.dock.config.settings.accent_from_wallpaper {
             self.sync_accent_from_last_wallpaper();
         }
+        self.apply_matugen_to_apps();
         self.request_redraw(qh);
     }
 

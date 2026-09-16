@@ -143,7 +143,7 @@ impl App {
             .and_then(|w| w.wallpapers.get(index))
             .map(|e| e.path.clone());
         if let Some(path) = &path {
-            wallpaper::apply_wallpaper(path.clone());
+            wallpaper::apply_wallpaper(path.clone(), self.apps_matugen());
             self.dock.config.settings.last_wallpaper = path.to_string_lossy().to_string();
             if self.dock.config.settings.accent_from_wallpaper {
                 self.sync_accent_from_last_wallpaper();
@@ -172,10 +172,15 @@ impl App {
         if path.is_empty() {
             return;
         }
-        let matugen_scheme = self.dock.config.settings.matugen_scheme.clone();
-        if let Some(scheme) =
-            wallpaper::extract_color_scheme(std::path::Path::new(&path), &matugen_scheme)
-        {
+        let (matugen_scheme, matugen_mode) = (
+            self.dock.config.settings.matugen_scheme.clone(),
+            self.dock.config.settings.matugen_mode(),
+        );
+        if let Some(scheme) = wallpaper::extract_color_scheme(
+            std::path::Path::new(&path),
+            &matugen_scheme,
+            matugen_mode,
+        ) {
             let s = &mut self.dock.config.settings;
             (s.accent_r, s.accent_g, s.accent_b) = scheme.primary;
             (s.accent2_r, s.accent2_g, s.accent2_b) = scheme.secondary;
@@ -185,6 +190,31 @@ impl App {
             (s.text_dim_r, s.text_dim_g, s.text_dim_b) = scheme.outline;
         }
         let _ = self.dock.config.save();
+    }
+
+    /// `(esquema, modo)` a aplicar a las apps, o `None` si el ajuste "Matugen
+    /// Apps" (Colors) está apagado.
+    pub(super) fn apps_matugen(&self) -> Option<(String, String)> {
+        let s = &self.dock.config.settings;
+        s.matugen_apps
+            .then(|| (s.matugen_scheme.clone(), s.matugen_mode().to_string()))
+    }
+
+    /// Aplica el matugen del usuario a las apps **ahora**, para los cambios que no
+    /// pasan por elegir fondo (Matugen Style, Color Theme). Fire-and-forget: matugen
+    /// tarda 1-2 s y no puede frenar el loop.
+    pub(super) fn apply_matugen_to_apps(&self) {
+        let Some((scheme, mode)) = self.apps_matugen() else {
+            return;
+        };
+        let path = std::path::PathBuf::from(&self.dock.config.settings.last_wallpaper);
+        if !path.is_file() {
+            return;
+        }
+        log::debug!("matugen apps: {scheme}/{mode} sobre {}", path.display());
+        std::thread::spawn(move || {
+            wallpaper::run_matugen(&path, &scheme, &mode);
+        });
     }
 
     pub(super) fn close_wallpaper_mode(&mut self, qh: &QueueHandle<Self>) {

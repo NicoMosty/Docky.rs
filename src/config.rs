@@ -290,6 +290,16 @@ pub struct DockSettings {
     pub custom_theme: bool,
     #[serde(default = "default_matugen_scheme")]
     pub matugen_scheme: String,
+    /// Corre el matugen del usuario (`~/.config/matugen/config.toml` → sus
+    /// templates: kitty, waybar, rofi, niri, gtk, …) con el "Matugen Style" del
+    /// dock, así las apps siguen al dock. Ajuste "Matugen Apps" en Colors.
+    #[serde(default)]
+    pub matugen_apps: bool,
+    /// Modo para matugen (`--mode`): apagado = `dark`. Ajuste "Light Mode" en
+    /// Colors. Aplica a los colores del dock (con `accent_from_wallpaper`) y a
+    /// las apps (con "Matugen Apps"). Ver `DockSettings::matugen_mode`.
+    #[serde(default)]
+    pub matugen_light: bool,
     #[serde(default)]
     pub dock_font: String,
     #[serde(default)]
@@ -374,6 +384,8 @@ impl Default for DockSettings {
             last_wallpaper: String::new(),
             wallpaper_dir: String::new(),
             matugen_scheme: default_matugen_scheme(),
+            matugen_apps: false,
+            matugen_light: false,
             dock_font: "Adwaita Sans".to_string(),
             system_font: String::new(),
             dock_edge: DockEdge::Top,
@@ -389,6 +401,11 @@ impl Default for DockSettings {
 }
 
 impl DockSettings {
+    /// Modo para matugen: `"light"` con el ajuste prendido, si no `"dark"`.
+    pub fn matugen_mode(&self) -> &'static str {
+        if self.matugen_light { "light" } else { "dark" }
+    }
+
     /// Si `kind` está colocado en la barra (en cualquier slot). Una sola
     /// definición para todos: el reparto, los `refresh_*` que se saltean si el
     /// widget no está, y el gate del watcher de media (`App::publish_watcher_wants`).

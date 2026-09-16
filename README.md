@@ -56,6 +56,10 @@ punto exacto durante las pruebas; ver su docstring.
 
 If you turn on `accent_from_wallpaper` in the config, picking a new wallpaper through the dock will also regenerate colors for Dolphin, kitty, and a Powerlevel10k using matugen.
 
+There is also an independent toggle, **Matugen Apps** (Settings → Colors). When on, picking a wallpaper or changing the Matugen Style runs *your own* matugen (`~/.config/matugen/config.toml` templates) with the dock's scheme, so apps that already follow matugen (kitty, waybar, rofi, niri, gtk, …) stay in sync with the dock. Off by default, since it rewrites other apps' configs.
+
+Next to it, **Light Mode** switches matugen to `--mode light` for both the dock colors (when they come from the wallpaper) and the apps. The Matugen Style list also includes `scheme-smart`.
+
 ## License
 
 MIT, see LICENSE.

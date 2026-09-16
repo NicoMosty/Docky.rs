@@ -944,6 +944,43 @@ reordenamiento de widgets) y lo posterior:
     así: la pastilla del launcher cae en la fila 2 bajo el puntero (el offset del panel
     está bien aplicado) y el anillo de fondos en la 2ª miniatura.
 
+- **Ajuste "Matugen Apps"** (Colors): usa el matugen **del usuario** —o sea su
+  `~/.config/matugen/config.toml` y sus templates— con el "Matugen Style" del dock,
+  así las apps que ya siguen matugen (kitty, waybar, rofi, niri, gtk, …) quedan
+  sincronizadas con el dock. `DockSettings::matugen_apps`, default **apagado**
+  (prenderlo reescribe configs de otras apps, y su `config.toml` puede incluir un
+  template de niri: trampa 8).
+  - **Por qué hacía falta**: en este setup el kitty no lo tiñe el dock sino el
+    matugen propio (incluye `current_theme.conf`, generado por
+    `wallpaper-change.service`), que corre **sin `--type`** → apps y dock quedaban
+    con esquemas distintos (`scheme-tonal-spot` contra `scheme-neutral`), y cambiar
+    "Matugen Style" no tocaba las apps.
+  - **El orden importa**: elegir fondo pasa por `wallpaper::apply_wallpaper(path,
+    Some(scheme))`, que corre el matugen del usuario **después** de
+    `apply_with_swaybg` (`systemctl start` bloquea el oneshot, así que el matugen
+    del service ya terminó) → gana el esquema del dock, sin tocar el systemd del
+    usuario. Costo: 2 corridas de matugen por fondo (service + dock).
+  - Piezas: `wallpaper.rs` (`run_matugen` + `apply_wallpaper` con el esquema),
+    `app/wallpaper_picker.rs` (`apps_matugen_scheme`, `apply_matugen_to_apps`),
+    `menu/settings.rs`, `menu/dock_menu.rs` (fila en Colors) y los disparadores:
+    `choose_wallpaper`, `choose_matugen_scheme`, `choose_theme` y
+    `on_setting_changed` (prender la fila aplica ya). Guard:
+    `menu::settings::menu_border_tests::matugen_apps_esta_en_colors_y_arranca_apagado`.
+  - `apply_matugen_to_apps` es fire-and-forget (hilo propio): matugen tarda 1-2 s y
+    no puede frenar el loop.
+  - **Modo y esquema extra**: "Light Mode" (toggle, Colors, default apagado) manda
+    `--mode light` al `extract_color_scheme` del dock y al `run_matugen` de las apps;
+    `DockSettings::matugen_mode()` es la única traducción bool→`"dark"/"light"`.
+    Ojo: `extract_color_scheme` lee `colors.<rol>.<mode>.color`, así que la clave del
+    JSON **sigue al `--mode`** — con `"dark"` horneado, light devolvía siempre
+    `None`. El desplegable "Matugen Style" ahora incluye `scheme-smart` (existía en
+    matugen 4.2.0 y faltaba acá): es una línea en `MATUGEN_SCHEMES`. Guard:
+    `menu::settings::menu_border_tests::matugen_light_esta_en_colors_y_es_toggle`.
+  - **Los `sync-kitty/dolphin/p10k-theme.sh` del repo quedaron como estaban**, pero
+    ojo: escriben `~/.config/kitty/matugen-colors.conf`, que el `kitty.conf` de este
+    setup **no incluye** (incluye `current_theme.conf`), así que ese sync es letra
+    muerta acá. Es candidato a borrar o a apagar si el ajuste nuevo está prendido.
+
 ## Pendientes conocidos
 
 - Paneles del overlay: el **ancho** ya es el mismo en los tres (`OVERLAY_PANEL_W`),

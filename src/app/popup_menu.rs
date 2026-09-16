@@ -370,6 +370,19 @@ impl App {
         if id == menu::SettingId::WidgetClockFormat {
             self.refresh_clock(qh);
         }
+        // ----- prender "Matugen Apps" aplica ya, no espera a la próxima elección
+        // de fondo -----
+        if id == menu::SettingId::MatugenApps {
+            self.apply_matugen_to_apps();
+        }
+        // ----- el modo light/dark cambia los colores del dock (si salen del
+        // fondo) y los de las apps: hay que releer y re-aplicar -----
+        if id == menu::SettingId::MatugenLight {
+            if self.dock.config.settings.accent_from_wallpaper {
+                self.sync_accent_from_last_wallpaper();
+            }
+            self.apply_matugen_to_apps();
+        }
         if id.affects_layout() {
             self.relayout_dock(qh);
         } else {
