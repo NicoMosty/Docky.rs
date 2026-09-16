@@ -187,6 +187,35 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
    alcanza a los miembros del workspace**, así que el crate del raster se compila en
    `opt-level = 1`.
 
+- **Un canal NO despierta el loop de Wayland** (trampa 15). El selector de fondos abría con
+   las tres miniaturas en negro y sólo aparecían al scrollear. No era el caché ni
+   las rutas: el hilo que decodifica devuelve por `thumb_result_rx` y el loop de
+   frames (`tick_wallpaper_frame`) se apagaba al terminar la animación de
+   apertura, así que los resultados se quedaban en la cola hasta que cualquier
+   OTRO evento (mover el scroll, un click) forzara un redraw. Como el caché se
+   limpia al cerrar, pasaba en cada apertura. Arreglo: `thumbs_pending` (pedidos
+   sin respuesta, se incrementa si el `send` da `Ok` y baja por cada resultado
+   drenado) y `wallpaper_needs_frames()` mantiene el loop vivo mientras no llegue a
+   0 — se apaga solo, medido: 1 tick de CPU en 3 s con el panel abierto y quieto.
+   Guard: `app::wallpaper_picker::frame_tests`. **Cualquier resultado asíncrono
+   nuevo** (hilo + canal, o un `Instant` que vence) tiene el mismo problema: si el
+   loop no está animando, nadie lo despierta; hay que sumarlo a la condición del
+   tick o pasar por el canal de `calloop`.
+
+- **Un click afuera de un panel no le llega a la app** (trampa 16). El launcher y los
+   paneles viven en la superficie del dock, que mide **sólo el panel** (640x236,
+   640x460, …): un click fuera de ese rectángulo lo entrega el compositor a la
+   ventana de abajo y la app no se entera. Por eso sólo se cerraban con Escape (el
+   teclado sí lo tiene la superficie), con click derecho o clickeando un widget del
+   dock. **`wlr-layer-shell` no tiene pointer grab** —sus requests son `set_size`,
+   `set_anchor`, `set_exclusive_zone`, `set_margin`, `set_keyboard_interactivity` y
+   `get_popup`— así que no hay forma de pedirle al compositor "avisame del click
+   afuera"; niri no lo ofrece (mismo problema que su issue #1810 con menús de
+   layer-shell). La solución es tener una superficie propia debajo del click:
+   `app/click_catcher.rs` (mismo truco que el selector de región de screenshots,
+   que ya era una superficie full-screen con input region). Arranca **vacía** y
+   recién con el configure se sabe cuánto mide la salida para calcular el agujero.
+
 ## Mapa del código
 
 - `src/render/widget_spec.rs` — la tabla `WIDGETS`: la única lista de widgets del
@@ -583,7 +612,344 @@ reordenamiento de widgets) y lo posterior:
     se resetea con cada Motion). A mano: `scripts/pointer.py --hover` (nuevo) más las
     líneas `calendario:` del log.
 
+- **Paneles del overlay homogéneos en proporciones y estilos.** Los tres paneles
+  del ciclo (launcher/ventanas, portapapeles, fondos) no compartían ni el inset
+  lateral ni el estilo de la caja de búsqueda: el strip de tarjetas del launcher
+  arrancaba **pegado al borde** del panel (inset 0, medido: x=559, el mismo x que
+  el borde) mientras la caja de búsqueda iba inset 10, la fila del portapapeles
+  inset 4, el filmstrip 6, y la separación banda→contenido era 10/5/6. Y la caja
+  de búsqueda estaba dibujada **dos veces**: el launcher centraba el texto y el
+  portapapeles lo alineaba a la izquierda (radios 6/6, altos 26/32).
+  - Ahora el inset lateral y la separación son `MENU_PADDING` en los tres, la caja
+    de búsqueda se dibuja **una sola vez** (`menu_render::draw_search_field`:
+    lupa + texto a la izquierda, misma altura) y la usan el launcher, el
+    portapapeles y el panel de ajustes.
+  - El radio de todo lo interno es `menu::OVERLAY_RADIUS = 8` (antes 6 caja / 8
+    tarjeta / 7 fila / 11 miniatura / 6 pestaña). El de la miniatura de fondo
+    salía de tres lugares distintos (11 horneado en el pixmap, 11 en el anillo
+    del hover, 5 en el placeholder): si no coinciden, el anillo no calza con la
+    esquina de la imagen, así que ahora los tres leen la constante.
+  - El strip del launcher y su hit test se movieron juntos (`app_search_viewport_along`
+    descuenta los dos insets y `app_search_strip_hit_test` mide desde el inset):
+    guard `menu::app_search::strip_tests`. Verificado contra píxeles: caja y
+    pastilla arrancan en el mismo x (566 en el launcher, 750 en el portapapeles).
+  - Costo: el panel del launcher crece 6 px de alto (la separación caja→tarjetas
+    pasó de `ROW_GAP` a `MENU_PADDING`) y el del portapapeles 4 (encabezado =
+    10+26+10, antes 42). Los anchos **no** se tocaron.
+
+- **Ancho único de los tres paneles + launcher en grilla de 2 filas.** Los paddings
+  iguales no alcanzaban: el salto de ancho era lo que se veía. Medido en el log
+  (`base=(629,26)`): el launcher medía **809** (`dock + 180`), el portapapeles
+  **440** y los fondos **640**, así que ciclar con Shift+←/→ cambiaba la forma del
+  panel. Ahora los tres miden `menu::OVERLAY_PANEL_W = 640` (verificado:
+  `configure new_size=(640, 236)` / `(640, 460)` / `(640, 196)`, y el dock vuelve a
+  629×26 al cerrar). Como los tres se anclan igual (`edge_anchor_margin`), con el
+  mismo ancho los bordes no se mueven al cambiar de pestaña.
+  - Sale del dock a propósito (antes el launcher crecía con el dock): el valor no
+    cambia porque el usuario agregue un widget. `APP_SEARCH_WIDTH_GROWTH` y
+    `CLIP_PANEL_W` se borraron; el vertical (Left/Right) sigue con su cross de
+    siempre, porque ahí el "ancho" es el otro eje.
+  - El launcher pasó de una tira a una **grilla row-major de 2 filas x 6** (12
+    apps contra 6) que scrollea de a páginas: el ranking se lee de izquierda a
+    derecha y el #1 queda arriba a la izquierda. `APP_CARD_ROW_H` ahora sale de
+    `APP_CARD_PAD + ICON + LABEL_GAP + LABEL_H + PAD` (72, antes 78 fijo con 6px
+    arriba y 18 abajo: en dos filas el ritmo vertical no cerraba) y el dibujo usa
+    esas mismas constantes.
+  - **Una sola función reparte la grilla** (`app_search_card_offset`) y el hit test
+    la recorre en vez de repetir la cuenta: no puede desincronizarse del dibujo
+    (trampa 10). El resaltado pasó a ser 2D (`highlight_x/y`, los dos animados en
+    `tick_app_search_frame`): con una sola coordenada la pastilla se dibujaba
+    siempre en la fila de arriba.
+  - Flechas: ←/→ = ±1 (orden de lectura) y ↑/↓ = ±6 (la otra fila de la grilla),
+    con `app_search_row_step()` como única definición y saturación en los extremos.
+  - Guards: `menu::app_search::strip_tests` (640 da 6x2, la 7ª cae debajo de la 1ª,
+    la 13ª abre la página siguiente, el tope del scroll muestra la última página, y
+    el centro de cada tarjeta visible da su índice incluidas las de la 2ª página).
+  - Verificado a mano: las tres pantallas contra píxeles, y abrir/cerrar cada modo
+    con `niri msg --json layers` (abierto ⇒ `Exclusive`, cerrado ⇒ `None`, el dock
+    vuelve a 629×26, 0 panics).
+  - **Lo que queda distinto es el alto** (236 / 460 / 196): el ancho era lo que se
+    percibía al ciclar, pero si molesta el siguiente paso es un alto común.
+  - Costo del ancho común: las filas de texto del portapapeles quedan con mucho
+    espacio a la derecha (el título y el subtítulo son cortos). Se podría repartir
+    el contenido de la fila (p. ej. los caracteres a la derecha) si se quiere
+    aprovechar ese aire.
+
+- **Las miniaturas del selector de fondos ya no tardan hasta un scroll en aparecer**
+  (trampa 15). Se abría con las miniaturas en negro y aparecían recién al mover el
+  filmstrip, porque el hilo que decodifica devuelve por un canal y nada despertaba
+  el loop de frames cuando terminaba. `thumbs_pending` + `wallpaper_needs_frames()`
+  (guard: `app::wallpaper_picker::frame_tests`). Medido: el panel abre con las tres
+  miniaturas dibujadas y, ya cargadas, el loop se apaga (1 tick de CPU en 3 s).
+
+- **La batería y el volumen tardaban en aparecer al tocar el set de widgets** (dos
+  causas, ninguna era el dibujado).
+  - **La batería se sondeaba cada ~30 s.** `spawn_battery_watcher` usa
+    `poll(POLLPRI)` sobre los sysfs, que es lo correcto, pero **medido en esta
+    laptop el poll no recibe nunca un evento**: `poll(POLLPRI)` sobre
+    `capacity`/`status`/`energy_now` vuelve a los 30 032 ms con 0 eventos, así que
+    el único reloj era el timeout. `refresh_battery` se llama **sólo** desde ese
+    `BatteryChanged`, y `draw_battery_widget` no dibuja NADA mientras
+    `widgets.battery` sea `None` (es un hueco, no un ícono vacío): al arrancar y
+    al colocar el widget, hasta ~30 s sin batería. Timeout 30 s → **3 s** (leer
+    cuesta 3 ms medidos; en las máquinas donde el sysfs sí notifica sigue siendo
+    instantáneo).
+  - **Cambiar el set de widgets no leía los datos.** `drop_widget_chip` (el único
+    lugar donde cambia `settings.widgets`) hacía sólo `sync_widget_bar_len` +
+    `request_redraw`, así que un widget recién colocado esperaba a su propio reloj:
+    2 s el volumen/red/kblayout (tick de sistema) y ~30 s la batería. Ahora llama a
+    `refresh_sys` + `refresh_battery` + `refresh_bluetooth` + `refresh_media` (los
+    cuatro ya salen solos si el widget no está colocado).
+  - Cadencia de cada dato, para tenerlo a mano: volumen/red/kblayout **2 s**
+    (`spawn_sys_ticker`, `wpctl` ~19 ms por lectura), batería **3 s** (sysfs 3 ms +
+    `poll`), media/bluetooth **evento** (DBus).
+  - Verificado: a los 5,2 s del arranque la barra ya muestra la batería (5 % en
+    rojo, descargando) y el volumen (100); antes la batería era un hueco hasta los
+    ~30 s. Y el watcher a 3 s no se nota: 1 tick de CPU en 5 s con el dock oculto.
+
+- **El volumen sigue los cambios al instante (40 ms medidos, antes hasta 2 s).** Las
+  teclas de volumen del sistema corren `wpctl` **por fuera del dock**
+  (`~/.config/niri/config/binds/media.kdl`), así que el único reloj era el sondeo
+  del tick (2 s): el número llegaba tarde y salteándose los pasos intermedios de
+  una ráfaga. PipeWire sí avisa, así que hay un watcher nuevo
+  (`ipc::spawn_volume_watcher`, mismo patrón que el de media con `playerctl
+  --follow`) que corre `pactl subscribe` → `IpcMessage::VolumeChanged` →
+  `App::refresh_volume`.
+  - Filtro: sólo `on sink #` y `on server`. **`on sink-input #` comparte el prefijo**
+    y son los streams de las apps: eso lo relee el panel de volumen cada 2 s, porque
+    hacerlo en cada evento lo volvería lento al arrastrar (el arrastre aplica cada
+    50 ms).
+  - `refresh_volume` relee **sólo** el volumen: `refresh_sys` de paso corre `iw` y
+    `niri msg -j keyboard-layouts` (~20 ms medidos por vuelta) que no tienen nada
+    que ver, y la rueda los pagaba **por muesca** (46 ms de hilo principal por
+    muesca, medidos). La comparación del volumen quedó en
+    `WidgetSnapshot::refresh_volume`, que `refresh_sys` reusa para no duplicarla.
+  - Medido: **40 ms** de reacción (cambio de volumen y mute, contra hasta 2000 ms
+    antes), 0 líneas espurias en 4 s quieto, **1 tick de CPU en 6 s** con el watcher
+    escuchando, y ~1 lectura por evento en una ráfaga (150 ms de CPU hija por 10
+    cambios). Sin lazo: nuestras lecturas generan eventos de *cliente*, que se
+    filtran.
+
+- **Cambio de pestaña del overlay: ahora se desliza, y antes no había transición.**
+  Con el default `transparency = 1.0`, `anim_opacity` devuelve 1.0 siempre, así que el
+  "fade" de apertura dibujaba **el mismo cuadro opaco ~15 veces** (medido: 110 ms de
+  hilo principal por cambio, ~7 ms por frame) y lo que se veía era un corte seco: se
+  cerraba al instante, la superficie cambiaba de tamaño y el panel nuevo aparecía ya
+  opaco. Los otros paneles **nunca** se renderizan (sólo el activo), y los datos del
+  nuevo cuestan poco (9-21 ms medidos: 142 `.desktop` parseados, un escaneo de
+  carpeta).
+  - El contenido entra corrido desde el lado hacia el que viajás: la dirección la
+    sabe `cycle_overlay` (`start_overlay_slide`), y el progreso es el `anim` que cada
+    modo **ya** tenía, así que no hay temporizador ni campo de animación nuevos. La
+    fórmula es la misma del panel de ajustes (`menu::overlay_slide_offset`,
+    `TAB_SLIDE_DISTANCE`), con guard `menu::slide_tests`.
+  - El que se corre es el **cuerpo** (caja de búsqueda + grilla / filas / filmstrip);
+    el fondo y la banda quedan fijos, si no el panel dejaría un hueco en el borde.
+    Lo hace `menu_render::draw_body(dx, opacity, |dst| …)`, que dibuja el cuerpo en un
+    pixmap aparte y lo pega traducido (guard `menu_render::body_tests`: el cuerpo cae
+    corrido y el fondo no se toca). Los popups y el panel de ajustes lo llaman con
+    `dx = 0`/`opacity = 1` y siguen con su animación propia, sin cambios.
+  - Con el panel opaco la apertura ya no corre un fade inútil (`App::initial_panel_anim`
+    la arranca terminada): abrir una pestaña por IPC es **1** dibujo. Medido: el
+    portapapeles pasó de ~110 ms de CPU por apertura a ~15 ms (la primera de cada
+    proceso suma ~120 ms porque carga el historial). El launcher y los fondos siguen
+    animando por otros motivos: el `content_anim` de las tarjetas y la decodificación
+    de miniaturas.
+  - Efecto lateral para `transparency < 1.0`: el fondo del panel ya no se funde (queda
+    fijo y lo que entra con la opacidad es el cuerpo). Con `1.0` — el default — no
+    cambia nada.
+
+- **Miniaturas de fondos: caché en memoria + disco (1370 ms → 20 ms por visita).**
+  `close_wallpaper_mode` hacía `thumbnail_cache.clear()` y la próxima visita volvía a
+  decodificar los originales del usuario (fotos de varios MB: medido **1370 ms de CPU
+  y 79 MB de pico de RSS en CADA visita**, porque un 4K decodifica a ~33 MB antes de
+  escalar). Ahora hay dos niveles:
+  - **Memoria:** el `ThumbnailCache` ya no se limpia al cerrar, con tope de 64
+    miniaturas (~9 MB: una de 240x150 son 144 KB) y desalojo del más viejo. El
+    `trim_heap()` del cierre se mantiene: devuelve el arena de malloc, no las
+    miniaturas.
+  - **Disco:** `dockyrs_canvas::load_thumbnail_cached` guarda en
+    `~/.cache/dockyrs/thumbs/<hash>.png` la miniatura ya escalada con las esquinas
+    horneadas. La clave es `hash(ruta + mtime + tamaño + w + h + radio)`, así que
+    editar un fondo la invalida sola; `prune()` poda a 512 archivos por mtime porque
+    cada versión de un archivo tiene su propia clave. Sin carpeta de caché
+    (parámetro `None`) decodifica y no escribe.
+  - **Medido** (5 fondos): visita con disco frío 1220 ms y 79 MB de pico; visitas
+    siguientes **20 ms**; proceso reiniciado con disco caliente **30 ms y 15 MB de
+    pico** (−64 MB). El caché en disco ocupa **250 KB** para 5 fondos.
+  - La carpeta de caché sale de `usage::cache_dir()` (una sola definición de
+    `~/.cache/dockyrs`, que antes estaba inline en `usage.rs`).
+  - Guards: `dockyrs_canvas::thumbnail_cache::thumbnail_tests` (leer del disco da los
+    mismos píxeles que decodificar —incluido el alfa premultiplicado de las esquinas—,
+    dos tamaños = dos miniaturas, sin disco no escribe, editar el original invalida, y
+    el tope de memoria desaloja el más viejo).
+  - Lo que queda: el launcher tiene su 1ª apertura de la sesión en ~420 ms (rasteriza
+    12 íconos y ~480 glifos) y después 40-50 ms; el portapapeles ~120 ms la primera
+    (carga el historial) y después 10-20 ms. Eso ya es caché en memoria y no se
+    rehace por visita.
+
+- **Los paneles del overlay ahora se cierran al clickear afuera** (trampa 16). No era
+  lógica de cierre la que faltaba: el click no llegaba a la app (la superficie del
+  dock mide sólo el panel) y `wlr-layer-shell` no tiene pointer grab, así que niri
+  no puede avisar. `app/click_catcher.rs`: mientras hay un panel abierto (launcher,
+  ventanas, portapapeles, fondos o ajustes) se mapea una superficie transparente a
+  pantalla completa en `Layer::Top` con `keyboard_interactivity = None` (el panel
+  conserva su `Exclusive`, o Escape dejaría de funcionar) y la input region = la
+  pantalla **menos** el rectángulo del dock, armada con los 3-4 rectángulos que lo
+  rodean (`catcher_region_rects`, pura y con guard: tapa la pantalla menos el
+  agujero y sin pisarse). El agujero sale de la cuenta inversa del anclaje
+  (`dock_screen_rect`, que deduce dónde dejó el compositor la superficie a partir de
+  `DockEdge`/`DockAlign`/`pos_y`) y se recalcula en cada `draw_ex`, así que un cambio
+  de pestaña (que cambia el alto) lo acomoda solo. Un click en el catcher llama a
+  `dismiss_overlay`, que es lo mismo que hace Escape en cada modo.
+  - Efecto buscado: mientras el panel está abierto el overlay es **modal** — el click
+    no sigue viaje a la ventana de abajo (como rofi).
+  - **Costo medido (no se nota).** En reposo: **0 superficies** de catcher y 13 MB de
+    RSS. Con un panel abierto: **1** superficie más y los mismos números que antes de
+    la feature (launcher 420 ms y 13→16 MB, portapapeles 100 ms y 30 MB, fondos 30 ms y
+    27 MB), con 10-20 ms de CPU por cada 4 s quieto (el reposo de siempre). El buffer
+    es un memfd del tamaño de la salida que **nunca se escribe** (los ceros ya son
+    transparentes y las páginas dispersas no se materializan), así que el RSS no sube;
+    al cerrar se desmapea (0 superficies).
+  - Los popups (tray, volumen, calendario) no lo usan: ya se cierran al salir el
+    puntero del panel (`popup_should_dismiss`).
+  - RAM: el buffer es un memfd del tamaño de la salida pero **no se escribe** (los
+    ceros del memfd ya son transparentes y las páginas dispersas no se materializan),
+    así que medido no se nota: 13,4 MB con el dock en reposo, 16,8 MB con el launcher
+    abierto (eso es el caché de íconos), y el catcher se desmapea al cerrar (0
+    superficies en `niri msg --json layers`).
+  - Verificado a nivel protocolo con `WAYLAND_DEBUG=1`: `set_anchor(15)`,
+    `set_size(0,0)`, `set_keyboard_interactivity(0)`, configure de niri con
+    `1920x1080`, los tres `wl_region.add` exactos (`0,236,1920,844` / `0,0,640,236` /
+    `1280,0,640,236`) y el buffer `1920x1080` stride 7680; 0 errores de protocolo.
+  - **Falta verificar el click de verdad**: inyectar puntero necesita `sudo`/uinput,
+    que no está disponible. Los tests cubren la cuenta de la región y el protocolo
+    confirma la superficie; lo que hay que probar a mano es que clickear una ventana
+    de abajo cierre el panel y que clickear una tarjeta del launcher siga abriendo la
+    app (el agujero).
+
+- **El nombre de la 1ª tarjeta titilaba al mover el mouse.** No era un artefacto de
+  dibujo: había **dos fuentes de verdad** para "qué tarjeta está resaltada". La pastilla
+  sigue a `highlight` (que sólo cambia cuando el hit da una tarjeta), pero el color de
+  la etiqueta seguía a `hovered`, que se borra al salir de las tarjetas —banda, caja de
+  búsqueda, el hueco entre tarjetas o el panel—. Al borrarse, el fallback
+  `hovered.or(Some(selected))` marcaba la SELECCIONADA (la 1ª): su etiqueta se
+  encendía sola mientras la pastilla quedaba en otro lado. Justo lo que se veía.
+  - El color sale de la **pastilla**: `menu::app_search_hot_card(count, panel_w,
+    is_vertical, highlight)` devuelve la tarjeta más cercana al resaltado (durante la
+    animación gana la más próxima, así el color cambia **una vez**, al pasar el punto
+    medio). Guard: `menu::app_search::strip_tests::el_color_de_la_etiqueta_sigue_a_la_pastilla`
+    (probado también en el panel vertical).
+  - Pasar el mouse por una tarjeta **también la selecciona** (`selected = i`), como
+    rofi: si no, Enter lanzaba la 1ª mientras la pastilla marcaba la que estabas
+    mirando. Y al salir de las tarjetas no se toca nada, así que el resaltado se queda
+    donde estaba en vez de saltar a la 1ª.
+  - `AppSearchMode.hovered` quedó sin lectores y se borró, con su rama de `Leave` (que
+    existía sólo para limpiarlo).
+
+- **Ajuste nuevo: `smooth_transitions` (Appearance → "Smooth Transitions", toggle,
+  default prendido).** Apaga las transiciones de los paneles del overlay **y** del panel
+  de ajustes. Apagado no se anima nada adentro de los paneles: arrancan terminados (un
+  solo dibujo en vez de ~9-15 frames), el cambio de pestaña no desliza ni funde, y el
+  scroll / resaltado / fundido del strip saltan al valor final. El lerp del resaltado
+  era el que más se pagaba: sigue al puntero, así que cada movimiento costaba ~8 frames.
+  - **Medido** (3 aperturas en caliente del launcher): **9 → 2-3 frames** y **50-60 →
+    20 ms** de CPU por apertura.
+  - Piezas: `DockSettings::smooth_transitions` (con `#[serde(default)]` del struct, así
+    los configs viejos no se rompen), `SettingId::SmoothTransitions` (label, `range`,
+    `is_toggle`, `get`/`set`, `display_value` vacío —como los otros toggles— y **fuera**
+    de `affects_layout`, que no cambia ninguna medida) y la entrada en
+    `APPEARANCE_SETTINGS` (el array es de tamaño fijo: 12 → 13).
+  - El gating: `App::initial_panel_anim` (devuelve 1.0 = terminado),
+    `App::initial_content_anim`, `App::start_overlay_slide` (no hace nada), el cambio de
+    categoría del panel de ajustes (`slide_dir` 0 / `slide_anim` 1) y los tres ticks
+    (`app_search`, `clipboard`, `wallpaper`) donde los lerps pasan a saltar.
+  - Guard: `menu::settings::menu_border_tests::las_transiciones_estan_en_appearance_y_son_toggle`
+    (está en la lista, es toggle, no pide relayout, y `build_category_controls(Appearance)`
+    la arma como `ControlKind::Toggle`).
+  - **Ojo al medir**: en el `config.json` los ajustes viven bajo la clave `"settings"`;
+    un `smooth_transitions` en la raíz se ignora en silencio y el A/B da idéntico. Y para
+    contar frames de verdad hay que contar los `attach` de la superficie del dock con
+    `WAYLAND_DEBUG=1`: la CPU sola no distingue, porque la apertura del launcher está
+    dominada por el re-parseo de los ~140 `.desktop`.
+
+- **Los procesos hijos eran el costo de RAM escondido** (medido 2026-09-15). Antes de
+  tocar código se midió el stack completo y apareció lo que no se ve mirando sólo
+  `dockyrs`: **3 hijos residentes, 27,6 MB** — `niri msg --json event-stream` (15 MB),
+  `playerctl -a metadata --follow` (7 MB) y `pactl subscribe` (5,6 MB) — contra 31,5 MB
+  del propio dock. El CPU en reposo ya estaba en el piso (0,20-0,33% de un núcleo,
+  medido en 12 s), así que **no había regresión que buscar en el dibujo**: los
+  últimos 8 commits no agregaron trabajo periódico (verificado con el diff: sólo el
+  hover del calendario y el widget `Custom`, que corre un `sh` cada ≥2 s y sólo si
+  hay uno colocado).
+  - **El watcher de niri ya no lanza el binario `niri`**: `spawn_niri_workspace_watcher`
+    habla `$NIRI_SOCKET` directo (`UnixStream` + `"EventStream"\n`, respuestas JSON
+    por línea; niri 26.04 no pide handshake, verificado). Mismo filtro por substring
+    (`niri_evento_relevante`, con test). Si no hay `NIRI_SOCKET` o falla el connect,
+    cae al CLI de siempre, así que el peor caso es el de antes. Medido: −15 MB.
+  - **El watcher de media sólo corre con un widget `Media` colocado**
+    (`App::publish_watcher_wants` + el flag `media_wanted` que lee
+    `spawn_media_watcher`; se publica donde cambian los widgets, hoy sólo
+    `drop_widget_chip`). Medido: −7 MB en la config de fábrica, que no tiene `Media`.
+  - Queda `pactl subscribe` (5,6 MB), que sí corresponde al widget `Volume`.
+  - `DockSettings::has_widget` es la única definición de "el widget está colocado"
+    (la usan el reparto, los `refresh_*` y el gate del watcher).
+  - Resultado: el stack pasó de **~59 MB a ~30 MB** (hijos 27,6 → 5,6 MB) con el
+    workspace andando por socket y 0 errores. Guards:
+    `ipc::niri_event_tests::el_filtro_del_event_stream`,
+    `config::has_widget_tests::has_widget_mira_todos_los_slots`.
+  - **El layout de teclado dejó de sondearse**: niri lo manda por el MISMO
+    event-stream (`KeyboardLayoutSwitched` al cambiar, `KeyboardLayoutsChanged` en el
+    estado inicial), así que `ipc::niri_mensaje` mapea la línea a
+    `IpcMessage::KbdLayoutChanged` → `App::refresh_kblayout`, y `read_kblayout` salió
+    de `WidgetSnapshot::refresh_sys`. Medido: el tick bajó de **~33 ms a 20 ms** por
+    vuelta (el `niri msg -j keyboard-layouts` costaba 13,8 ms standalone) y el widget
+    se actualiza al instante en vez de hasta 2 s después. Verificado en vivo: cada
+    `niri msg action switch-layout N` dispara el read en ~1 ms.
+    - **Ojo al probarlo**: `switch-layout` **exige el argumento** (`<LAYOUT>`); sin él
+      niri sale con rc=2 y no cambia nada, lo que hace parecer que el evento nunca
+      llega. Cómo medir el costo del tick: `cutime+cstime` de `/proc/<pid>/stat`
+      (campos 16-17) es el CPU de TODOS los hijos cosechados, o sea exactamente el
+      costo de los spawns periódicos; el poll con `ps` es demasiado grueso para
+      procesos de 13 ms.
+    - Hyprland no se toca: `read_kblayout` **no tiene rama de Hyprland** (devuelve
+      `--` siempre), así que sacarlo del tick no puede romper nada ahí.
+  - **Ojo con la atribución**: el RSS del propio `dockyrs` varía 13→25 MB por los
+    cachés (acotados, no fuga) y por el pool shm de sctk (2-7 MB según el uso, es el
+    `memfd:smithay-client-toolkit (deleted)` de `smaps`); no es mérito NI culpa de
+    este cambio. Lo que sí es causal es la baja de los hijos.
+
+- **Los paneles del overlay van debajo del dock** (pedido: el launcher se abría en
+  el mismo rect que el dock y se veía que se solapaba). Como el panel de ajustes ya
+  lo hacía, los tres del overlay componen la misma superficie `[dock][gap][panel]`
+  con `app/dock_menu.rs:panel_layout`, así el dock queda a la vista. Los cuatro
+  comparten ahora: `App::overlay_panel_size()` (el tamaño del panel del modo
+  abierto), `App::overlay_layout()` (el reparto), `App::show_panel_surface()` (dock
+  arriba + `panel` bliteado en su offset, un solo `attach`), `App::restore_dock_size()`
+  (vuelve a `base` y lo anota en `applied_size`), `App::panel_local()` (superficie →
+  panel; vale para los cuatro) y `draw_dock_into()` (dibuja el dock en un destino).
+  - El agujero del click-catcher sale de `overlay_layout` (el tamaño de la
+    SUPERFICIE entera, no del panel): si no, el catcher se comía los clicks de la
+    franja del dock y del borde de abajo. Los `open_*` del overlay llaman a
+    `apply_panel_size` y los `close_*`/tick-close a `restore_dock_size`.
+  - Medido: launcher 640x270 (26+8+236), portapapeles 640x494, fondos 640x230;
+    screenshots que muestran el dock arriba y el panel debajo. Guards:
+    `panel_layout_tests::con_el_dock_arriba_el_panel_va_debajo` y
+    `catcher_tests::el_agujero_cubre_el_dock_y_el_panel`.
+  - **Ojo al probarlo con `pointer.py`**: el script parkea abajo-izquierda y barre
+    la franja de ABAJO, así que con el dock en `Top` nunca ve el reveal. En su lugar,
+    probar el hover con /tmp/hover_test.py (parkea por clamping en (0,0) y mueve con
+    los mismos tiempos que pointer.py: ~3.21 px por paso de 3 en x, ~2.04 px por paso
+    de 2 en y) y confirmar con screenshots + las píldoras / anillos de hover. Verificado
+    así: la pastilla del launcher cae en la fila 2 bajo el puntero (el offset del panel
+    está bien aplicado) y el anillo de fondos en la 2ª miniatura.
+
 ## Pendientes conocidos
+
+- Paneles del overlay: el **ancho** ya es el mismo en los tres (`OVERLAY_PANEL_W`),
+  pero el alto no (el launcher 236, el portapapeles 460, los fondos 196). En el
+  panel vertical (dock Left/Right) los tres siguen con su cross de siempre: el
+  portapapeles es ancho por naturaleza y el launcher/fondos van pegados al dock.
 
 - Calendario del reloj: no se pasa de mes con el mouse (no tiene ‹ › clickeables,
   sólo ←/→) y no selecciona días ni navega semanas: muestra el mes y marca hoy. El
@@ -608,8 +974,8 @@ reordenamiento de widgets) y lo posterior:
   items quedan fuera del dock por completo (no hay configuración para volver a
   mostrarlos).
 
-- El panel debajo del dock está implementado sólo para el borde superior; con
-  Left/Right/Bottom el panel sigue tapando el dock.
+- El panel debajo del dock (ajustes y los tres del overlay) está implementado sólo
+  para el borde superior; con Left/Right/Bottom el panel sigue tapando el dock.
 - Si un ajuste cambia el grosor del dock, el panel lo acompaña pero el alto de la
   superficie quedó fijado al abrirlo: el fondo del panel puede quedar cortado.
 - Soltar una tarjeta en la franja del título (arriba de las columnas) la saca del
