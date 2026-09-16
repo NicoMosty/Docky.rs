@@ -538,7 +538,7 @@ reordenamiento de widgets) y lo posterior:
   Test: `render::workspaces::workspace_hit_tests::solo_el_activo_vacio_cuenta`.
   Dos cosas que costaron rondas y hay que respetar si se toca:
   - **La regla se resuelve en `refresh_workspaces`, NO en `draw_ex`**
-    (`reveal_dock_if_empty` + ocultado inmediato al dejar de estar vacío).
+    (`reveal_dock_if_stays` + ocultado inmediato al dejar de estar vacío).
     `request_redraw` se saltea si hay un frame pendiente, y `show_ws_flash` decide
     con `dock_visible` en el mismo bloque: dejarlo al dibujo hacía que el HUD
     apareciera y el dock se revelara tarde (o al revés, que al pasar vacío →
@@ -547,6 +547,21 @@ reordenamiento de widgets) y lo posterior:
     así que no cierra el HUD ya abierto: al revelar hay que pasar por
     `close_ws_flash_for_dock()` (devuelve layer y tamaño), que también usa
     `reveal_dock`.
+
+- **Overview de niri abierto ⇒ dock fijo**: con el Overview abierto el dock no se
+  oculta (y se revela si estaba oculto), así que se ve la barra sobre la vista
+  alejada de los workspaces. El estado llega por el **mismo** event-stream de niri
+  (`OverviewOpenedOrClosed` → `IpcMessage::OverviewChanged(is_open)` →
+  `App::set_overview_open`), que además lo manda con el estado inicial al
+  conectar, así que no hay sondeo ni `niri msg` extra (misma jugada que el layout
+  de teclado). `set_overview_open` resuelve la transición donde se decide
+  (`request_redraw` se saltea con un frame pendiente): al abrir revela, al cerrar
+  oculta ya si corresponde. La condición vive en UNA función,
+  `dock_stays_visible()` = `empty_workspace() || overview_open`, que usan el reveal
+  y `should_hide()`: si se despegan, el dock se revela y se oculta en el mismo
+  frame. Hyprland no tiene Overview, así que ahí `overview_open` queda en false.
+  Test: `ipc::niri_event_tests::el_filtro_del_event_stream` (el booleano se busca
+  dentro del evento, no en la línea suelta).
 
 - **Teclado en los menús** (flechas para elegir, Enter para activar, ESC para
   cerrar) en los cuatro menús que no lo tenían: panel de ajustes, dropdown de

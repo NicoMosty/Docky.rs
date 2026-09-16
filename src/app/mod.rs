@@ -455,6 +455,9 @@ pub struct App {
     pub layer_shell: LayerShell,
     pub layer: LayerSurface,
     pub dock_visible: bool,
+    /// El Overview de niri está abierto. Mientras dure, el dock se queda visible
+    /// (`dock_stays_visible`). Lo mantiene el event-stream de niri.
+    pub overview_open: bool,
     pub autohide_armed: bool,
     pub applied_geom: Option<(Anchor, (i32, i32, i32, i32))>,
     pub applied_size: Option<(u32, u32)>,

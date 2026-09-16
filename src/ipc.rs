@@ -18,6 +18,10 @@ pub enum IpcMessage {
     /// El layout de teclado cambió (niri lo manda como `KeyboardLayoutsChanged`):
     /// llega por el event-stream, no por el tick de 2 s.
     KbdLayoutChanged,
+    /// El Overview de niri se abrió (`true`) o se cerró (`false`). Niri lo manda
+    /// también con el estado inicial al conectar al event-stream, así que el dock
+    /// arranca sabiendo si estaba abierto.
+    OverviewChanged(bool),
     ToggleWallpaper,
     ToggleClipboard,
     ScreenshotFull,
@@ -399,6 +403,12 @@ fn spawn_niri_workspace_watcher(
 fn niri_mensaje(line: &str) -> Option<IpcMessage> {
     if line.contains("KeyboardLayout") {
         Some(IpcMessage::KbdLayoutChanged)
+    } else if line.contains("OverviewOpenedOrClosed") {
+        // `{"OverviewOpenedOrClosed":{"is_open":true}}`, sin espacios. Se busca
+        // el booleano DENTRO de este evento, no en la línea suelta.
+        Some(IpcMessage::OverviewChanged(
+            line.contains("\"is_open\":true"),
+        ))
     } else if line.contains("Workspace") || line.contains("workspace") || line.contains("Window") {
         Some(IpcMessage::WorkspacesChanged)
     } else {
@@ -488,7 +498,8 @@ mod niri_event_tests {
 
     /// El mapa línea → mensaje del event-stream. `Workspace`/`Window` mueven los
     /// workspaces (sin `Window*` el workspace vacío no se reevalúa y el dock dejaría
-    /// de fijarse) y `KeyboardLayout` el layout. Tiene que quedar afuera lo que viaja
+    /// de fijarse), `KeyboardLayout` el layout y `OverviewOpenedOrClosed` el estado
+    /// del Overview (que fija el dock). Tiene que quedar afuera lo que viaja
     /// por el mismo stream sin cambiar nada del dock — incluido el `{"Ok":...}` con el
     /// que niri acusa recibo del pedido.
     #[test]
@@ -512,8 +523,16 @@ mod niri_event_tests {
                 "{linea}"
             );
         }
+        for (linea, abierto) in [
+            (r#"{"OverviewOpenedOrClosed":{"is_open":true}}"#, true),
+            (r#"{"OverviewOpenedOrClosed":{"is_open":false}}"#, false),
+        ] {
+            assert!(
+                matches!(niri_mensaje(linea), Some(IpcMessage::OverviewChanged(v)) if v == abierto),
+                "{linea}"
+            );
+        }
         assert!(niri_mensaje(r#"{"Ok":"Handled"}"#).is_none());
-        assert!(niri_mensaje(r#"{"OverviewOpenedOrClosed":{}}"#).is_none());
     }
 }
 

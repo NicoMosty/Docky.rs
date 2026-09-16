@@ -47,9 +47,10 @@ impl App {
             self.dock_visible = true;
             self.sync_autohide_surfaces();
         }
-        // ----- o si el workspace activo está vacío (no hay ventana que justifique
-        // ocultarlo): misma regla que aplica el refresco de workspaces -----
-        self.reveal_dock_if_empty(qh);
+        // ----- o si el workspace activo está vacío o el Overview está abierto (no
+        // hay ventana que justifique ocultarlo): misma regla que aplica el refresco
+        // de workspaces -----
+        self.reveal_dock_if_stays(qh);
         // ----- oculto: pinta transparente (sin desmapear; attach(NULL)
         // resetea el tamaño de la layer surface en niri y rompe el remapeo) -----
         if self.dock.config.settings.autohide && !self.dock_visible && self.ws_flash_mode.is_none()
@@ -260,18 +261,26 @@ impl App {
         render::active_is_empty(&self.widgets.workspaces)
     }
 
-    /// Reveal del dock por workspace vacío. Lo aplica también el refresco de
-    /// workspaces, no sólo el dibujo: `request_redraw` se saltea si hay un frame
-    /// pendiente, y `show_ws_flash` decide con `dock_visible` en el mismo bloque, así
-    /// que si no el HUD alcanzaba a abrirse y el dock recién se revelaba con el frame
+    /// El dock se queda en pantalla aunque no haya puntero ni modo abierto: el
+    /// workspace activo está vacío o el Overview de niri está abierto. Una sola
+    /// definición para el reveal y para `should_hide`: si se despegan, el dock se
+    /// revela y se oculta en el mismo frame.
+    fn dock_stays_visible(&self) -> bool {
+        self.empty_workspace() || self.overview_open
+    }
+
+    /// Reveal del dock por la regla de `dock_stays_visible`. Lo aplica también el
+    /// refresco de workspaces, no sólo el dibujo: `request_redraw` se saltea si hay un
+    /// frame pendiente, y `show_ws_flash` decide con `dock_visible` en el mismo bloque,
+    /// así que si no el HUD alcanzaba a abrirse y el dock recién se revelaba con el frame
     /// siguiente (o el HUD quedaba clavado hasta su timeout).
-    fn reveal_dock_if_empty(&mut self, qh: &QueueHandle<Self>) {
+    fn reveal_dock_if_stays(&mut self, qh: &QueueHandle<Self>) {
         // ----- no pisar un modo abierto: él ya tiene la superficie, y puede estar
         // en `Overlay`, que `close_ws_flash_for_dock` bajaría a `Top` (los modos
         // fijan su layer sólo al abrirse, no en cada frame). -----
         if !self.dock.config.settings.autohide
             || self.dock_visible
-            || !self.empty_workspace()
+            || !self.dock_stays_visible()
             || self.autohide_force_visible()
         {
             return;
@@ -281,6 +290,25 @@ impl App {
         self.close_ws_flash_for_dock(qh);
         self.dock_visible = true;
         self.sync_autohide_surfaces();
+    }
+
+    /// El Overview de niri se abrió o se cerró (llega por el event-stream). Abierto
+    /// el dock queda fijo, y al cerrarse vuelve la regla normal (ocultado inmediato
+    /// incluido si corresponde). Mismo patrón que el workspace vacío, que se resuelve
+    /// en `refresh_workspaces` y no en el dibujo: `request_redraw` se saltea si hay un
+    /// frame pendiente.
+    pub(crate) fn set_overview_open(&mut self, open: bool, qh: &QueueHandle<Self>) {
+        if self.overview_open == open {
+            return;
+        }
+        self.overview_open = open;
+        log::debug!("overview: abierto={open}");
+        if open {
+            self.reveal_dock_if_stays(qh);
+        } else if self.should_hide() {
+            self.set_dock_visible(false);
+        }
+        self.request_redraw(qh);
     }
 
     /// El HUD de workspaces comparte la superficie del dock: al revelar el dock hay
@@ -361,7 +389,7 @@ impl App {
             && self.dock.pointer_pos.is_none()
             && !self.pointer_down
             && !self.autohide_force_visible()
-            && !self.empty_workspace()
+            && !self.dock_stays_visible()
     }
 
     pub(crate) fn arm_autohide(&mut self) {
@@ -549,7 +577,7 @@ impl App {
             // HUD: `show_ws_flash` mira `dock_visible` en este mismo bloque, así que
             // dejarlo al dibujo (que puede saltearse por un frame pendiente) hacía que
             // el HUD apareciera y el dock se revelara tarde. -----
-            self.reveal_dock_if_empty(qh);
+            self.reveal_dock_if_stays(qh);
             // ----- dejó de estar vacío (cambio a uno ocupado, o se abrió una
             // ventana): la regla de "dock fijo" termina YA, no dentro del delay. Si el
             // puntero está encima o hay un modo abierto, `should_hide` es false y el
