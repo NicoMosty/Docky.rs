@@ -15,6 +15,9 @@ pub enum IpcMessage {
     BatteryChanged,
     BluetoothChanged,
     WorkspacesChanged,
+    /// El layout de teclado cambió (niri lo manda como `KeyboardLayoutsChanged`):
+    /// llega por el event-stream, no por el tick de 2 s.
+    KbdLayoutChanged,
     ToggleWallpaper,
     ToggleClipboard,
     ScreenshotFull,
@@ -219,9 +222,18 @@ pub fn spawn_media_watcher(
     tx: Sender<IpcMessage>,
     conn: Connection,
     qh: QueueHandle<crate::app::App>,
+    wanted: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     std::thread::spawn(move || {
         loop {
+            // ----- sin un widget Media colocado, `playerctl --follow` es un hijo
+            // residente de ~7 MB que no dibuja nada: se consulta el flag ANTES de
+            // crearlo. Ojo: quitar el widget con el proceso andando no lo mata hasta
+            // que salga o el dock reinicie; colocarlo arranca dentro de los 3 s. -----
+            if !wanted.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                continue;
+            }
             let mut cmd = std::process::Command::new("playerctl");
             cmd.args([
                 "-a",
@@ -358,32 +370,81 @@ fn spawn_niri_workspace_watcher(
 ) {
     std::thread::spawn(move || {
         loop {
-            let mut cmd = std::process::Command::new("niri");
-            cmd.args(["msg", "--json", "event-stream"])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null());
-            let Ok(mut child) = cmd.spawn() else {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                continue;
-            };
-            if let Some(stdout) = child.stdout.take() {
-                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    // ponytail: filtrado por substring, sin parsear JSON por evento.
-                    // `Window*` incluye abrir/cerrar ventana: hace falta para que el
-                    // workspace vacío (dock fijo) se reevalúe al abrir la primera.
-                    if (line.contains("Workspace")
-                        || line.contains("workspace")
-                        || line.contains("Window"))
-                        && tx.send(IpcMessage::WorkspacesChanged).is_ok()
-                    {
-                        conn.display().sync(&qh, ());
-                        let _ = conn.flush();
-                    }
-                }
+            // ----- hablar el socket de niri DIRECTO en vez de lanzar el CLI
+            // `niri msg --json event-stream`: ese hijo residente costaba 15 MB
+            // medidos (el ítem más grande del stack) y el protocolo es el mismo
+            // (pedido JSON + `\n`, respuestas JSON por línea; verificado contra
+            // niri 26.04). Si no hay `NIRI_SOCKET` o el connect falla, se cae al CLI
+            // de siempre, así que el peor caso es el comportamiento viejo. -----
+            let stream = std::env::var("NIRI_SOCKET")
+                .ok()
+                .and_then(|path| UnixStream::connect(path).ok());
+            match stream {
+                Some(stream) => pump_niri_events(&stream, &tx, &conn, &qh),
+                None => pump_niri_cli(&tx, &conn, &qh),
             }
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
     });
+}
+
+/// Qué mensaje pide una línea del event-stream de niri (`None` = no cambia nada del
+/// dock). Mismo filtro por substring que el CLI: sin parsear JSON por evento;
+/// `Window*` incluye abrir/cerrar ventana, que hace falta para que el workspace vacío
+/// (dock fijo) se reevalúe al abrir la primera.
+///
+/// `KeyboardLayoutsChanged` viaja por el MISMO stream, así que el widget se actualiza
+/// al instante y el tick de 2 s ya no tiene que lanzar `niri msg -j keyboard-layouts`
+/// (~14 ms medidos por spawn).
+fn niri_mensaje(line: &str) -> Option<IpcMessage> {
+    if line.contains("KeyboardLayout") {
+        Some(IpcMessage::KbdLayoutChanged)
+    } else if line.contains("Workspace") || line.contains("workspace") || line.contains("Window") {
+        Some(IpcMessage::WorkspacesChanged)
+    } else {
+        None
+    }
+}
+
+fn pump_niri_events(
+    stream: &UnixStream,
+    tx: &Sender<IpcMessage>,
+    conn: &Connection,
+    qh: &QueueHandle<crate::app::App>,
+) {
+    let mut stream = stream;
+    if stream.write_all(b"\"EventStream\"\n").is_err() {
+        return;
+    }
+    for line in BufReader::new(stream).lines().map_while(Result::ok) {
+        if let Some(msg) = niri_mensaje(&line)
+            && tx.send(msg).is_ok()
+        {
+            conn.display().sync(qh, ());
+            let _ = conn.flush();
+        }
+    }
+}
+
+fn pump_niri_cli(tx: &Sender<IpcMessage>, conn: &Connection, qh: &QueueHandle<crate::app::App>) {
+    let mut cmd = std::process::Command::new("niri");
+    cmd.args(["msg", "--json", "event-stream"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let Ok(mut child) = cmd.spawn() else {
+        return;
+    };
+    if let Some(stdout) = child.stdout.take() {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Some(msg) = niri_mensaje(&line)
+                && tx.send(msg).is_ok()
+            {
+                conn.display().sync(qh, ());
+                let _ = conn.flush();
+            }
+        }
+    }
+    let _ = child.wait();
 }
 
 fn spawn_hypr_workspace_watcher(
@@ -419,6 +480,41 @@ fn spawn_hypr_workspace_watcher(
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
     });
+}
+
+#[cfg(test)]
+mod niri_event_tests {
+    use super::{IpcMessage, niri_mensaje};
+
+    /// El mapa línea → mensaje del event-stream. `Workspace`/`Window` mueven los
+    /// workspaces (sin `Window*` el workspace vacío no se reevalúa y el dock dejaría
+    /// de fijarse) y `KeyboardLayout` el layout. Tiene que quedar afuera lo que viaja
+    /// por el mismo stream sin cambiar nada del dock — incluido el `{"Ok":...}` con el
+    /// que niri acusa recibo del pedido.
+    #[test]
+    fn el_filtro_del_event_stream() {
+        for linea in [
+            r#"{"WorkspacesChanged":{}}"#,
+            r#"{"WindowsChanged":{}}"#,
+            r#"{"WindowOpenedOrChanged":{}}"#,
+        ] {
+            assert!(
+                matches!(niri_mensaje(linea), Some(IpcMessage::WorkspacesChanged)),
+                "{linea}"
+            );
+        }
+        for linea in [
+            r#"{"KeyboardLayoutsChanged":{}}"#,
+            r#"{"KeyboardLayoutSwitched":{"idx":1}}"#,
+        ] {
+            assert!(
+                matches!(niri_mensaje(linea), Some(IpcMessage::KbdLayoutChanged)),
+                "{linea}"
+            );
+        }
+        assert!(niri_mensaje(r#"{"Ok":"Handled"}"#).is_none());
+        assert!(niri_mensaje(r#"{"OverviewOpenedOrClosed":{}}"#).is_none());
+    }
 }
 
 #[cfg(test)]

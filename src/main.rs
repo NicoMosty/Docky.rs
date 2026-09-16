@@ -293,6 +293,15 @@ fn main() -> anyhow::Result<()> {
 
     let output_state = OutputState::new(&globals, &qh);
 
+    // ----- el watcher de media es un `playerctl` residente de ~7 MB: sólo se
+    // lanza si hay un widget Media colocado. `App` lo republica en cada cambio de
+    // widgets (ver `publish_watcher_wants`). -----
+    let media_wanted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+        dock.config
+            .settings
+            .has_widget(crate::config::WidgetKind::Media),
+    ));
+
     let mut app = App {
         registry_state: RegistryState::new(&globals),
         output_state,
@@ -338,6 +347,7 @@ fn main() -> anyhow::Result<()> {
         ws_reset_tx,
         notification_mode: None,
         notification_reset_tx,
+        media_wanted: media_wanted.clone(),
         widgets: initial_widgets,
         tray: tray_state,
         last_tray_count: 0,
@@ -424,7 +434,13 @@ fn main() -> anyhow::Result<()> {
     ipc::spawn_brightness_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
     ipc::spawn_battery_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
     ipc::spawn_bluetooth_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
-    ipc::spawn_media_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
+    ipc::spawn_media_watcher(
+        ipc_tx.clone(),
+        conn.clone(),
+        qh.clone(),
+        media_wanted.clone(),
+    );
+    ipc::spawn_volume_watcher(ipc_tx.clone(), conn.clone(), qh.clone());
     ipc::spawn_workspace_watcher(ipc_tx, conn.clone(), qh.clone());
 
     let clock_tick_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -518,6 +534,7 @@ fn main() -> anyhow::Result<()> {
                 ipc::IpcMessage::BatteryChanged => app.refresh_battery(&qh),
                 ipc::IpcMessage::BluetoothChanged => app.refresh_bluetooth(&qh),
                 ipc::IpcMessage::WorkspacesChanged => app.refresh_workspaces(&qh),
+                ipc::IpcMessage::KbdLayoutChanged => app.refresh_kblayout(&qh),
                 ipc::IpcMessage::ToggleWallpaper => app.toggle_wallpaper_picker(&qh),
                 ipc::IpcMessage::ToggleClipboard => app.toggle_clipboard(&qh),
                 ipc::IpcMessage::ScreenshotFull => app.start_full_screenshot(&qh),

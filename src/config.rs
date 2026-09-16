@@ -389,6 +389,13 @@ impl Default for DockSettings {
 }
 
 impl DockSettings {
+    /// Si `kind` está colocado en la barra (en cualquier slot). Una sola
+    /// definición para todos: el reparto, los `refresh_*` que se saltean si el
+    /// widget no está, y el gate del watcher de media (`App::publish_watcher_wants`).
+    pub fn has_widget(&self, kind: WidgetKind) -> bool {
+        self.widgets.iter().any(|w| w.kind == kind)
+    }
+
     /// Opciones puestas de `kind`. `None` = no tiene ninguna.
     pub fn widget_options(&self, kind: WidgetKind) -> Option<&WidgetOptions> {
         self.widget_options
@@ -682,5 +689,35 @@ mod widget_options_tests {
         );
         let vuelta: DockSettings = serde_json::from_str(&json).expect("deserializa");
         assert!(vuelta.selected_widget.is_none());
+    }
+}
+
+#[cfg(test)]
+mod has_widget_tests {
+    use super::*;
+
+    /// La única definición de "el widget está colocado": de acá cuelgan el reparto,
+    /// los `refresh_*` que se saltean si no está y el gate del watcher de media (un
+    /// `playerctl` residente de ~7 MB que no tiene sentido sin un `Media`).
+    #[test]
+    fn has_widget_mira_todos_los_slots() {
+        let mut s = DockSettings {
+            widgets: Vec::new(),
+            ..Default::default()
+        };
+        assert!(!s.has_widget(WidgetKind::Media));
+        s.widgets = vec![
+            crate::config::WidgetPlacement {
+                kind: WidgetKind::Clock,
+                slot: WidgetSlot::Right,
+            },
+            crate::config::WidgetPlacement {
+                kind: WidgetKind::Media,
+                slot: WidgetSlot::Middle,
+            },
+        ];
+        assert!(s.has_widget(WidgetKind::Media));
+        assert!(s.has_widget(WidgetKind::Clock));
+        assert!(!s.has_widget(WidgetKind::Battery));
     }
 }

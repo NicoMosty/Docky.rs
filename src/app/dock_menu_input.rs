@@ -156,6 +156,20 @@ impl App {
         if let Some(dm) = self.dock_menu_mode.as_mut() {
             dm.controls = menu::build_category_controls(dm.category, &self.dock.config.settings);
         }
+        // ----- leer YA los datos del widget recién colocado. Cada uno se sondea en
+        // su propio reloj (volumen/red/kblayout cada 2 s, batería por el watcher) y
+        // nada los leía al cambiar el set, así que un widget nuevo quedaba vacío
+        // hasta su próximo sondeo: hasta 2 s el volumen y hasta ~30 s la batería,
+        // que mientras no tiene dato no dibuja NADA (hueco, no ícono vacío). Los
+        // cuatro ya salen solos si el widget no está colocado; acá acaba de quedar. -----
+        self.refresh_sys(qh);
+        self.refresh_kblayout(qh);
+        self.refresh_battery(qh);
+        self.refresh_bluetooth(qh);
+        self.refresh_media(qh);
+        // ----- el set de widgets acaba de cambiar: el watcher de media se prende/
+        // apaga según haya o no un `Media` colocado (ver `publish_watcher_wants`). -----
+        self.publish_watcher_wants();
         // ----- deferred to close -----
         self.sync_widget_bar_len();
         self.request_redraw(qh);

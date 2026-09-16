@@ -480,12 +480,20 @@ impl App {
     }
 
     pub(crate) fn widget_placed(&self, kind: crate::config::WidgetKind) -> bool {
-        self.dock
-            .config
-            .settings
-            .widgets
-            .iter()
-            .any(|w| w.kind == kind)
+        self.dock.config.settings.has_widget(kind)
+    }
+
+    /// Republica lo que los watchers que lanzan un proceso residente necesitan
+    /// saber: hoy, si hay un widget Media (el `playerctl` de ~7 MB). Se llama donde
+    /// cambian los widgets (hoy el único sitio es `drop_widget_chip`).
+    pub(crate) fn publish_watcher_wants(&self) {
+        self.media_wanted.store(
+            self.dock
+                .config
+                .settings
+                .has_widget(crate::config::WidgetKind::Media),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     pub(crate) fn refresh_clock(&mut self, qh: &QueueHandle<Self>) {
@@ -611,6 +619,8 @@ impl App {
     }
 
     pub(crate) fn refresh_sys(&mut self, qh: &QueueHandle<Self>) {
+        // ----- el layout de teclado NO se relee acá: llega por el event-stream
+        // (`refresh_kblayout`), así que este tick se ahorra su spawn -----
         let active = self.dock.config.settings.widgets.iter().any(|w| {
             matches!(
                 w.kind,
@@ -624,6 +634,18 @@ impl App {
         // cambiado: una app puede empezar o dejar de sonar sin que wpctl cambie -----
         self.refresh_volume_panel(qh);
         if self.widgets.refresh_sys() {
+            self.sync_widget_bar_len();
+            self.relayout_dock(qh);
+        }
+    }
+
+    /// El layout de teclado cambió: niri lo avisa por el event-stream, así que el
+    /// widget se actualiza al instante y el tick de 2 s no tiene que sondearlo.
+    pub(crate) fn refresh_kblayout(&mut self, qh: &QueueHandle<Self>) {
+        if !self.widget_placed(crate::config::WidgetKind::KbdLayout) {
+            return;
+        }
+        if self.widgets.refresh_kblayout() {
             self.sync_widget_bar_len();
             self.relayout_dock(qh);
         }

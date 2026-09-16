@@ -499,6 +499,9 @@ pub struct App {
     pub ws_reset_tx: std::sync::mpsc::Sender<()>,
     pub notification_mode: Option<NotificationMode>,
     pub notification_reset_tx: std::sync::mpsc::Sender<u64>,
+    /// El watcher de media (`playerctl --follow`) sólo corre con un widget Media
+    /// colocado. Ver `App::publish_watcher_wants`.
+    pub media_wanted: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub widgets: crate::widgets::WidgetSnapshot,
     pub tray: crate::tray::TrayState,
     pub last_tray_count: usize,
