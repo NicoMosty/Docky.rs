@@ -396,6 +396,14 @@ fn draw_network_hover_pill(
     colors: &WidgetColors,
 ) {
     use crate::config::WidgetKind;
+    // ----- en una barra vertical el ancho es el grosor (~25px) y la pastilla
+    // con el SSID se dibuja horizontal: no entra, se veía recortada. La pastilla
+    // es una comodidad del modo horizontal; en vertical el ícono queda solo.
+    // ponytail: una pastilla rotada pediría 1.5*font (~22) + padding de alto, que
+    // tampoco entra; haría falta encoger la letra sólo para el hover.
+    if dock.is_vertical() {
+        return;
+    }
     let label = widgets.network.label.trim();
     if label.is_empty() {
         return;

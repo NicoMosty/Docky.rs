@@ -408,15 +408,12 @@ fn click_kblayout(cx: &ClickCtx) -> Option<WidgetAction> {
 fn len_clock(cx: &Ctx) -> f32 {
     let s = cx.render_scale;
     let tp = widget_text_px(cx.settings, cx.kind, s);
-    if cx.is_vertical {
-        let time_w = text_width_estimate_render(&cx.widgets.time, tp);
-        let date_w = text_width_estimate_render(&cx.widgets.date, tp);
-        time_w.max(date_w)
-    } else {
-        let time_w = text_width_estimate_render(&cx.widgets.time, tp);
-        let date_w = text_width_estimate_render(&cx.widgets.date, tp);
-        time_w + 3.5 * s + date_w
-    }
+    // ----- hora y fecha en UNA línea (horizontal) o en UNA columna rotada
+    // (vertical): el vertical medía `max` porque las dibujaba en dos columnas
+    // lado a lado, y esas dos columnas no entran en el grosor de la barra -----
+    let time_w = text_width_estimate_render(&cx.widgets.time, tp);
+    let date_w = text_width_estimate_render(&cx.widgets.date, tp);
+    time_w + 3.5 * s + date_w
 }
 
 fn draw_clock(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
@@ -941,5 +938,94 @@ mod click_tests {
                 "{kind:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod clock_vertical_tests {
+    // ----- En barra vertical (dock Edge Left/Right) el reloj dibujaba la hora y
+    // la fecha como DOS columnas rotadas lado a lado. Cada columna de texto mide
+    // `1.5 * text_px` en el eje corto (el alto del pixmap rasterizado) y con
+    // `font_scale` > 1 eso son ~22px contra los ~25 que mide el grosor de la
+    // barra: no entraban. El reloj se veía cortado, la hora perdía la mitad de
+    // las letras contra el borde de la pantalla y la fecha se metía en la esquina
+    // redondeada. Ahora es UNA columna y el largo que reserva `len_clock` es la
+    // misma suma que en horizontal (trampa 12: medir y dibujar con la misma
+    // cuenta).
+    use super::*;
+    use crate::config::WidgetKind;
+    use crate::render::text_width_estimate_render;
+    use crate::widgets::{BatteryState, KbLayout, NetworkInfo};
+
+    /// Grosor de la barra con el `dock_scale` de la config del usuario
+    /// (`icon_size * magnify_scale + 2 * V_EDGE_PADDING`, 44*0.3*1.35 + 7.2).
+    const CROSS: f32 = 25.02;
+
+    fn snapshot() -> WidgetSnapshot {
+        WidgetSnapshot {
+            time: "10:29 PM".into(),
+            date: "17-Sept".into(),
+            battery: Some((50, BatteryState::Discharging)),
+            media: None,
+            bluetooth: None,
+            workspaces: Vec::new(),
+            cpu: None,
+            ram: None,
+            ram_gb: None,
+            volume: Some((50, false)),
+            network: NetworkInfo {
+                label: "wifi".into(),
+                online: true,
+            },
+            kblayout: KbLayout { short: "EN".into() },
+            custom_texts: Vec::new(),
+            custom_last_polls: Vec::new(),
+        }
+    }
+
+    /// Los valores con los que se reportó el corte.
+    fn settings() -> crate::config::DockSettings {
+        crate::config::DockSettings {
+            font_scale: 1.513213,
+            widget_scale: 1.1065265,
+            ..Default::default()
+        }
+    }
+
+    fn largo_vertical(s: &crate::config::DockSettings, w: &WidgetSnapshot) -> f32 {
+        let cx = Ctx {
+            kind: WidgetKind::Clock,
+            widgets: w,
+            settings: s,
+            render_scale: s.widget_scale,
+            is_vertical: true,
+            cross_len: CROSS,
+            tray_count: 0,
+        };
+        (spec_for(WidgetKind::Clock)
+            .expect("reloj en la tabla")
+            .natural_len)(&cx)
+    }
+
+    #[test]
+    fn el_reloj_vertical_mide_la_suma_y_entra_en_el_grosor() {
+        let s = settings();
+        let w = snapshot();
+        let tp = widget_text_px(&s, WidgetKind::Clock, s.widget_scale);
+        let esperado = text_width_estimate_render(&w.time, tp)
+            + 3.5 * s.widget_scale
+            + text_width_estimate_render(&w.date, tp);
+        let largo = largo_vertical(&s, &w);
+        assert!(
+            (largo - esperado).abs() < 0.01,
+            "el reloj vertical tiene que medir la suma hora+fecha (una columna), \
+             no el `max` de las dos columnas: {largo} vs {esperado}"
+        );
+        // ----- la columna rotada ocupa 1.5*text_px en el eje corto -----
+        assert!(
+            tp * 1.5 <= CROSS,
+            "una columna de texto ({}) no entra en el grosor de la barra ({CROSS})",
+            tp * 1.5
+        );
     }
 }

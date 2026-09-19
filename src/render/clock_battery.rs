@@ -83,7 +83,7 @@ pub(crate) fn draw_clock_widget(
     if is_vertical {
         let time_size = text_px;
         let date_size = text_px;
-        let clock_gap = 3.0 * render_scale;
+        let clock_gap = 3.5 * render_scale;
         let time_px = text_cache.get(&widgets.time, time_size, colors.text_color, 700);
         let date_px = text_cache.get_with_family(
             &widgets.date,
@@ -92,30 +92,34 @@ pub(crate) fn draw_clock_widget(
             500,
             DATE_FONT_FAMILY,
         );
-        // ----- rotation swap -----
-        let time_cross = time_px.as_ref().map(|p| p.height() as f32).unwrap_or(0.0);
-        let date_cross = date_px.as_ref().map(|p| p.height() as f32).unwrap_or(0.0);
-        let total_cross = time_cross + clock_gap + date_cross;
-        let block_start = zx + (zw - total_cross) / 2.0;
-        let cy = zy + zh / 2.0;
-        let time_cx = block_start + time_cross / 2.0;
-        let date_cx = block_start + time_cross + clock_gap + date_cross / 2.0;
+        // ----- UNA columna rotada: hora y fecha una detrás de la otra. Con dos
+        // columnas lado a lado cada línea pide 1.5*font en el eje corto (~22px)
+        // y el grosor de la barra ronda los 25: el reloj se veía cortado en los
+        // dos bordes (la hora perdía la mitad de las letras). El ancho que
+        // reserva `len_clock` es la MISMA suma (trampa 12) -----
+        let time_w = time_px.as_ref().map(|p| p.width() as f32).unwrap_or(0.0);
+        let date_w = date_px.as_ref().map(|p| p.width() as f32).unwrap_or(0.0);
+        let cx = zx + zw / 2.0;
+        // ----- la columna rotada se lee de abajo hacia arriba, así que la hora
+        // va abajo: mismo orden que el "hora fecha" de la barra horizontal -----
+        let mut cy = zy + zh / 2.0 + (time_w + clock_gap + date_w) / 2.0;
         draw_text_rotated(
             pixmap,
             text_cache,
             &widgets.time,
-            time_cx,
-            cy,
+            cx,
+            cy - time_w / 2.0,
             time_size,
             colors.text_color,
             700,
         );
+        cy -= time_w + clock_gap;
         draw_text_rotated_family(
             pixmap,
             text_cache,
             &widgets.date,
-            date_cx,
-            cy,
+            cx,
+            cy - date_w / 2.0,
             date_size,
             colors.text_color,
             500,
@@ -192,7 +196,9 @@ pub(crate) fn draw_battery_widget(
         let gap = 5.0 * render_scale;
         let total = bh + gap + label_len;
         let by = zy + (zh - total) / 2.0;
-        let bx = zx + zw / 2.0 - bw / 2.0;
+        // ----- el nub del polo suma 3*render_scale al ancho: centrar sólo el
+        // cuerpo lo sacaba del grosor de la barra y lo dejaba cortado -----
+        let bx = zx + (zw - (bw + 3.0 * render_scale)) / 2.0;
         draw_battery_icon(pixmap, render_scale, bx, by, bw, bh, pct, tone, fill_alpha);
         let ty = by + bh + gap + label_len / 2.0;
         draw_text_rotated(
