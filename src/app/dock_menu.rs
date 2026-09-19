@@ -5,7 +5,7 @@ const PANEL_GAP: f32 = 8.0;
 
 /// Reparto de la superficie compartida entre el dock y el panel, en unidades
 /// lógicas.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct PanelLayout {
     /// Tamaño de la superficie.
     pub surf: (f32, f32),
@@ -24,32 +24,68 @@ fn align_offset(outer: f32, inner: f32, align: crate::config::DockAlign) -> f32 
     }
 }
 
-/// Con el dock anclado arriba, el panel va DEBAJO de él: así el dock queda a la
-/// vista mientras se tocan los controles (la superficie es compartida, si el
-/// panel ocupara todo el rect el dock desaparecería de la pantalla). En los
-/// otros bordes el panel sigue ocupando la superficie entera, como antes.
+/// Reparto de la superficie compartida que dibuja el dock y el panel: el dock queda
+/// a la vista y el panel va AL LADO que le toca —debajo con el dock arriba, encima
+/// con el dock abajo, a la derecha con el dock a la izquierda y a la izquierda con el
+/// dock a la derecha—. Antes sólo el borde superior lo hacía: en los otros tres el
+/// panel ocupaba la superficie entera y TAPABA el dock (por eso en el launcher con el
+/// dock al costado no se veía la barra).
+///
+/// Los offsets salen de `align_offset` sobre el eje que NO comparten, así que el dock
+/// y el panel quedan alineados entre sí con el mismo `dock_align` de siempre.
 pub(super) fn panel_layout(
     s: &crate::config::DockSettings,
     dock_size: (u32, u32),
     panel_w: f32,
     panel_h: f32,
 ) -> PanelLayout {
-    if s.dock_edge != crate::config::DockEdge::Top {
-        return PanelLayout {
-            surf: (panel_w, panel_h),
-            dock_at: None,
-            panel_at: (0.0, 0.0),
-        };
-    }
+    use crate::config::DockEdge;
     let (dock_w, dock_h) = (dock_size.0 as f32, dock_size.1 as f32);
-    let surf_w = dock_w.max(panel_w);
-    PanelLayout {
-        surf: (surf_w, dock_h + PANEL_GAP + panel_h),
-        dock_at: Some((align_offset(surf_w, dock_w, s.dock_align), 0.0)),
-        panel_at: (
-            align_offset(surf_w, panel_w, s.dock_align),
-            dock_h + PANEL_GAP,
-        ),
+    match s.dock_edge {
+        DockEdge::Top => {
+            let surf_w = dock_w.max(panel_w);
+            PanelLayout {
+                surf: (surf_w, dock_h + PANEL_GAP + panel_h),
+                dock_at: Some((align_offset(surf_w, dock_w, s.dock_align), 0.0)),
+                panel_at: (
+                    align_offset(surf_w, panel_w, s.dock_align),
+                    dock_h + PANEL_GAP,
+                ),
+            }
+        }
+        DockEdge::Bottom => {
+            let surf_w = dock_w.max(panel_w);
+            PanelLayout {
+                surf: (surf_w, panel_h + PANEL_GAP + dock_h),
+                dock_at: Some((
+                    align_offset(surf_w, dock_w, s.dock_align),
+                    panel_h + PANEL_GAP,
+                )),
+                panel_at: (align_offset(surf_w, panel_w, s.dock_align), 0.0),
+            }
+        }
+        DockEdge::Left => {
+            let surf_h = dock_h.max(panel_h);
+            PanelLayout {
+                surf: (dock_w + PANEL_GAP + panel_w, surf_h),
+                dock_at: Some((0.0, align_offset(surf_h, dock_h, s.dock_align))),
+                panel_at: (
+                    dock_w + PANEL_GAP,
+                    align_offset(surf_h, panel_h, s.dock_align),
+                ),
+            }
+        }
+        DockEdge::Right => {
+            let surf_h = dock_h.max(panel_h);
+            PanelLayout {
+                surf: (panel_w + PANEL_GAP + dock_w, surf_h),
+                dock_at: Some((
+                    panel_w + PANEL_GAP,
+                    align_offset(surf_h, dock_h, s.dock_align),
+                )),
+                panel_at: (0.0, align_offset(surf_h, panel_h, s.dock_align)),
+            }
+        }
     }
 }
 
@@ -808,13 +844,12 @@ mod panel_layout_tests {
     }
 
     /// El contrato vertical del que dependen los CUATRO paneles que comparten la
-    /// superficie (ajustes, launcher/ventanas, portapapeles y fondos): con el dock
-    /// arriba el panel va debajo, y el offset del panel es el alto del dock más la
-    /// separación. El dibujo y los hit tests salen del MISMO reparto
-    /// (`overlay_layout` / `panel_local`), así que si esto se rompe el panel se ve en
-    /// un lado y los clicks responden en otro.
+    /// superficie (ajustes, launcher/ventanas, portapapeles y fondos): el dock queda
+    /// a la vista y el panel va al lado que le toca según el borde. El dibujo y los
+    /// hit tests salen del MISMO reparto (`overlay_layout` / `panel_local`), así que
+    /// si esto se rompe el panel se ve en un lado y los clicks responden en otro.
     #[test]
-    fn con_el_dock_arriba_el_panel_va_debajo() {
+    fn el_panel_va_al_lado_del_dock_en_los_cuatro_bordes() {
         let s = settings();
         let l = panel_layout(&s, (603, 26), 640.0, 460.0);
         assert_eq!(
@@ -828,14 +863,56 @@ mod panel_layout_tests {
             26.0 + PANEL_GAP,
             "el panel va debajo del dock"
         );
-        // ----- en los otros bordes el panel sigue ocupando todo, sin dock arriba -----
-        for edge in [DockEdge::Bottom, DockEdge::Left, DockEdge::Right] {
-            let mut s2 = settings();
-            s2.dock_edge = edge;
-            let l2 = panel_layout(&s2, (603, 26), 640.0, 460.0);
-            assert_eq!(l2.surf, (640.0, 460.0), "{edge:?}: sigue ocupando todo");
-            assert_eq!(l2.dock_at, None, "{edge:?}: no hay dock arriba");
-            assert_eq!(l2.panel_at, (0.0, 0.0), "{edge:?}: sin offset");
+
+        // ----- dock abajo: el panel va ENCIMA del dock -----
+        let mut s2 = settings();
+        s2.dock_edge = DockEdge::Bottom;
+        let l2 = panel_layout(&s2, (603, 26), 640.0, 460.0);
+        assert_eq!(l2.surf, (640.0, 460.0 + PANEL_GAP + 26.0));
+        assert_eq!(l2.panel_at.1, 0.0, "el panel va arriba");
+        assert_eq!(
+            l2.dock_at.map(|(_, y)| y),
+            Some(460.0 + PANEL_GAP),
+            "el dock va abajo"
+        );
+
+        // ----- dock a la izquierda: el panel a la derecha, misma altura de barra -----
+        let mut s3 = settings();
+        s3.dock_edge = DockEdge::Left;
+        let l3 = panel_layout(&s3, (26, 610), 356.0, 556.0);
+        assert_eq!(l3.surf, (26.0 + PANEL_GAP + 356.0, 610.0));
+        assert_eq!(
+            l3.dock_at,
+            Some((0.0, 0.0)),
+            "el dock mide lo mismo que la superficie: pegado arriba"
+        );
+        assert_eq!(
+            l3.panel_at,
+            (26.0 + PANEL_GAP, 27.0),
+            "el panel a la derecha del dock y centrado (556 en 610)"
+        );
+
+        // ----- y con el dock a la derecha el panel va a la izquierda -----
+        let mut s4 = settings();
+        s4.dock_edge = DockEdge::Right;
+        let l4 = panel_layout(&s4, (26, 610), 356.0, 556.0);
+        assert_eq!(l4.surf, (356.0 + PANEL_GAP + 26.0, 610.0));
+        assert_eq!(l4.panel_at, (0.0, 27.0), "el panel primero");
+        assert_eq!(
+            l4.dock_at,
+            Some((356.0 + PANEL_GAP, 0.0)),
+            "y el dock pegado al borde derecho"
+        );
+
+        // ----- en los cuatro casos el panel entra en la superficie -----
+        for l in [l, l2, l3, l4] {
+            assert!(
+                l.panel_at.0 >= 0.0
+                    && l.panel_at.1 >= 0.0
+                    && l.panel_at.0 + 1.0 <= l.surf.0
+                    && l.panel_at.1 + 1.0 <= l.surf.1,
+                "el panel se sale de la superficie: {l:?}"
+            );
         }
     }
 }
