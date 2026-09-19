@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::menu_render::{CLIP_ROW_H, CLIP_VISIBLE_ROWS, ClipArgs, clip_content_y, clip_panel_h};
+use crate::menu_render::{CLIP_ROW_H, CLIP_VISIBLE_ROWS, ClipArgs, clip_content_h, clip_content_y};
 
 impl App {
     pub(crate) fn toggle_clipboard(&mut self, qh: &QueueHandle<Self>) {
@@ -23,8 +23,24 @@ impl App {
         self.clipboard_history.ensure_loaded();
 
         self.layer.set_layer(Layer::Top);
-        let panel_w = menu::OVERLAY_PANEL_W;
-        let panel_h = clip_panel_h();
+        // ----- el frame es la caja del CONTENIDO: en el vertical es la columna de
+        // siempre (dos filas de la banda de pestañas quedan afuera, al costado del
+        // dock) y el alto sale de las filas visibles -----
+        let is_vertical = self.dock.is_vertical();
+        // ----- el portapapeles usa el cross ANCHO en vertical (el del launcher): sus
+        // títulos son oraciones largas y en 170 se elidían a ~16 caracteres -----
+        let content_w = if is_vertical {
+            menu::OVERLAY_PANEL_VERTICAL_WIDE.max(self.dock.thickness() as f32)
+        } else {
+            menu::OVERLAY_PANEL_W
+        };
+        let frame = menu::frame_for(
+            content_w,
+            clip_content_h(),
+            is_vertical,
+            self.dock.band_left(),
+        );
+        let (panel_w, panel_h) = menu::panel_size(frame, is_vertical);
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         // ----- el panel va DEBAJO del dock, como el panel de ajustes -----
@@ -40,8 +56,8 @@ impl App {
             anim: self.initial_panel_anim(),
             target_anim: 1.0,
             closing: false,
-            panel_w,
-            panel_h,
+            frame,
+            is_vertical,
             slide_dir: 0.0,
             previews: std::collections::HashMap::new(),
         });
@@ -239,7 +255,7 @@ impl App {
 
     fn clipboard_row_at(&self, _x: f32, y: f32) -> Option<usize> {
         let cm = self.clipboard_mode.as_ref()?;
-        let top = clip_content_y();
+        let top = clip_content_y(cm.frame);
         if y < top {
             return None;
         }
@@ -308,6 +324,7 @@ impl App {
         let scale = self.output_scale.max(1) as f32;
         let transparency = self.dock.config.settings.transparency;
         let tabs = self.current_overlay().map(OverlayMode::tab_index);
+        let is_vertical = self.dock.is_vertical();
         // ----- el reparto (dock arriba, panel abajo) se calcula ANTES de tomar
         // prestado el modo: `overlay_layout` necesita `&self` entero -----
         let Some(layout) = self.overlay_layout() else {
@@ -318,8 +335,10 @@ impl App {
         };
         let linear = cm.anim.clamp(0.0, 1.0);
         let eased = 0.5 - 0.5 * (std::f32::consts::PI * linear).cos();
-        let width = (cm.panel_w * scale).round() as i32;
-        let height = (cm.panel_h * scale).round() as i32;
+        // ----- el tamaño del panel sale del frame: un solo número -----
+        let (panel_w, panel_h) = menu::panel_size(cm.frame, cm.is_vertical);
+        let width = (panel_w * scale).round() as i32;
+        let height = (panel_h * scale).round() as i32;
         if width <= 0 || height <= 0 {
             return;
         }
@@ -335,9 +354,9 @@ impl App {
             hovered: cm.hovered,
             scroll_y: cm.scroll_y,
             render_scale: scale,
-            panel_w: cm.panel_w,
-            panel_h: cm.panel_h,
+            frame: cm.frame,
             overlay_tabs: tabs,
+            is_vertical,
             // ----- el fondo y la banda los deja fijos el render; el cuerpo se
             // corre (cambio de pestaña) y/o se funde (transparency < 1) -----
             slide_offset: menu::overlay_slide_offset(cm.slide_dir, cm.anim),

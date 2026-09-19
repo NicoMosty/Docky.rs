@@ -331,10 +331,13 @@ impl KeyboardHandler for App {
             return;
         }
         // ----- Shift+←/→ cambia de modo del overlay (el equivalente a los modos de
-        // rofi): launcher -> portapapeles -> fondos -> ventanas. Va ANTES de armar
-        // `held_key`; si no, el auto-repeat de la flecha ciclaría un modo por frame. -----
-        if self.modifiers.shift && matches!(event.keysym, Keysym::Left | Keysym::Right) {
-            let dir = if event.keysym == Keysym::Right { 1 } else { -1 };
+        // rofi): launcher -> portapapeles -> fondos -> ventanas. En el panel VERTICAL la
+        // banda de pestañas es una columna, así que la flecha que corre por ella es ↑/↓
+        // y también cicla (las cuatro siguen andando: el gesto de ←/→ no se toca). Va
+        // ANTES de armar `held_key`; si no, el auto-repeat de la flecha ciclaría un modo
+        // por frame. -----
+        if self.modifiers.shift && flecha_de_la_banda(event.keysym, self.dock.is_vertical()) {
+            let dir = overlay_cycle_dir(event.keysym);
             if self.cycle_overlay(dir, qh) {
                 return;
             }

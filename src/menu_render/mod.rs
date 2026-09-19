@@ -444,9 +444,11 @@ pub fn draw_content(
                 text_cache,
                 settings,
                 args.panel_width,
+                args.content_height,
                 s,
                 index,
                 args.dock.is_vertical(),
+                args.dock.band_left(),
             );
         }
         draw_body(pixmap, args.slide_offset * s, args.body_opacity, |dst| {

@@ -76,6 +76,36 @@ impl Dock {
         )
     }
 
+    /// De qué lado cae la columna de pestañas de los paneles del overlay: el mismo
+    /// lado del dock (`Left` la deja pegada borde de pantalla). En los paneles
+    /// anchos no importa, la banda es una fila arriba.
+    pub fn band_left(&self) -> bool {
+        !matches!(self.config.settings.dock_edge, DockEdge::Right)
+    }
+
+    /// Caja del contenido de un panel del overlay de `panel_w` x `panel_h`: el
+    /// panel menos la banda de pestañas. Es la única cuenta (el inverso de
+    /// `menu::panel_size`) y sale del borde del dock: en el vertical la columna va
+    /// pegada al mismo lado que la barra.
+    pub fn panel_frame(&self, panel_w: f32, panel_h: f32) -> crate::menu::PanelFrame {
+        let is_vertical = self.is_vertical();
+        let (band_w, band_h) = if is_vertical {
+            (crate::menu::OVERLAY_TABS_W, 0.0)
+        } else {
+            (0.0, crate::menu::OVERLAY_TABS_H)
+        };
+        crate::menu::PanelFrame {
+            x: if is_vertical && self.band_left() {
+                band_w
+            } else {
+                0.0
+            },
+            y: band_h,
+            w: (panel_w - band_w).max(0.0),
+            h: (panel_h - band_h).max(0.0),
+        }
+    }
+
     pub fn cross_len(&self) -> f32 {
         let s = &self.config.settings;
         let icon_size = REFERENCE_ICON_SIZE * s.dock_scale;

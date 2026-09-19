@@ -1,4 +1,4 @@
-use super::overlay_tabs_h;
+use super::*;
 
 pub const WALLPAPER_BACK_ZONE_W: f32 = 30.0;
 /// El filmstrip usa el mismo inset y la misma separación que los otros paneles
@@ -9,34 +9,34 @@ pub const WALLPAPER_GAP: f32 = super::MENU_PADDING;
 pub const WALLPAPER_ASPECT: f32 = 1.6;
 
 // ----- always landscape -----
-pub fn wallpaper_thumb_size(panel_w: f32, panel_h: f32, is_vertical: bool) -> (f32, f32) {
+pub fn wallpaper_thumb_size(frame: PanelFrame, is_vertical: bool) -> (f32, f32) {
     if is_vertical {
-        let w = (panel_w - WALLPAPER_PADDING * 2.0).max(1.0);
+        let w = (frame.w - WALLPAPER_PADDING * 2.0).max(1.0);
         (w, w / WALLPAPER_ASPECT)
     } else {
-        // ----- la banda de pestañas se come alto: el panel crece con ella al
-        // abrirse, así que se descuenta y la miniatura queda del mismo tamaño -----
-        let h = (panel_h - overlay_tabs_h(false) - WALLPAPER_PADDING * 2.0).max(1.0);
+        // ----- la miniatura entra en el alto del CONTENIDO: la banda de pestañas
+        // ya quedó afuera del frame, así que no se descuenta dos veces -----
+        let h = (frame.h - WALLPAPER_PADDING * 2.0).max(1.0);
         (h * WALLPAPER_ASPECT, h)
     }
 }
 
-pub fn wallpaper_content_len(count: usize, panel_w: f32, panel_h: f32, is_vertical: bool) -> f32 {
-    let (tw, th) = wallpaper_thumb_size(panel_w, panel_h, is_vertical);
+pub fn wallpaper_content_len(count: usize, frame: PanelFrame, is_vertical: bool) -> f32 {
+    let (tw, th) = wallpaper_thumb_size(frame, is_vertical);
     let along = if is_vertical { th } else { tw };
     (count as f32 * (along + WALLPAPER_GAP) - WALLPAPER_GAP).max(0.0)
 }
 
-pub fn wallpaper_max_scroll(count: usize, panel_w: f32, panel_h: f32, is_vertical: bool) -> f32 {
-    // ----- en el panel vertical la banda (apilada) corre el filmstrip hacia
-    // abajo, así que el tramo visible es más corto -----
-    let along = if is_vertical {
-        panel_h - overlay_tabs_h(true)
-    } else {
-        panel_w
-    };
-    let viewport_along = (along - WALLPAPER_BACK_ZONE_W).max(1.0);
-    (wallpaper_content_len(count, panel_w, panel_h, is_vertical) - viewport_along).max(0.0)
+pub fn wallpaper_max_scroll(count: usize, frame: PanelFrame, is_vertical: bool) -> f32 {
+    let viewport_along = (wallpaper_along(frame, is_vertical) - WALLPAPER_BACK_ZONE_W).max(1.0);
+    (wallpaper_content_len(count, frame, is_vertical) - viewport_along).max(0.0)
+}
+
+/// Largo del contenido en el eje del scroll (el filmstrip): el ancho del frame en
+/// el panel ancho y el alto en el vertical. La zona de la flecha de volver está
+/// adentro (es una franja de `WALLPAPER_BACK_ZONE_W`).
+pub fn wallpaper_along(frame: PanelFrame, is_vertical: bool) -> f32 {
+    if is_vertical { frame.h } else { frame.w }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,21 +47,18 @@ pub enum WallpaperHit {
 
 pub fn wallpaper_hit_test(
     count: usize,
-    panel_w: f32,
-    panel_h: f32,
+    frame: PanelFrame,
     is_vertical: bool,
     scroll: f32,
     x: f32,
     y: f32,
 ) -> Option<WallpaperHit> {
-    // ----- la banda de pestañas ocupa el borde de arriba del panel: las
-    // coordenadas del puntero se miden desde abajo de ella, igual que el panel
-    // debajo del dock -----
-    let band = overlay_tabs_h(is_vertical);
+    // ----- el puntero viene en coordenadas del PANEL: se lo lleva al frame (la
+    // banda de pestañas puede estar a un costado) -----
     let (along_pos, cross_pos) = if is_vertical {
-        (y - band, x)
+        (y - frame.y, x - frame.x)
     } else {
-        (x, y - band)
+        (x - frame.x, y - frame.y)
     };
     if along_pos < 0.0 || cross_pos < 0.0 {
         return None;
@@ -69,7 +66,7 @@ pub fn wallpaper_hit_test(
     if along_pos < WALLPAPER_BACK_ZONE_W {
         return Some(WallpaperHit::Back);
     }
-    let (tw, th) = wallpaper_thumb_size(panel_w, panel_h, is_vertical);
+    let (tw, th) = wallpaper_thumb_size(frame, is_vertical);
     let (along_size, cross_size) = if is_vertical { (th, tw) } else { (tw, th) };
     if cross_pos < WALLPAPER_PADDING || cross_pos > WALLPAPER_PADDING + cross_size {
         return None;
@@ -88,30 +85,38 @@ pub fn wallpaper_hit_test(
 mod hit_tests {
     use super::*;
 
-    /// El puntero se mide desde abajo de la banda de pestañas: si la traducción se
-    /// desincroniza del dibujo, la banda "come" la primera miniatura (o el click
-    /// abre la de al lado). Los tamaños salen de las mismas funciones que el dibujo.
-    fn casos(panel_w: f32, panel_h: f32, is_vertical: bool) {
-        let band = overlay_tabs_h(is_vertical);
-        let (tw, th) = wallpaper_thumb_size(panel_w, panel_h, is_vertical);
-        let along_size = if is_vertical { th } else { tw };
+    /// El puntero se mide desde el frame (la banda de pestañas queda afuera): si la
+    /// traducción se desincroniza del dibujo, la banda "come" la primera miniatura
+    /// (o el click abre la de al lado). Los tamaños salen de las mismas funciones
+    /// que el dibujo.
+    fn casos(content_w: f32, content_h: f32, is_vertical: bool, band_left: bool) {
+        let frame = frame_for(content_w, content_h, is_vertical, band_left);
         let count = 3;
-        // ----- el helper toma coordenadas del contenido; la banda se suma acá
-        // donde le toca (cross en el panel ancho, along en el vertical) -----
+        let (tw, th) = wallpaper_thumb_size(frame, is_vertical);
+        let along_size = if is_vertical { th } else { tw };
+        // ----- el helper toma coordenadas del CONTENIDO; el origen del frame se
+        // suma acá, que es lo que hace el panel -----
         let hit = |along: f32, cross: f32| {
             let (x, y) = if is_vertical {
-                (cross, band + along)
+                (frame.x + cross, frame.y + along)
             } else {
-                (along, band + cross)
+                (frame.x + along, frame.y + cross)
             };
-            wallpaper_hit_test(count, panel_w, panel_h, is_vertical, 0.0, x, y)
+            wallpaper_hit_test(count, frame, is_vertical, 0.0, x, y)
         };
-        // ----- dentro de la banda no hay nada -----
-        assert_eq!(
-            wallpaper_hit_test(count, panel_w, panel_h, is_vertical, 0.0, 5.0, band * 0.5),
-            None
-        );
-        // ----- la flecha de volver, justo debajo -----
+        // ----- dentro de la banda de pestañas no hay nada -----
+        if is_vertical {
+            assert_eq!(
+                wallpaper_hit_test(count, frame, is_vertical, 0.0, frame.x - 1.0, 5.0),
+                None
+            );
+        } else {
+            assert_eq!(
+                wallpaper_hit_test(count, frame, is_vertical, 0.0, 5.0, frame.y - 1.0),
+                None
+            );
+        }
+        // ----- la flecha de volver, justo adentro del contenido -----
         assert_eq!(
             hit(WALLPAPER_BACK_ZONE_W * 0.5, WALLPAPER_PADDING + 1.0),
             Some(WallpaperHit::Back)
@@ -122,18 +127,20 @@ mod hit_tests {
             assert_eq!(
                 hit(along, WALLPAPER_PADDING + 1.0),
                 Some(WallpaperHit::Thumbnail(i)),
-                "i={i} vertical={is_vertical}"
+                "i={i} vertical={is_vertical} band_left={band_left}"
             );
         }
     }
 
     #[test]
     fn el_hit_test_descuenta_la_banda() {
-        casos(1920.0, 196.0, false);
-        casos(WALLPAPER_PANEL_H_TEST, 744.0, true);
+        // ----- panel ancho (dock arriba): la banda es la fila de arriba -----
+        casos(1920.0, 170.0, false, true);
+        // ----- panel vertical con la banda al costado del dock: la misma cuenta,
+        // corrida en x, y el frame arranca en 26 -----
+        casos(crate::menu::OVERLAY_PANEL_VERTICAL_W, 640.0, true, true);
+        // ----- y con el dock a la derecha la banda va del otro lado: el contenido
+        // arranca en 0 y el alto es el mismo -----
+        casos(crate::menu::OVERLAY_PANEL_VERTICAL_W, 640.0, true, false);
     }
-
-    /// El ancho del panel vertical: el mismo que le da `open_wallpaper_picker`
-    /// (`WALLPAPER_PANEL_H`, el cross de siempre).
-    const WALLPAPER_PANEL_H_TEST: f32 = 170.0;
 }

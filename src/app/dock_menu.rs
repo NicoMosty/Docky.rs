@@ -113,14 +113,16 @@ impl App {
     }
 
     /// Tamaño lógico del panel del modo que comparte la superficie con el dock
-    /// (el panel de ajustes y los tres del overlay).
+    /// (el panel de ajustes y los tres del overlay). Los tres del overlay guardan el
+    /// **frame** (la caja del contenido, ver `AppSearchMode::frame`) y el tamaño del
+    /// panel sale de ahí con `menu::panel_size`: un solo número, no dos.
     pub(super) fn overlay_panel_size(&self) -> Option<(f32, f32)> {
         if let Some(m) = self.app_search_mode.as_ref() {
-            Some((m.panel_w, m.panel_h))
+            Some(menu::panel_size(m.frame, m.is_vertical))
         } else if let Some(m) = self.clipboard_mode.as_ref() {
-            Some((m.panel_w, m.panel_h))
+            Some(menu::panel_size(m.frame, m.is_vertical))
         } else if let Some(m) = self.wallpaper_mode.as_ref() {
-            Some((m.panel_w, m.panel_h))
+            Some(menu::panel_size(m.frame, m.is_vertical))
         } else {
             self.dock_menu_mode.as_ref().map(|m| (m.panel_w, m.panel_h))
         }

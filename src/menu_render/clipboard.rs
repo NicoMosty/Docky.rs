@@ -21,14 +21,16 @@ pub const CLIP_HEADER_H: f32 = crate::menu::MENU_PADDING * 2.0 + crate::menu::SE
 pub const CLIP_PAD: f32 = 10.0;
 pub const CLIP_VISIBLE_ROWS: usize = 7;
 
-pub fn clip_panel_h() -> f32 {
-    clip_content_y() + CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32 + CLIP_PAD
+/// Alto del CONTENIDO del portapapeles: el encabezado (caja de búsqueda) más las
+/// filas visibles. La banda de pestañas no entra: vive fuera del frame.
+pub fn clip_content_h() -> f32 {
+    CLIP_HEADER_H + CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32 + CLIP_PAD
 }
 
-/// Dónde arranca el contenido del portapapeles: la banda de pestañas arriba del
-/// encabezado. La usan el dibujo y el hit test, así que se mueven juntos.
-pub fn clip_content_y() -> f32 {
-    crate::menu::OVERLAY_TABS_H + CLIP_HEADER_H
+/// Dónde arranca la primera fila, en coordenadas del PANEL. La usan el dibujo y
+/// el hit test, así que se mueven juntos.
+pub fn clip_content_y(frame: crate::menu::PanelFrame) -> f32 {
+    frame.y + CLIP_HEADER_H
 }
 
 pub struct ClipArgs<'a> {
@@ -41,9 +43,13 @@ pub struct ClipArgs<'a> {
     pub hovered: Option<usize>,
     pub scroll_y: f32,
     pub render_scale: f32,
-    pub panel_w: f32,
-    pub panel_h: f32,
+    /// Caja del CONTENIDO del panel: el panel menos la banda de pestañas. El
+    /// tamaño del panel sale de acá (`menu::panel_size`).
+    pub frame: crate::menu::PanelFrame,
     pub overlay_tabs: Option<usize>,
+    /// Panel vertical del overlay (`Left`/`Right`): la banda es una columna al
+    /// costado del dock.
+    pub is_vertical: bool,
     /// Ver `DrawArgs::slide_offset` / `body_opacity`.
     pub slide_offset: f32,
     pub body_opacity: f32,
@@ -51,11 +57,13 @@ pub struct ClipArgs<'a> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: ClipArgs) {
-    use crate::menu::{MENU_PADDING, OVERLAY_RADIUS, OVERLAY_TABS_H, SEARCH_BOX_HEIGHT};
+    use crate::menu::{MENU_PADDING, OVERLAY_RADIUS, SEARCH_BOX_HEIGHT};
     let s = args.render_scale;
     let settings = args.settings;
-    let w = args.panel_w * s;
-    let h = args.panel_h * s;
+    let frame = args.frame;
+    let (panel_w, panel_h) = crate::menu::panel_size(frame, args.is_vertical);
+    let w = panel_w * s;
+    let h = panel_h * s;
 
     let bg = panel_bg(settings);
     let path = rounded_rect_path(0.0, 0.0, w, h, menu_radius(settings, s));
@@ -71,14 +79,25 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
     );
     stroke_menu_border(pixmap, &path, settings, s);
 
-    // ----- banda de pestañas: es una caja ancha siempre, así que van en fila -----
+    // ----- banda de pestañas: fila arriba en el panel ancho, columna al costado
+    // del dock (etiquetas rotadas) en el vertical -----
     if let Some(index) = args.overlay_tabs {
-        super::draw_overlay_tabs(pixmap, text_cache, settings, args.panel_w, s, index, false);
+        super::draw_overlay_tabs(
+            pixmap,
+            text_cache,
+            settings,
+            panel_w,
+            panel_h,
+            s,
+            index,
+            args.is_vertical,
+            frame.x > 0.0,
+        );
     }
 
-    // ----- search box: vive en el encabezado, o sea debajo de la banda. Ojo,
-    // `clip_content_y()` es la PRIMERA fila, no el encabezado -----
-    let top = clip_content_y();
+    // ----- search box: vive en el encabezado, o sea arriba de la primera fila.
+    // Ojo, `clip_content_y()` es la PRIMERA fila, no el encabezado -----
+    let top = clip_content_y(frame);
     let placeholder = args.query.is_empty();
     // ----- el cuerpo (caja de búsqueda + filas) se corre en un cambio de
     // pestaña; la banda y la barra de scroll quedan fijas. El parámetro de la
@@ -89,9 +108,9 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
             pixmap,
             text_cache,
             settings,
-            CLIP_PAD * s,
-            (OVERLAY_TABS_H + MENU_PADDING) * s,
-            (args.panel_w - CLIP_PAD * 2.0) * s,
+            (frame.x + CLIP_PAD) * s,
+            (frame.y + MENU_PADDING) * s,
+            (frame.w - CLIP_PAD * 2.0) * s,
             SEARCH_BOX_HEIGHT * s,
             if placeholder {
                 "Search clipboard\u{2026}"
@@ -113,7 +132,7 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
                 pixmap,
                 text_cache,
                 msg,
-                CLIP_PAD * s,
+                (frame.x + CLIP_PAD) * s,
                 (top + 24.0) * s,
                 10.0 * s,
                 &text_dim_hex(settings),
@@ -147,9 +166,9 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
                 };
                 fill_rrect(
                     pixmap,
-                    CLIP_PAD * s,
+                    (frame.x + CLIP_PAD) * s,
                     row_y + 3.0 * s,
-                    w - CLIP_PAD * 2.0 * s,
+                    (frame.w - CLIP_PAD * 2.0) * s,
                     (CLIP_ROW_H - 6.0) * s,
                     OVERLAY_RADIUS * s,
                     fill,
@@ -157,9 +176,9 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
             }
 
             if let Some(thumbnail) = entry.thumbnail.clone() {
-                let px = (CLIP_PAD + ROW_INSET) * s;
+                let px = (frame.x + CLIP_PAD + ROW_INSET) * s;
                 let py = row_y + 6.0 * s;
-                let pw = (args.panel_w - (CLIP_PAD + ROW_INSET) * 2.0) * s;
+                let pw = (frame.w - (CLIP_PAD + ROW_INSET) * 2.0) * s;
                 let ph = (CLIP_ROW_H - 12.0) * s;
                 let want_w = pw.round().max(1.0) as u32;
                 let want_h = ph.round().max(1.0) as u32;
@@ -176,7 +195,7 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
                     blit_preview(pixmap, preview, px, py);
                 }
             } else {
-                let icon_x = (CLIP_PAD + ROW_INSET) * s;
+                let icon_x = (frame.x + CLIP_PAD + ROW_INSET) * s;
                 fill_rrect(
                     pixmap,
                     icon_x,
@@ -199,14 +218,10 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
 
                 // ----- la misma relación que la miniatura: caja en CLIP_PAD+ROW_INSET,
                 // texto 12px a la derecha de la caja (los 34 del icono) -----
-                let text_x = CLIP_PAD + ROW_INSET + 46.0;
-                let title = fit(
-                    entry.title.trim(),
-                    &entry.title,
-                    11.0,
-                    args.panel_w - text_x - (CLIP_PAD + ROW_INSET),
-                );
-                let desc = &entry.description;
+                let text_x = frame.x + CLIP_PAD + ROW_INSET + 46.0;
+                let text_w = frame.w - (CLIP_PAD + ROW_INSET + 46.0) - (CLIP_PAD + ROW_INSET);
+                let title = fit(entry.title.trim(), &entry.title, 11.0, text_w);
+                let desc = fit(&entry.description, &entry.description, 8.0, text_w);
                 let tcol = if selected { &on_accent } else { &title_c };
                 let dcol = if selected { &on_accent } else { &dim_c };
                 draw_text(
@@ -222,7 +237,7 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
                 draw_text(
                     pixmap,
                     text_cache,
-                    desc,
+                    &desc,
                     text_x * s,
                     row_y + 30.0 * s,
                     8.0 * s,
@@ -237,7 +252,7 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
     let total = args.filtered.len() as f32 * CLIP_ROW_H;
     let viewport = CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32;
     if total > viewport {
-        let track_x = w - 4.0 * s;
+        let track_x = (frame.x + frame.w - 4.0) * s;
         let track_h = h - top * s - CLIP_PAD * s;
         let thumb_h = (track_h * (viewport / total)).max(20.0 * s);
         let max_scroll = total - viewport;
@@ -285,4 +300,39 @@ fn fit(display: &str, _full: &str, size: f32, max_w: f32) -> String {
     let mut out: String = display.chars().take(approx.saturating_sub(1)).collect();
     out.push('\u{2026}');
     out
+}
+
+#[cfg(test)]
+mod clip_vertical_tests {
+    use super::*;
+
+    /// En el dock vertical (`Left`/`Right`) la banda de pestañas va apilada y el
+    /// El alto del contenido no depende de la orientación (son las mismas filas y
+    /// el mismo encabezado) y la banda de pestañas queda FUERA del frame: en el
+    /// panel ancho es una fila arriba y en el vertical una columna al costado del
+    /// dock, así que ya no le come alto al panel.
+    #[test]
+    fn el_contenido_mide_lo_mismo_en_las_dos_orientaciones() {
+        assert_eq!(
+            clip_content_h(),
+            CLIP_HEADER_H + CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32 + CLIP_PAD
+        );
+        // ----- la primera fila arranca en el frame, no en la banda -----
+        for (band_left, esperado) in [(true, crate::menu::OVERLAY_TABS_W), (false, 0.0)] {
+            let frame = crate::menu::frame_for(
+                crate::menu::OVERLAY_PANEL_VERTICAL_W,
+                clip_content_h(),
+                true,
+                band_left,
+            );
+            assert_eq!(frame.x, esperado);
+            assert_eq!(clip_content_y(frame), frame.y + CLIP_HEADER_H);
+        }
+        let ancho =
+            crate::menu::frame_for(crate::menu::OVERLAY_PANEL_W, clip_content_h(), false, true);
+        assert_eq!(
+            clip_content_y(ancho),
+            crate::menu::OVERLAY_TABS_H + CLIP_HEADER_H
+        );
+    }
 }

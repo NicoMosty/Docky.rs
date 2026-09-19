@@ -35,19 +35,25 @@ impl App {
             SearchList::Windows => desktop::list_niri_windows(),
         };
         let is_vertical = self.dock.is_vertical();
-        let (controls, cross_fixed) = menu::build_app_search_controls(is_vertical);
-        let (panel_w, panel_h) = if is_vertical {
-            let dock_thickness = self.dock.thickness() as f32;
-            (
-                menu::app_search_vertical_cross(dock_thickness),
-                menu::app_search_vertical_along(),
-            )
+        let band_left = self.dock.band_left();
+        // ----- el frame es la caja del CONTENIDO: en el panel ancho mide lo de
+        // siempre (640) y en el vertical dos columnas de tarjeta, y la banda de
+        // pestañas vive fuera de la caja (fila arriba o columna al costado) -----
+        let content_w = if is_vertical {
+            menu::app_search_vertical_content_w()
         } else {
             // ----- mismo ancho que el portapapeles y el selector de fondos
             // (`OVERLAY_PANEL_W`): los tres van centrados con el mismo anclaje, así
             // que al ciclar con Shift+←/→ los bordes no se mueven. -----
-            (menu::OVERLAY_PANEL_W, cross_fixed)
+            menu::OVERLAY_PANEL_W
         };
+        let base = menu::frame_for(content_w, 0.0, is_vertical, band_left);
+        let (controls, content_h) = menu::build_app_search_controls(base, is_vertical);
+        let frame = menu::PanelFrame {
+            h: content_h,
+            ..base
+        };
+        let (panel_w, panel_h) = menu::panel_size(frame, is_vertical);
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         // ----- el panel va DEBAJO del dock, misma composición que el panel de
@@ -72,8 +78,7 @@ impl App {
             anim: self.initial_panel_anim(),
             target_anim: 1.0,
             closing: false,
-            panel_w,
-            panel_h,
+            frame,
             is_vertical,
             slide_dir: 0.0,
         });
@@ -147,19 +152,18 @@ impl App {
         // ----- el scroll se mide en tramos (la página entera en el horizontal, la
         // tarjeta en el vertical), pero el resaltado va a la tarjeta exacta: si no,
         // la pastilla quedaría en el borde de la página en vez de sobre la app. -----
-        let along = menu::app_search_card_along(index, m.panel_w, m.is_vertical);
-        let along_len = menu::app_search_along_len(m.panel_w, m.is_vertical);
-        let viewport_along = menu::app_search_viewport_along(m.panel_w, m.panel_h, m.is_vertical);
+        let along = menu::app_search_card_along(index, m.frame, m.is_vertical);
+        let along_len = menu::app_search_along_len(m.frame, m.is_vertical);
+        let viewport_along = menu::app_search_viewport_along(m.frame, m.is_vertical);
         let mut target = m.scroll_target;
         if along < target {
             target = along;
         } else if along + along_len > target + viewport_along {
             target = along + along_len - viewport_along;
         }
-        let max_scroll =
-            menu::app_search_max_scroll(m.filtered.len(), m.panel_w, m.panel_h, m.is_vertical);
+        let max_scroll = menu::app_search_max_scroll(m.filtered.len(), m.frame, m.is_vertical);
         m.scroll_target = target.clamp(0.0, max_scroll);
-        let (ox, oy) = menu::app_search_card_offset(index, m.panel_w, m.is_vertical);
+        let (ox, oy) = menu::app_search_card_offset(index, m.frame, m.is_vertical);
         m.highlight_target = ox;
         m.highlight_target_y = oy;
         self.request_redraw(qh);
@@ -214,8 +218,10 @@ impl App {
         let linear = m.anim.clamp(0.0, 1.0);
         let eased = 0.5 - 0.5 * (std::f32::consts::PI * linear).cos();
 
-        let width = (m.panel_w * scale).round() as i32;
-        let height = (m.panel_h * scale).round() as i32;
+        // ----- el tamaño del panel sale del frame: un solo numero -----
+        let (panel_w, panel_h) = menu::panel_size(m.frame, m.is_vertical);
+        let width = (panel_w * scale).round() as i32;
+        let height = (panel_h * scale).round() as i32;
         if width <= 0 || height <= 0 {
             return;
         }
@@ -223,8 +229,8 @@ impl App {
         let args = menu_render::DrawArgs {
             screen: menu::MenuScreen::AddApp,
             controls: &m.controls,
-            content_height: m.panel_h,
-            panel_width: m.panel_w,
+            content_height: panel_h,
+            panel_width: panel_w,
             dock: &self.dock,
             app_entries: &m.filtered,
             icon_choices: &[],
@@ -364,7 +370,7 @@ impl App {
                 if let Some(m) = self.app_search_mode.as_mut() {
                     let strip_hit = menu::app_search_strip_hit_test(
                         m.filtered.len(),
-                        m.panel_w,
+                        m.frame,
                         m.is_vertical,
                         m.scroll_x,
                         x as f32,
@@ -378,7 +384,7 @@ impl App {
                         // Ojo: al SALIR de las tarjetas no se toca nada, así que el
                         // resaltado se queda donde estaba en vez de saltar a la 1ª. -----
                         m.selected = i;
-                        let (ox, oy) = menu::app_search_card_offset(i, m.panel_w, m.is_vertical);
+                        let (ox, oy) = menu::app_search_card_offset(i, m.frame, m.is_vertical);
                         m.highlight_target = ox;
                         m.highlight_target_y = oy;
                     }
@@ -390,7 +396,7 @@ impl App {
                 let hit = self.app_search_mode.as_ref().and_then(|m| {
                     menu::app_search_strip_hit_test(
                         m.filtered.len(),
-                        m.panel_w,
+                        m.frame,
                         m.is_vertical,
                         m.scroll_x,
                         x as f32,
@@ -415,12 +421,8 @@ impl App {
                     vertical.absolute
                 };
                 if let Some(m) = self.app_search_mode.as_mut() {
-                    let max_scroll = menu::app_search_max_scroll(
-                        m.filtered.len(),
-                        m.panel_w,
-                        m.panel_h,
-                        m.is_vertical,
-                    );
+                    let max_scroll =
+                        menu::app_search_max_scroll(m.filtered.len(), m.frame, m.is_vertical);
                     m.scroll_target = (m.scroll_target + delta as f32).clamp(0.0, max_scroll);
                 }
                 self.request_redraw(qh);
@@ -456,7 +458,7 @@ impl App {
                 let cols = self
                     .app_search_mode
                     .as_ref()
-                    .map(|m| menu::app_search_row_step(m.panel_w, m.is_vertical))
+                    .map(|m| menu::app_search_row_step(m.frame, m.is_vertical))
                     .unwrap_or(1);
                 let delta = if event.keysym == Keysym::Down {
                     cols

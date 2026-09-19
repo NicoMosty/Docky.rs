@@ -97,11 +97,102 @@ pub const NOTIFICATION_BODY_MAX_LINES: usize = 8;
 /// filas (6*92 + 5*10 = 602 contra los 620 disponibles).
 pub const OVERLAY_PANEL_W: f32 = 640.0;
 
+/// Cross de esos mismos tres paneles cuando el dock es vertical (`Left`/`Right`):
+/// una columna al lado del dock. Es el MISMO para los tres, por la misma razón
+/// que `OVERLAY_PANEL_W` en el horizontal: el borde no se mueve al ciclar con
+/// Shift+←/→. 170 es el que ya usaba el selector de fondos (miniatura de 150 más
+/// los dos `MENU_PADDING`), que es el panel que el usuario puso de referencia.
+/// Es el ancho del CONTENIDO: la banda de pestañas le suma `OVERLAY_TABS_W`.
+pub const OVERLAY_PANEL_VERTICAL_W: f32 = 170.0;
+
+/// Cross ANCHO del panel vertical: el launcher (dos columnas de tarjeta de 150 más
+/// el gap y los insets) y el portapapeles, que tiene títulos largos y en 170 se
+/// elidía a ~16 caracteres. Da 330 por construcción, así que el launcher no tiene
+/// su propio número (lo fija el test `el_ancho_del_launcher_es_el_compartido`).
+pub const OVERLAY_PANEL_VERTICAL_WIDE: f32 = 330.0;
+
+/// Cross del contenido del panel vertical, con el piso del grosor del dock: con
+/// una barra muy gruesa el panel quedaría más angosto que ella.
+pub fn overlay_vertical_cross(dock_thickness: f32) -> f32 {
+    dock_thickness.max(OVERLAY_PANEL_VERTICAL_W)
+}
+
 /// Barra de pestañas compartida por los modos del overlay. El orden es el de
-/// `OVERLAY_ORDER` (Shift+←/→ cicla) y cada panel la dibuja arriba de su
-/// contenido: es la única señal de en qué mini-app estás.
+/// `OVERLAY_ORDER` (Shift+←/→ cicla) y cada panel la dibuja: es la única señal de
+/// en qué mini-app estás.
 pub const OVERLAY_TABS: [&str; 4] = ["Apps", "Clipboard", "Wallpapers", "Windows"];
+/// Largo de la banda cuando es una FILA (panel ancho, dock arriba/abajo).
 pub const OVERLAY_TABS_H: f32 = 26.0;
+/// Ancho de la banda cuando es una COLUMNA (panel vertical): va pegada al lado del
+/// dock, con las etiquetas rotadas 90° como los widgets de la barra vertical.
+/// Antes iba apilada arriba y le comía 104 de alto a un panel que ya es una
+/// columna (y el panel quedaba más alto que la pantalla útil).
+pub const OVERLAY_TABS_W: f32 = 26.0;
+
+/// Caja del CONTENIDO de un panel del overlay (`x`, `y` son su origen dentro del
+/// panel; `w`, `h` su tamaño). La banda de pestañas vive fuera de la caja: es una
+/// fila de 26 arriba en el panel ancho y una columna de 26 al costado en el
+/// vertical. Todo el reparto de los tres paneles (buscador, filas, tiles,
+/// filmstrip) y sus hit tests salen de acá: la banda se cuenta UNA vez y el
+/// dibujo y el click no se pueden desincronizar (trampa 10).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanelFrame {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Frame a partir del contenido que pide el panel. `band_left` es de qué lado cae
+/// la columna de pestañas en el panel vertical (el lado del dock: `Left`).
+pub fn frame_for(content_w: f32, content_h: f32, is_vertical: bool, band_left: bool) -> PanelFrame {
+    if is_vertical {
+        let x = if band_left { OVERLAY_TABS_W } else { 0.0 };
+        PanelFrame {
+            x,
+            y: 0.0,
+            w: content_w,
+            h: content_h,
+        }
+    } else {
+        PanelFrame {
+            x: 0.0,
+            y: OVERLAY_TABS_H,
+            w: content_w,
+            h: content_h,
+        }
+    }
+}
+
+/// Tamaño del panel que hay que pedirle a la layer: el frame más la banda. Es el
+/// inverso de `frame_for` (lo fija el test `el_frame_y_el_panel_son_inversos`).
+pub fn panel_size(frame: PanelFrame, is_vertical: bool) -> (f32, f32) {
+    if is_vertical {
+        (frame.w + OVERLAY_TABS_W, frame.h)
+    } else {
+        (frame.w, frame.h + OVERLAY_TABS_H)
+    }
+}
+
+/// Rect de la banda dentro del panel (x, y, w, h): la fila de arriba o la columna
+/// del lado del dock. La usan el dibujo de las pestañas y nada más.
+pub fn band_rect(
+    panel_w: f32,
+    panel_h: f32,
+    is_vertical: bool,
+    band_left: bool,
+) -> (f32, f32, f32, f32) {
+    if is_vertical {
+        let x = if band_left {
+            0.0
+        } else {
+            panel_w - OVERLAY_TABS_W
+        };
+        (x, 0.0, OVERLAY_TABS_W, panel_h)
+    } else {
+        (0.0, 0.0, panel_w, OVERLAY_TABS_H)
+    }
+}
 
 /// Radio de todo lo que va DENTRO de un panel del overlay: la caja de búsqueda,
 /// la pastilla de la tarjeta de app, la fila del portapapeles, la pestaña de la
@@ -115,15 +206,6 @@ pub const OVERLAY_TABS_H: f32 = 26.0;
 /// la esquina de la imagen.
 pub const OVERLAY_RADIUS: f32 = 8.0;
 
-/// Cuánto corre la banda al contenido. En un panel vertical (angosto) las cuatro
-/// etiquetas no entran en una fila, así que se apilan y la banda crece.
-pub fn overlay_tabs_h(is_vertical: bool) -> f32 {
-    if is_vertical {
-        OVERLAY_TABS_H * OVERLAY_TABS.len() as f32
-    } else {
-        OVERLAY_TABS_H
-    }
-}
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OsdKind {
     Volume,

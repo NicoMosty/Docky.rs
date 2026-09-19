@@ -611,7 +611,10 @@ pub(crate) fn widget_text_px(
     WIDGET_TEXT_PX * settings.widget_font_scale(kind) * render_scale
 }
 
-fn draw_placeholder(pixmap: &mut Pixmap, name: &str, cx: f32, cy: f32, size: f32) {
+/// Cuadrado de color derivado del nombre, para un ícono que no está en el tema.
+/// Lo usan las apps fijas del dock (una app sin ícono dejaba un hueco) y las
+/// tarjetas del launcher (cuatro tiles vacíos en la grilla del panel vertical).
+pub(crate) fn draw_placeholder(pixmap: &mut Pixmap, name: &str, cx: f32, cy: f32, size: f32) {
     let hash = name
         .bytes()
         .fold(37u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));

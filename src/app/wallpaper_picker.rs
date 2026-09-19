@@ -27,24 +27,29 @@ impl App {
             self.dock.base_size().0
         }) as f32;
         let along = dock_along.max(WALLPAPER_PANEL_MIN_W);
-        let cross = WALLPAPER_PANEL_H;
-        // ----- la banda de pestañas le come lugar al filmstrip y el panel crece
-        // con ella, en el eje que le toca a cada orientación -----
-        let band = menu::overlay_tabs_h(is_vertical);
-        let (panel_w, panel_h) = if is_vertical {
+        // ----- el frame es la caja del CONTENIDO: la banda de pestañas vive fuera
+        // (fila arriba en el panel ancho, columna al costado del dock en el
+        // vertical), así que el filmstrip ya no la cuenta -----
+        let (content_w, content_h) = if is_vertical {
             // ----- en el panel vertical el "ancho" es el cross: queda el de
             // siempre (una columna angosta junto al dock) -----
-            (cross, along + band)
+            (
+                menu::overlay_vertical_cross(self.dock.thickness() as f32),
+                along,
+            )
         } else {
             // ----- mismo ancho que el launcher y el portapapeles -----
-            (menu::OVERLAY_PANEL_W, cross + band)
+            (menu::OVERLAY_PANEL_W, WALLPAPER_PANEL_H)
         };
+        let band_left = self.dock.band_left();
+        let frame = menu::frame_for(content_w, content_h, is_vertical, band_left);
+        let (panel_w, panel_h) = menu::panel_size(frame, is_vertical);
         self.layer
             .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         // ----- el panel va DEBAJO del dock, como el panel de ajustes -----
         self.apply_panel_size(panel_w, panel_h);
 
-        let (tw_logical, th_logical) = menu::wallpaper_thumb_size(panel_w, panel_h, is_vertical);
+        let (tw_logical, th_logical) = menu::wallpaper_thumb_size(frame, is_vertical);
         let scale = self.output_scale.max(1) as f32;
         let thumb_w = (tw_logical * scale).round().max(1.0) as u32;
         let thumb_h = (th_logical * scale).round().max(1.0) as u32;
@@ -83,8 +88,7 @@ impl App {
             anim: self.initial_panel_anim(),
             target_anim: 1.0,
             closing: false,
-            panel_w,
-            panel_h,
+            frame,
             is_vertical,
             slide_dir: 0.0,
             thumb_w,
@@ -102,17 +106,16 @@ impl App {
         let Some(wp) = self.wallpaper_mode.as_mut() else {
             return;
         };
-        let (tw_logical, th_logical) =
-            menu::wallpaper_thumb_size(wp.panel_w, wp.panel_h, wp.is_vertical);
+        let (tw_logical, th_logical) = menu::wallpaper_thumb_size(wp.frame, wp.is_vertical);
         let along_size = if wp.is_vertical {
             th_logical
         } else {
             tw_logical
         };
         let viewport_along = if wp.is_vertical {
-            wp.panel_h
+            wp.frame.h
         } else {
-            wp.panel_w
+            wp.frame.w
         };
         let margin = along_size * 2.0;
         let visible_0 = wp.scroll_x - margin;
@@ -237,14 +240,11 @@ impl App {
         let Some(wp) = self.wallpaper_mode.as_mut() else {
             return;
         };
-        let (tw, th) = menu::wallpaper_thumb_size(wp.panel_w, wp.panel_h, wp.is_vertical);
+        let (tw, th) = menu::wallpaper_thumb_size(wp.frame, wp.is_vertical);
         let along = if wp.is_vertical { th } else { tw };
         let cx = index as f32 * (along + menu::WALLPAPER_GAP);
-        let viewport_along = ((if wp.is_vertical {
-            wp.panel_h - menu::overlay_tabs_h(true)
-        } else {
-            wp.panel_w
-        }) - menu::WALLPAPER_BACK_ZONE_W)
+        let viewport_along = (menu::wallpaper_along(wp.frame, wp.is_vertical)
+            - menu::WALLPAPER_BACK_ZONE_W)
             .max(1.0);
         let mut target = wp.scroll_target;
         if cx < target {
@@ -252,8 +252,7 @@ impl App {
         } else if cx + along > target + viewport_along {
             target = cx + along - viewport_along;
         }
-        let max_scroll =
-            menu::wallpaper_max_scroll(wp.wallpapers.len(), wp.panel_w, wp.panel_h, wp.is_vertical);
+        let max_scroll = menu::wallpaper_max_scroll(wp.wallpapers.len(), wp.frame, wp.is_vertical);
         wp.scroll_target = target.clamp(0.0, max_scroll);
         self.request_redraw(qh);
     }
@@ -319,8 +318,10 @@ impl App {
         let linear = wp.anim.clamp(0.0, 1.0);
         let eased = 0.5 - 0.5 * (std::f32::consts::PI * linear).cos();
 
-        let width = (wp.panel_w * scale).round() as i32;
-        let height = (wp.panel_h * scale).round() as i32;
+        // ----- el tamaño del panel sale del frame: un solo número -----
+        let (panel_w, panel_h) = menu::panel_size(wp.frame, wp.is_vertical);
+        let width = (panel_w * scale).round() as i32;
+        let height = (panel_h * scale).round() as i32;
         if width <= 0 || height <= 0 {
             return;
         }
@@ -328,8 +329,8 @@ impl App {
         let args = menu_render::DrawArgs {
             screen: menu::MenuScreen::WallpaperPicker,
             controls: &[],
-            content_height: wp.panel_h,
-            panel_width: wp.panel_w,
+            content_height: panel_h,
+            panel_width: panel_w,
             dock: &self.dock,
             app_entries: &[],
             icon_choices: &[],
@@ -430,8 +431,7 @@ impl App {
                 if let Some(wp) = self.wallpaper_mode.as_mut() {
                     wp.hovered = menu::wallpaper_hit_test(
                         wp.wallpapers.len(),
-                        wp.panel_w,
-                        wp.panel_h,
+                        wp.frame,
                         wp.is_vertical,
                         wp.scroll_x,
                         x as f32,
@@ -451,8 +451,7 @@ impl App {
                 let hit = self.wallpaper_mode.as_ref().and_then(|wp| {
                     menu::wallpaper_hit_test(
                         wp.wallpapers.len(),
-                        wp.panel_w,
-                        wp.panel_h,
+                        wp.frame,
                         wp.is_vertical,
                         wp.scroll_x,
                         x as f32,
@@ -476,12 +475,8 @@ impl App {
                     vertical.absolute
                 };
                 if let Some(wp) = self.wallpaper_mode.as_mut() {
-                    let max_scroll = menu::wallpaper_max_scroll(
-                        wp.wallpapers.len(),
-                        wp.panel_w,
-                        wp.panel_h,
-                        wp.is_vertical,
-                    );
+                    let max_scroll =
+                        menu::wallpaper_max_scroll(wp.wallpapers.len(), wp.frame, wp.is_vertical);
                     wp.scroll_target = (wp.scroll_target + delta as f32).clamp(0.0, max_scroll);
                     wp.scroll_x = wp.scroll_target;
                 }

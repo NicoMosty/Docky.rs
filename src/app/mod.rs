@@ -68,8 +68,8 @@ use self::click_catcher::ClickCatcher;
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 const MENU_GAP: i32 = 0;
-const WALLPAPER_PANEL_H: f32 = 170.0;
-const WALLPAPER_PANEL_MIN_W: f32 = 640.0;
+const WALLPAPER_PANEL_H: f32 = menu::OVERLAY_PANEL_VERTICAL_W;
+const WALLPAPER_PANEL_MIN_W: f32 = menu::OVERLAY_PANEL_W;
 const EMPTY_CUSTOM_HEX: [String; 5] = [
     String::new(),
     String::new(),
@@ -224,8 +224,8 @@ pub(crate) struct WallpaperMode {
     anim: f32,
     target_anim: f32,
     closing: bool,
-    panel_w: f32,
-    panel_h: f32,
+    /// Caja del CONTENIDO del panel (ver `AppSearchMode::frame`).
+    frame: menu::PanelFrame,
     is_vertical: bool,
     /// Ver `AppSearchMode::slide_dir`.
     slide_dir: f32,
@@ -265,8 +265,11 @@ pub(crate) struct AppSearchMode {
     anim: f32,
     target_anim: f32,
     closing: bool,
-    panel_w: f32,
-    panel_h: f32,
+    /// Caja del CONTENIDO del panel: el panel menos la banda de pestañas, que en
+    /// el vertical es una columna al costado del dock y en el ancho una fila
+    /// arriba (ver `menu::PanelFrame`). El tamaño del panel sale de acá con
+    /// `menu::panel_size`, así que no hay dos números que se puedan despegar.
+    frame: menu::PanelFrame,
     is_vertical: bool,
     /// Dirección del deslizamiento del contenido al cambiar de pestaña con
     /// Shift+←/→ (+1 = viene de la derecha). 0 = sin deslizamiento (abrir la
@@ -308,6 +311,27 @@ impl OverlayMode {
     pub(crate) fn tab_index(self) -> usize {
         OVERLAY_ORDER.iter().position(|m| *m == self).unwrap_or(0)
     }
+}
+
+/// Dirección del ciclo de pestañas del overlay para una flecha con Shift: +1 =
+/// siguiente (derecha/abajo), -1 = anterior (izquierda/arriba). En el panel vertical
+/// la banda de pestañas es una columna y las flechas que la corren son ↑/↓; en el
+/// panel ancho, ←/→.
+pub(crate) fn overlay_cycle_dir(keysym: Keysym) -> i32 {
+    if matches!(keysym, Keysym::Right | Keysym::Down) {
+        1
+    } else {
+        -1
+    }
+}
+
+/// ¿Esta flecha, con Shift, cicla las pestañas del overlay? La banda marca el eje:
+/// es una fila arriba en el panel ancho (←/→) y una COLUMNA al costado del dock en el
+/// vertical, donde además corren ↑/↓. Las cuatro siguen andando, así que el gesto de
+/// ←/→ de siempre no se toca.
+pub(crate) fn flecha_de_la_banda(keysym: Keysym, is_vertical: bool) -> bool {
+    matches!(keysym, Keysym::Left | Keysym::Right)
+        || (is_vertical && matches!(keysym, Keysym::Up | Keysym::Down))
 }
 
 impl App {
@@ -550,8 +574,9 @@ pub(crate) struct ClipboardMode {
     anim: f32,
     target_anim: f32,
     closing: bool,
-    panel_w: f32,
-    panel_h: f32,
+    /// Caja del CONTENIDO del panel (ver `AppSearchMode::frame`).
+    frame: menu::PanelFrame,
+    is_vertical: bool,
     /// Ver `AppSearchMode::slide_dir`.
     slide_dir: f32,
     previews: std::collections::HashMap<usize, crate::clipboard::ScaledPreview>,
@@ -596,8 +621,9 @@ pub(crate) fn trim_heap() {
 
 #[cfg(test)]
 mod overlay_tabs_tests {
-    use super::OVERLAY_ORDER;
+    use super::{OVERLAY_ORDER, flecha_de_la_banda, overlay_cycle_dir};
     use crate::menu::OVERLAY_TABS;
+    use smithay_client_toolkit::seat::keyboard::Keysym;
 
     /// La banda dibuja la pestaña `tab_index()` con el nombre de
     /// `OVERLAY_TABS[tab_index()]`: si se reordena `OVERLAY_ORDER` sin tocar las
@@ -606,5 +632,30 @@ mod overlay_tabs_tests {
     fn la_barra_sigue_el_orden_de_los_modos() {
         assert_eq!(OVERLAY_ORDER.map(|m| m.tab_index()), [0, 1, 2, 3]);
         assert_eq!(OVERLAY_TABS, ["Apps", "Clipboard", "Wallpapers", "Windows"]);
+    }
+
+    /// En el panel vertical la banda es una columna, así que Shift+↓ tiene que ir a
+    /// la pestaña SIGUIENTE (y Shift+↑ a la anterior): con el signo al revés las
+    /// flechas verticales irían para atrás.
+    #[test]
+    fn la_flecha_vertical_da_la_direccion_del_ciclo() {
+        assert_eq!(overlay_cycle_dir(Keysym::Down), 1);
+        assert_eq!(overlay_cycle_dir(Keysym::Right), 1);
+        assert_eq!(overlay_cycle_dir(Keysym::Up), -1);
+        assert_eq!(overlay_cycle_dir(Keysym::Left), -1);
+    }
+
+    /// Qué flechas ciclan las pestañas según la orientación de la banda: en el panel
+    /// ancho (fila) sólo ←/→, en el vertical (columna) también ↑/↓, que es lo que
+    /// pidió el usuario. Si alguien saca la rama vertical, este test lo avisa.
+    #[test]
+    fn las_flechas_de_la_banda_siguen_la_orientacion() {
+        assert!(flecha_de_la_banda(Keysym::Left, false));
+        assert!(flecha_de_la_banda(Keysym::Right, false));
+        assert!(!flecha_de_la_banda(Keysym::Up, false));
+        assert!(!flecha_de_la_banda(Keysym::Down, false));
+        for k in [Keysym::Left, Keysym::Right, Keysym::Up, Keysym::Down] {
+            assert!(flecha_de_la_banda(k, true), "{k:?} en vertical");
+        }
     }
 }

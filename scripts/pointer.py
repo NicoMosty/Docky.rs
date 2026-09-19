@@ -30,11 +30,14 @@ Uso:
     --double   hace un DOBLE click: dos clicks separados ~80ms, dentro de los 400ms
                que pide el dock para reconocer el gesto.
 
-    --shift-arrow left|right [--times N]
-               en vez de clickear, teclea Shift+←/→ (N veces, default 1): es el ciclo
-               de modos del overlay, que sin esto no se puede ejercitar sin teclado.
+    --shift-arrow left|right|up|down [--times N]
+               en vez de clickear, teclea Shift+esa flecha (N veces, default 1): es el
+               ciclo de modos del overlay, que sin esto no se puede ejercitar sin
+               teclado. Con el dock VERTICAL la banda de pestañas es una columna, así
+               que además de ←/→ andan ↑/↓ (el gesto que sigue a la banda).
                Ej.: abrir el launcher por IPC y `--shift-arrow left` para caer en
-               "ventanas" (Apps -> Windows).
+               "ventanas" (Apps -> Windows), o `--shift-arrow down` con el dock al
+               costado para pasar a "Clipboard".
 
     --scroll up|down [--times N]
                en vez de clickear, gira la RUEDA sobre el punto alcanzado (default
@@ -198,7 +201,11 @@ def tap_key(fd, key, times):
 
 
 def tap_shift_arrow(fd, key, times):
-    """Shift+←/→ cicla el overlay; hace falta un modo abierto (teclado Exclusive)."""
+    """Shift+flecha cicla el overlay; hace falta un modo abierto (teclado Exclusive).
+
+    Con el dock vertical la banda de pestañas es una columna y las flechas que la
+    corren son ↑/↓ además de ←/→.
+    """
     for _ in range(times):
         emit(fd, EV_KEY, KEY_LEFTSHIFT, 1)
         emit(fd, EV_KEY, key, 1)
@@ -333,7 +340,7 @@ def main():
     parser.add_argument("--then-dx", type=int, default=0)
     parser.add_argument("--then-dy", type=int, default=0)
     parser.add_argument("--double", action="store_true")
-    parser.add_argument("--shift-arrow", choices=("left", "right"))
+    parser.add_argument("--shift-arrow", choices=("left", "right", "up", "down"))
     parser.add_argument("--key", choices=tuple(KEY_CODES))
     parser.add_argument("--scroll", choices=("up", "down"))
     parser.add_argument("--hover", action="store_true")
@@ -356,7 +363,14 @@ def main():
         try:
             time.sleep(1.6)
             tap_shift_arrow(
-                fd, KEY_LEFT if args.shift_arrow == "left" else KEY_RIGHT, args.times
+                fd,
+                {
+                    "left": KEY_LEFT,
+                    "right": KEY_RIGHT,
+                    "up": KEY_UP,
+                    "down": KEY_DOWN,
+                }[args.shift_arrow],
+                args.times,
             )
         finally:
             os.close(fd)
