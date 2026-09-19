@@ -278,11 +278,13 @@ del dock, así que no necesita saber la geometría.
   `--then-dx` negativo se vuelve hacia la izquierda (zona del icono = mute).
   Arrastre (press → move → release) no lo hace `pointer.py`: está
   `/tmp/drag_test.py` (verificado con eso: el valor final es el que se soltó).
-- `--shift-arrow left|right [--times N]` en vez de clickear teclea Shift+←/→ por un
-  **teclado** virtual (otro id de producto, `0x5679`): es la única forma de ciclar
-  los modos del overlay sin tocar el teclado real. Necesita un modo abierto (la
-  superficie tiene que estar con el teclado en `Exclusive`) e imprime la línea
-  `overlay: X -> Y` del log, que es la confirmación.
+- `--shift-arrow left|right|up|down [--times N]` en vez de clickear teclea Shift+esa
+  flecha por un **teclado** virtual (otro id de producto, `0x5679`): es la única forma
+  de ciclar los modos del overlay sin tocar el teclado real. Necesita un modo abierto
+  (la superficie tiene que estar con el teclado en `Exclusive`) e imprime la línea
+  `overlay: X -> Y` del log, que es la confirmación. Con el dock vertical la banda de
+  pestañas es una columna y ↑/↓ también ciclan, así que `--shift-arrow up|down` sirve
+  para probar ese gesto.
 - `--scroll up|down [--times N]` gira la **rueda** en el punto alcanzado
   (`REL_WHEEL`): es lo que ejercita el volumen del dock (rueda = ±5% sobre el
   widget de volumen). Sin efecto si el puntero no está sobre el volumen, así que
@@ -444,19 +446,41 @@ reordenamiento de widgets) y lo posterior:
   `render::workspaces::workspace_hit_tests` — con `widget_scale = 1.2166` y 8
   workspaces el extremo se corre >10 px, el click en el centro dibujado cae en el
   slot correcto y la tolerancia queda tangente al paso, sin robarle el click al
-  vecino. `ws_flash_dot_hit` saca la escala de las settings (como
-  `workspace_slot_at` y no del call site) y `ws_flash_panel_len` mide el panel con
-  la MISMA escala: el contenido del HUD se dibuja con `render_scale * widget_scale`
-  en `draw_ws_flash`, así que el indicador del HUD coincide con el del dock y el
-  click cae en el punto dibujado. Antes el panel se medía con `1.0` y el punto
-  cambiaba de tamaño al ocultarse el dock (`widget_scale` 1,5 en el remoto: 42x19 px
-  en el dock contra 28x12 en el HUD). Test:
-  `render::workspaces::workspace_hit_tests::el_panel_del_hud_crece_con_widget_scale_y_el_click_lo_sigue`.
+  vecino. El HUD de workspaces ya no tiene geometría propia: su superficie mide y
+  se ancla IGUAL que la del dock (`base_size` + `edge_anchor_margin`), y el
+  indicador se dibuja en el rectángulo que `hit_layout` le da al widget, así que
+  el punto cae exactamente donde estaba en el dock y su hit test es directamente
+  `workspace_dot_hit`. Guard:
+  `render::workspaces::workspace_hit_tests::la_pastilla_del_hud_sale_del_rectangulo_del_dock_no_de_un_panel_centrado`.
+  Verificado contra píxeles (vertical con `Left` y horizontal con `Top`): los tres
+  puntos del HUD caen en las mismas coordenadas que los del dock (y 541.5/568/594.5
+  en vertical, x 958.5/985/1011.5 en horizontal).
   Verificado contra pixeles: el centro que el app cree que
   tiene cada widget coincide con el icono dibujado (wifi local 152 vs 151.5,
   tray 465 vs 464.5) y clickear el centro visual de cada uno da el widget
   correcto (power 23, battery 55, wifi 150, bluetooth 180, EN 210, tray 458).
-- Menús del tray por click derecho (tres bugs distintos que se veían todos como
+- **El HUD de workspaces se alinea con el indicador del dock (vertical y
+  horizontal).** El HUD era un panel propio del largo del indicador + relleno,
+  centrado con `dock_align`: con zonas desparejas (en este setup, 6 widgets a la
+  izquierda y tray+reloj a la derecha, Workspaces en `Middle`) el reparto NO deja
+  el indicador en el centro del dock, así que al ocultarse el dock el punto saltaba
+  de lugar (~27 px hacia arriba, medido). Ahora el HUD **es** la superficie del
+  dock: mismo `base_size` y mismo `edge_anchor_margin`, y `draw_ws_flash` dibuja el
+  indicador en el rectángulo que le da `hit_layout` y la pastilla alrededor de ese
+  rectángulo (`ws_flash_pill`, relleno simétrico).
+  - Muere la geometría propia del HUD (`ws_flash_panel_len`, `ws_flash_dot_hit`): el
+    hit test del click es `workspace_dot_hit`, el del dock, así que no hay una
+    segunda cuenta que se pueda desincronizar (trampa 1 / trampa 10).
+  - `show_ws_flash` quedó idempotente (sólo re-aplica anchor/margin/tamaño si
+    cambiaron): el HUD ya no cambia el tamaño de la superficie, así que un `set_*`
+    de más sólo servía para disparar un configure que puede perder el foco del
+    puntero (mismo criterio que `apply_panel_size`).
+  - Verificado contra píxeles en las dos orientaciones: los tres puntos del HUD
+    caen en las mismas coordenadas que los del dock.
+  - Guard: `render::workspaces::workspace_hit_tests::la_pastilla_del_hud_sale_del_rectangulo_del_dock_no_de_un_panel_centrado`
+    (el reparto del caso es desparejo — si no, el test no prueba nada — y la
+    pastilla enmarca el rectángulo simétricamente en las dos orientaciones).
+- **Menús del tray por click derecho** (tres bugs distintos que se veían todos como
   "el click derecho no funciona"):
   - `nearest_tray_index()` en `render/tray.rs`: un click en el **hueco** entre
     iconos no devolvía nada (`rel - idx*per <= icon_side` fallaba en el gap) y se
@@ -1001,12 +1025,201 @@ reordenamiento de widgets) y lo posterior:
     setup **no incluye** (incluye `current_theme.conf`), así que ese sync es letra
     muerta acá. Es candidato a borrar o a apagar si el ajuste nuevo está prendido.
 
+- **El arranque en frío ya no espera las lecturas del sistema.**
+  `WidgetSnapshot::refresh` corría **antes** de `Connection::connect_to_env` y de
+  crear la layer, así que todo lo que tardara dejaba al dock sin superficie. Medido con
+  una traza temporal: de los 255 ms del arranque en caliente, **211 eran esas
+  lecturas** y sólo 44 el connect + binds + `list_font_families`. El desglose:
+  `battery` 66 ms (el `capacity` del EC tarda eso en esta laptop — 66,8 ms medidos
+  con python, el `status` 0,17), `bluetoothctl` ×2 41 ms, y 20 ms por cada
+  subproceso (`playerctl`, `niri msg` ×2, `wpctl`, `iw`). Al encender el PC cada
+  spawn arranca con el disco frío y el sistema cargado, y el techo de
+  `run_with_timeout` es 500 ms **por lectura**, en serie: varios segundos hasta que
+  la superficie existe. Dos cambios, medidos por separado:
+  - **(1) En paralelo** (`std::thread::scope`): el arranque cuesta la lectura más
+    lenta y no la suma. Las baratas (`time`, `date`, `cpu`, `ram`, que ya no lee
+    dos veces) quedan en línea. A/B con `niri msg --json layers` (exec → el dock
+    aparece en la lista), 5 corridas: `mediana 0,167 s → 0,076 s` (0,153-0,227
+    contra 0,061-0,078) en caliente y **3,55 s → 1,02 s** con el peor caso
+    simulado (los seis comandos reemplazados por stubs que duermen 500 ms).
+  - **(2) Split**: el primer frame usa `WidgetSnapshot::refresh_quick` (sólo
+    `time`/`date`/`cpu`/`ram` locales más `workspaces`, `network` y `kblayout`, en
+    paralelo: **21-41 ms medidos**) y las cuatro lecturas que pueden tardar
+    —batería, media, bluetooth, volumen— las trae `read_deferred` en un hilo que
+    manda `IpcMessage::DeferredWidgets` con el dato **ya leído** (los `refresh_*`
+    releen, y acá el punto es no volver a esperar). Llegan a los 63-107 ms, o sea
+    mientras el resto del arranque sigue; `App::apply_deferred_widgets` las pega y
+    hace `relayout_dock`, sin pasar por los `refresh_*`.
+  - El canal de IPC se crea **antes** de tocar Wayland para que el hilo arranque
+    temprano, y `read_deferred` gatea cada lectura con `has_widget`: con la config
+    de fábrica `read_media` ya no corre sin un `Media` colocado.
+  - **El pop-in es el precio y se ve en el log**: `481x26` (sin
+    batería/volumen/bluetooth) → `560x26` a los 71 ms (llegó lo diferido) →
+    `576x26` a los 2 s (tick de sistema). Los tres widgets diferidos no dejan
+    hueco ni placeholder: `draw_battery_widget` y `draw_volume_widget` `return`
+    temprano con el dato en `None`.
+  - **Por qué `workspaces` NO se difiere** (es el único dato que no se puede):
+    `dock_stays_visible()` (regla de workspace vacío) y `show_ws_flash` se deciden
+    con él, y con la lista vacía el primer `refresh_workspaces` vería
+    `before=None → after=Some(1)` y haría parpadear el HUD con el dock ya oculto.
+  - No hace falta test de mapeo del tuple: los siete tipos son distintos
+    (`Option<(u8, BatteryState)>` vs `Option<(u8, bool)>` vs `Option<MediaInfo>` vs
+    `Option<BluetoothInfo>` vs `Vec<WorkspaceInfo>` vs `NetworkInfo` vs `KbLayout`),
+    así que un campo cruzado es error de compilación. Un hilo que paniquea no tumba
+    el arranque: su campo cae al default y el tick lo vuelve a leer.
+  - Verificado en un reinicio real del equipo: el usuario reporta que el dock
+    arranca en la mitad del tiempo (el único dato de boot real que hay, contra el
+    A/B simulado de arriba).
+  - **Lo que sigue en el camino crítico**: tres spawns en paralelo (`niri msg` ×2 y
+    `iw`). Con el peor caso simulado el arranque quedó en **1,03 s**, y el culpable
+    es `read_network`, que encadena `iw` y, si falla, `ip` (dos spawns **en
+    serie**), no la batería ni el bluetooth, que ya no bloquean. Diferir la red lo
+    bajaría a ~0,5 s; no se hizo porque el ícono de wifi mostraría "sin conexión"
+    un instante. `read_bluetooth` sigue siendo dos spawns en serie, pero ahora en
+    background.
+
+- **Barra vertical (`Left`/`Right`): el reloj y el nub de la batería ya entran.** El
+  reloj dibujaba la hora y la fecha como **dos columnas rotadas** lado a lado, y
+  cada línea de texto mide `1.5 * text_px` en el eje del grosor: con `font_scale`
+  1,51 son ~22 px contra los ~25 px que mide la barra, así que se veía cortado —la
+  hora perdía la mitad de las letras contra el borde de la pantalla y la fecha se
+  metía en la esquina redondeada— (medido en píxeles: el bloque del reloj era el
+  único sin margen, tinta de x 0 a 25). Ahora es **una sola columna** rotada con la
+  hora y la fecha, en el mismo orden que la barra horizontal ("10:37 PM 17-Sept"
+  leído de abajo hacia arriba) y `len_clock` reserva la misma suma en las dos
+  orientaciones (trampa 12). Guard:
+  `widget::clock_vertical_tests::el_reloj_vertical_mide_la_suma_y_entra_en_el_grosor`
+  (exige la suma **y** que `1.5 * text_px` entre en 25,02). Dos de la misma familia,
+  en el mismo commit: el **nub** del polo de la batería sumaba `3 * render_scale` al
+  ancho y `bx` centraba sólo el cuerpo, así que se cortaba contra el borde (ahora se
+  centra icono + nub), y la **pastilla del SSID** del hover de Network se dibuja
+  horizontal y en vertical se recortaba: se saltea con `dock.is_vertical()` (rotada
+  tampoco entra: `1.5 * font` + padding de alto).
+  - Verificado con la config del usuario (`Left` + `Middle`, `widget_scale` 1,1065,
+    `font_scale` 1,5132): todas las bandas de tinta caen dentro de la barra con
+    margen ≥1 px (el reloj pasó de x 0..25 a 7..16) y la barra creció de 26x548 a
+    26x610, porque el reloj ahora ocupa una columna más larga.
+  - **Cómo revelar el dock sin puntero con el borde `Left`**: abrir el **Overview de
+    niri** (`niri msg action open-overview`, y `niri msg overview-state` antes para
+    no togglear a ciegas), que además deja el dock fijo. `focus-workspace` a un
+    workspace vacío no sirve: el workspace aparece y desaparece entre eventos y el
+    HUD de workspaces tapa al dock.
+
+- **Los tres paneles del overlay adaptados al dock vertical (`Left`/`Right`).** El
+  portapapeles **no tenía rama vertical**: `open_clipboard` usaba `OVERLAY_PANEL_W` y
+  `clip_panel_h()` a secas, así que con el dock al costado abría el panel horizontal
+  (medido: 640x460) con la banda de pestañas en una fila que se salía del panel. El
+  launcher y el selector de fondos sí tenían rama, pero el launcher medía **66** de
+  cross (`dock_thickness.max(icono 46 + 2*MENU_PADDING)`), o sea los nombres cortados
+  a ~10 caracteres (`Antigravit…`, `AppimageL…`) y la caja de búsqueda en `Sea…`.
+  - Ahora los tres usan el mismo **cross** en vertical, `OVERLAY_PANEL_VERTICAL_W` =
+    170 (el que ya tenía el selector de fondos, la miniatura de 150 más los dos
+    `MENU_PADDING`), con el mismo motivo que `OVERLAY_PANEL_W` en horizontal: el
+    borde no se mueve al ciclar con Shift+←/→. Medido en el log: Apps 170x660,
+    portapapeles 170x538, fondos 170x744 (antes 66x660, 640x460, 170x744).
+  - La tarjeta vertical del launcher pasa a ser una **tile** de 150x92 igual a la
+    miniatura de los fondos: icono de 46 centrado, el nombre entero debajo y el
+    bloque centrado en la tile (la tarjeta mide 92 y el contenido 66: con el icono
+    pegado arriba quedaba todo el aire abajo y la pastilla se veía pesada).
+  - El portapapeles estrena la banda **apilada** (como los otros dos: `stacked =
+    args.is_vertical`; antes era `false` fijo con el comentario "es una caja ancha
+    siempre"), el alto sale de `clip_content_y(is_vertical)` (la banda entra en la
+    cuenta; antes estaba horneado `OVERLAY_TABS_H`) y la descripción de cada fila se
+    elide con `fit` como el título, que en 150 px se sale. 7 filas, sin aire de más.
+  - Los dos `170`/`640` que vivían en `app/mod.rs` (`WALLPAPER_PANEL_H`,
+    `WALLPAPER_PANEL_MIN_W`) ahora apuntan a las constantes de `menu::` en vez de
+    repetir el número: eran tres copias del 170.
+  - Guards: `menu_render::clipboard::clip_vertical_tests` (el contenido mide lo
+    mismo en las dos orientaciones y la primera fila arranca en el frame) y
+    `menu::app_search::strip_tests` (el panel vertical es la grilla de 2 columnas).
+    Verificado con screenshots de los tres modos por IPC (`--toggle-search` /
+    `--toggle-clipboard` / `--toggle-wallpaper`), 0 errores en el log. "Windows"
+    comparte panel y geometría con "Apps" (`open_search`).
+  - **Ojo**: la banda apilada arriba de este bullet duró un turno; el diseño que
+    quedó es el del bullet siguiente (columna al costado).
+
+- **Banda de pestañas en COLUMNA y grilla de apps de 2 columnas en vertical.** Pedido
+  textual: "el menú de Apps|Clipboard|Wallpapers|Windows de manera vertical en la
+  parte más izquierda o derecha" y "el grid de las apps 2 x cualquier ancho".
+  - **La banda ya no es un tramo del eje largo**: es una fila de 26 arriba en los
+    paneles anchos y una **columna de 26** pegada al lado del dock (izquierda con
+    `Left`, derecha con `Right`) en el vertical, con las etiquetas **rotadas 90°**
+    (`super::osd::draw_text_rotated`, el mismo helper que el OSD: se leen de abajo
+    hacia arriba como los widgets de la barra vertical). Apilada arriba le comía 104
+    de alto a un panel que ya es una columna; ahora el panel es más bajo y un poco
+    más ancho.
+  - **El reparto de la banda y el contenido vive en `menu::PanelFrame`**
+    (`frame_for`/`panel_size`/`band_rect`): el frame es la caja del CONTENIDO y todo
+    el reparto de los tres paneles (buscador, filas, tiles, filmstrip) y sus hit
+    tests salen de ahí, así que la banda se cuenta UNA vez y el dibujo no puede
+    quedar corrido respecto del click. `overlay_tabs_h(is_vertical)` **se borró**:
+    era el único lugar donde "vertical" significaba "104 de alto" y ya no existe.
+    `Dock::panel_frame(panel_w, panel_h)` es el inverso de `menu::panel_size`.
+  - El launcher vertical pasa a **2 columnas** de tarjeta de 150 (`APP_CARD_W_VERTICAL`,
+    `app_search_cols` calcula las columnas del ancho del frame y el grid es row-major
+    con scroll en y, como el horizontal pero en el otro eje). Medido: Apps 356x556,
+    portapapeles 196x434, fondos 196x640 (el cross de los tres es el frame de 170 más
+    los 26 de la banda, salvo el launcher que pide 330 de frame para las dos columnas).
+  - Los tiles sin ícono en el tema ahora usan `render::draw_placeholder` (pasó a
+    `pub(crate)`): `Advanced Network Configuration` (`preferences-system-network`,
+    sólo en `AdwaitaLegacy`) y los tres `Avahi *` eran pastillas vacías en la grilla.
+  - **Las cuatro pestañas miden lo mismo y no cambian con el panel.** La pastilla (el
+    resaltado de la activa) sale del texto de la etiqueta MÁS LARGA ("Wallpapers"), no
+    del de cada una: antes medía 45px con "Apps" y 74 con "Wallpapers" y la banda
+    parecía cambiar de tamaño al ciclar (medido). Y en la columna el alto de cada
+    pestaña sale de ese mismo texto (`pill_len + 10`), no de `bh / 4`: con `bh / 4` el
+    launcher abría con pestañas de 139, el portapapeles de 108 y los fondos de 160, así
+    que la banda "saltaba" al cambiar de pestaña. Verificado: las tres abren con slot
+    de 84 y pastilla de 74.
+  - **En el panel vertical las pestañas también se ciclan con Shift+↑/↓** (además de
+    Shift+←/→, que sigue igual): la banda es una columna, así que la flecha que la corre
+    es ↑/↓. Las flechas SIN Shift siguen siendo de la lista del panel (el grid del
+    launcher salta una fila, el portapapeles mueve la selección), así que no se pisó
+    nada: lo decide `flecha_de_la_banda(keysym, is_vertical)` (con test) y la dirección
+    `overlay_cycle_dir` (↓/→ = siguiente). A mano: `scripts/pointer.py --shift-arrow
+    up|down` (las cuatro flechas ahora).
+  - Guards: `menu_render::tabs::la_banda_esta_fuera_del_frame` (el contenido arranca
+    donde termina la banda, en fila y en columna, con el dock a los dos lados),
+    `las_pestanas_se_reparten_a_lo_largo_del_panel` (el bug de la primera versión de
+    la columna: los slots se dividían sobre los 26px del grosor y las cuatro
+    etiquetas se apilaban en 6.5px), `menu::app_search::strip_tests::el_vertical_es_una_grilla_de_dos_columnas`
+    (la 2ª al lado de la 1ª, la 3ª vuelve a la primera columna y las dos entran en el
+    ancho útil), `el_click_del_vertical_sigue_las_dos_columnas` (el hit test con la
+    banda a la izquierda y a la derecha) y `el_frame_y_el_panel_son_inversos`.
+
+- **El dock queda a la vista con el panel abierto en los CUATRO bordes.** En el
+  launcher con el dock al costado no se veía la barra: `panel_layout` sólo armaba
+  `[dock][gap][panel]` para el borde superior y en los otros tres el panel ocupaba la
+  superficie entera (y tapaba el dock, que vive en esa misma superficie). Ahora el
+  reparto cubre los cuatro bordes —debajo con el dock arriba, encima con el dock abajo,
+  a la derecha con el dock a la izquierda y a la izquierda con el dock a la derecha— y
+  el par queda alineado con `dock_align` en el eje que no comparten.
+  - El resto no se tocó porque ya salía de ahí: `show_panel_surface` dibuja el dock en
+    `dock_at` y pega el panel en `panel_at` (un solo `attach`), `panel_local` traduce el
+    puntero con el mismo offset (si no, los controles quedan muertos: trampa 4) y el
+    agujero del click-catcher usa el tamaño de la SUPERFICIE, así que ahora cubre el
+    dock y el panel juntos.
+  - Medido en el log: launcher 390x610 (26+8+356), portapapeles 390x610, fondos
+    230x640, panel de ajustes 555x610; el dock se dibuja en x 0..25 y el panel arranca
+    en 34, los dos centrados en el alto de la superficie.
+  - Guards: `app::dock_menu::panel_layout_tests::el_panel_va_al_lado_del_dock_en_los_cuatro_bordes`
+    (los cuatro bordes con sus offsets, y que el panel entre en la superficie) y el de
+    siempre `catcher_tests::el_agujero_cubre_el_dock_y_el_panel`.
+  - **Lo que NO hace**: el panel no se aparta del dock cuando el dock crece (el
+    `pos_y` sigue moviendo los dos juntos) ni hay animación de apertura entre ellos.
+
 ## Pendientes conocidos
 
-- Paneles del overlay: el **ancho** ya es el mismo en los tres (`OVERLAY_PANEL_W`),
-  pero el alto no (el launcher 236, el portapapeles 460, los fondos 196). En el
-  panel vertical (dock Left/Right) los tres siguen con su cross de siempre: el
-  portapapeles es ancho por naturaleza y el launcher/fondos van pegados al dock.
+- Paneles del overlay: el **ancho del contenido** ya es el mismo en los tres
+  (`OVERLAY_PANEL_W` en horizontal; `OVERLAY_PANEL_VERTICAL_W` = 170 en vertical,
+  salvo el launcher que pide 330 por las dos columnas) y la banda es la misma fila o
+  columna de 26, pero el alto no (236 / 460 / 196 en horizontal, 556 / 434 / 640 en
+  vertical).
+  - El portapapeles usa el cross ANCHO en vertical (`OVERLAY_PANEL_VERTICAL_WIDE` =
+    330, el del launcher): con 170 los títulos se elidían a ~16 caracteres. Los fondos
+    siguen en 170 porque su miniatura mide 150.
+  - La banda de pestañas **no es clickeable** (los modos se cambian con Shift+←/→):
+    sumarle click es el hit test de `band_rect` + `cycle_overlay` desde el handler.
 
 - Calendario del reloj: no se pasa de mes con el mouse (no tiene ‹ › clickeables,
   sólo ←/→) y no selecciona días ni navega semanas: muestra el mes y marca hoy. El
@@ -1031,8 +1244,9 @@ reordenamiento de widgets) y lo posterior:
   items quedan fuera del dock por completo (no hay configuración para volver a
   mostrarlos).
 
-- El panel debajo del dock (ajustes y los tres del overlay) está implementado sólo
-  para el borde superior; con Left/Right/Bottom el panel sigue tapando el dock.
+- El panel del overlay va AL LADO del dock en los cuatro bordes, pero el `MENU_GAP`
+  entre los dos es 0 y la separación de la composición es `PANEL_GAP` (8): con el dock
+  abajo o a la derecha el panel hereda el `pos_y` del dock (se mueve con él).
 - Si un ajuste cambia el grosor del dock, el panel lo acompaña pero el alto de la
   superficie quedó fijado al abrirlo: el fondo del panel puede quedar cortado.
 - Soltar una tarjeta en la franja del título (arriba de las columnas) la saca del

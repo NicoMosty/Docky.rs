@@ -243,8 +243,9 @@ en 10 s: con el fix, 1 (o 0 si el probe falla); sin el fix, ~5.
 ### 4.3 — `workspace_dot_hit` reparte con `1.0`: clicks muertos {#d1}
 
 > **Resuelto** (§3): el reparto salió a `workspaces::workspace_slot_at()`, que lee
-> la escala de `hit_scale(settings)`; `ws_flash_dot_hit` reusa `slot_at()` con `1.0`
-> a propósito (el `output_scale` se cancela en el panel del HUD). Guard:
+> la escala de `hit_scale(settings)`. El HUD de workspaces ya no tiene geometría
+> propia (`ws_flash_dot_hit` se borró): su superficie mide y se ancla como la del
+> dock y el hit test es `workspace_dot_hit`. Guard:
 > `render::workspaces::workspace_hit_tests::el_hit_test_toma_la_escala_de_las_settings`
 > — verificado revirtiendo el `1.0` a mano: falla, mientras los otros 3 tests del
 > módulo pasan (por eso el guard tiene que mirar el call site y no el helper).
@@ -304,11 +305,10 @@ for (i, ws) in workspaces.iter().enumerate() {
     if (main - (first + i as f32 * WS_SLOT * sc)).abs() <= half {
 ```
 
-`ws_flash_dot_hit` (`workspaces.rs:163`, `1.0` en `:180`) **no** tiene el bug: el HUD
-dibuja con
-`zx=0, zw=panel_w*scale`, así que el `scale` se cancela y sólo hay que comparar
-contra coordenadas lógicas. Verificado a mano leyendo `draw_ws_flash`
-(`render/mod.rs:478-493`) y `draw_workspaces_widget`; no lo "arregles".
+El HUD de workspaces ya no dibuja con un panel propio: su superficie es la del dock
+(mismo tamaño y anclaje) y el indicador sale del mismo `hit_layout`, así que no hay
+un segundo reparto que ajustar (`ws_flash_dot_hit` se borró). Ver el bullet del HUD
+de alineación en `AGENTS.md`.
 
 **Verificación:** `#[cfg(test)] mod ws_hit_tests` en `render/workspaces.rs` con
 `widget_scale = 1.2166064` y n = 6 y 8: el centro dibujado de cada punto
@@ -1315,7 +1315,7 @@ arriba, nunca `self.layer`.
 | `tray::argb_to_pixmap` (`tray.rs:126`) | valida dims y `data.len()` antes de indexar |
 | `layout_widgets` + `clamp` (`render/layout.rs:120-124`) | `min ≤ max` por construcción; no simplificar |
 | `enforce_keyboard` (`dock_menu.rs:156`) | idempotente; solución de la trampa 9 |
-| `ws_flash_dot_hit` (`render/workspaces.rs:163`) | el `1.0` acá sí cancela (HUD a `zx=0`, `zw=panel_w·scale`); no "arreglar" como D1 |
+| `ws_flash` (`render/workspaces.rs` `ws_flash_pill`) | el HUD reusa el rectángulo de `hit_layout` del dock: no hay escala que ajustar, era el bug ya resuelto |
 | offsets `menu`/`menu_render` | dibujo y hit test comparten función en los 7 casos (`app_search_strip_y`, `clip_content_y`, `wallpaper_hit_test`, `overlay_tabs_h`, `volume_track_*`, `volume_pct_from_x`, `build_volume_controls`) |
 | `find_menu`/`activate`/`send_menu_event` (`tray.rs`) | un hilo por click de usuario; aceptable |
 | poll 2 s del tray (`tray.rs:350`) | hilo propio; el problema es la lista sin purgar (D5) |
