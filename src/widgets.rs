@@ -210,6 +210,46 @@ pub struct WidgetSnapshot {
     pub custom_last_polls: Vec<Option<Instant>>,
 }
 
+/// Lo que el arranque lee en un hilo aparte y entra por el canal de IPC. Son las
+/// cuatro lecturas que pueden tardar de verdad: el `capacity` del EC de la batería
+/// (66 ms medidos en esta laptop), `bluetoothctl` ×2, `playerctl` y `wpctl`. Los
+/// widgets que las usan no dibujan NADA mientras el dato es `None` (ver
+/// `draw_battery_widget`, `draw_volume_widget`), así que el primer frame sale bien
+/// sin ellas y sólo hay un pop-in.
+pub struct DeferredWidgets {
+    pub battery: Option<(u8, BatteryState)>,
+    pub media: Option<MediaInfo>,
+    pub bluetooth: Option<BluetoothInfo>,
+    pub volume: Option<(u8, bool)>,
+}
+
+/// Corre las cuatro lecturas en paralelo: cuesta la más lenta, no la suma.
+///
+/// Cada una está gateada por `has_widget`: si el widget no está colocado el dato
+/// no se dibuja y el spawn es trabajo tirado (hoy `read_media` corre siempre aunque
+/// no haya `Media`). Al colocar un widget, `drop_widget_chip` ya relee los cuatro.
+pub fn read_deferred(settings: &crate::config::DockSettings) -> DeferredWidgets {
+    use crate::config::WidgetKind;
+    let battery_wanted = settings.has_widget(WidgetKind::Battery);
+    let media_wanted = settings.has_widget(WidgetKind::Media);
+    let bluetooth_wanted = settings.has_widget(WidgetKind::Bluetooth);
+    let volume_wanted = settings.has_widget(WidgetKind::Volume);
+    std::thread::scope(|s| {
+        let battery = battery_wanted.then(|| s.spawn(read_battery));
+        let media = media_wanted.then(|| s.spawn(read_media));
+        let bluetooth = bluetooth_wanted.then(|| s.spawn(read_bluetooth));
+        let volume = volume_wanted.then(|| s.spawn(read_volume));
+        // ----- un hilo que paniquea no puede tumbar el arranque: el dock se
+        // dibuja con ese dato vacío y el tick lo vuelve a leer. -----
+        DeferredWidgets {
+            battery: battery.and_then(|h| h.join().unwrap_or(None)),
+            media: media.and_then(|h| h.join().unwrap_or(None)),
+            bluetooth: bluetooth.and_then(|h| h.join().unwrap_or(None)),
+            volume: volume.and_then(|h| h.join().unwrap_or(None)),
+        }
+    })
+}
+
 impl WidgetSnapshot {
     /// Formato de `strftime` del reloj: 24 h si el usuario lo pidió para el
     /// widget `Clock`, 12 h con AM/PM si no.
@@ -221,23 +261,58 @@ impl WidgetSnapshot {
         }
     }
 
-    pub fn refresh(settings: &crate::config::DockSettings) -> Self {
+    /// Snapshot para el PRIMER frame: todo menos lo que puede tardar (ver
+    /// `read_deferred`). Los tres spawns que quedan (`niri msg` ×2, `iw`) corren en
+    /// paralelo, así que cuestan ~20 ms medidos en caliente y no su suma.
+    ///
+    /// Deliberadamente NO difiere `workspaces`: la regla de "el workspace activo
+    /// está vacío ⇒ el dock se queda" y `show_ws_flash` se deciden con este dato, y
+    /// con la lista vacía el HUD parpadearía al llegar el dato real.
+    pub fn refresh_quick(settings: &crate::config::DockSettings) -> Self {
+        let (workspaces, network, kblayout) = std::thread::scope(|s| {
+            let workspaces = s.spawn(read_workspaces);
+            let network = s.spawn(read_network);
+            let kblayout = s.spawn(read_kblayout);
+            // ----- un hilo que paniquea no puede tumbar el arranque: el dock se
+            // dibuja con ese dato vacío y el tick lo vuelve a leer. -----
+            (
+                workspaces.join().unwrap_or_default(),
+                network.join().unwrap_or(NetworkInfo {
+                    label: "Disconnected".to_string(),
+                    online: false,
+                }),
+                kblayout.join().unwrap_or(KbLayout {
+                    short: "--".to_string(),
+                }),
+            )
+        });
+        let ram = read_ram();
         Self {
             time: strftime_now(Self::clock_format(settings)).unwrap_or_default(),
             date: clock_date_now().unwrap_or_default(),
-            battery: read_battery(),
-            media: read_media(),
-            bluetooth: read_bluetooth(),
-            workspaces: read_workspaces(),
+            battery: None,
+            media: None,
+            bluetooth: None,
+            workspaces,
             cpu: read_cpu(),
-            ram: read_ram().map(|(pct, _)| pct),
-            ram_gb: read_ram().map(|(_, gb)| gb),
-            volume: read_volume(),
-            network: read_network(),
-            kblayout: read_kblayout(),
+            ram: ram.map(|(pct, _)| pct),
+            ram_gb: ram.map(|(_, gb)| gb),
+            volume: None,
+            network,
+            kblayout,
             custom_texts: Vec::new(),
             custom_last_polls: Vec::new(),
         }
+    }
+
+    /// Pega lo que trajo el hilo de background. No toca el resto del snapshot (ni
+    /// `custom_texts`, que tiene su propio reloj), así que no puede pisar nada
+    /// leído después.
+    pub fn apply_deferred(&mut self, deferred: DeferredWidgets) {
+        self.battery = deferred.battery;
+        self.media = deferred.media;
+        self.bluetooth = deferred.bluetooth;
+        self.volume = deferred.volume;
     }
 
     pub fn refresh_cpu_ram(&mut self) {
@@ -1348,7 +1423,7 @@ mod custom_widget_tests {
     }
 
     fn instantanea(textos: Vec<Option<String>>) -> WidgetSnapshot {
-        let mut snapshot = WidgetSnapshot::refresh(&crate::config::DockSettings::default());
+        let mut snapshot = WidgetSnapshot::refresh_quick(&crate::config::DockSettings::default());
         snapshot.custom_last_polls = vec![None; textos.len()];
         snapshot.custom_texts = textos;
         snapshot

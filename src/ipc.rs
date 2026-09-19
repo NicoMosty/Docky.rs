@@ -5,7 +5,8 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 use wayland_client::{Connection, QueueHandle};
 
-#[derive(Clone, Debug)]
+// ----- sin derives: no se clona ni se imprime, y `DeferredWidgets` trae tipos
+// (`MediaInfo`, `BluetoothInfo`) que tampoco. -----
 pub enum IpcMessage {
     ToggleSearch,
     OsdVolume,
@@ -15,6 +16,11 @@ pub enum IpcMessage {
     BatteryChanged,
     BluetoothChanged,
     WorkspacesChanged,
+    /// Lo que el arranque leyó en un hilo aparte (batería, media, bluetooth,
+    /// volumen): son las lecturas caras y el primer frame no las espera. Trae el
+    /// dato ya leído a propósito — los `refresh_*` releen, y acá el punto es no
+    /// volver a esperar.
+    DeferredWidgets(Box<crate::widgets::DeferredWidgets>),
     /// El layout de teclado cambió (niri lo manda como `KeyboardLayoutsChanged`):
     /// llega por el event-stream, no por el tick de 2 s.
     KbdLayoutChanged,

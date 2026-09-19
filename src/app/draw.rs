@@ -524,6 +524,20 @@ impl App {
         );
     }
 
+    /// Llega del hilo que lee en background al arrancar (batería, media,
+    /// bluetooth, volumen). NO pasa por los `refresh_*`: esos releen el sistema, y
+    /// el punto de este camino es que el dato ya viene leído. Tampoco toca
+    /// workspaces, red ni layout de teclado, así que no hay HUD ni regla de
+    /// workspace vacío de por medio.
+    pub(crate) fn apply_deferred_widgets(
+        &mut self,
+        deferred: crate::widgets::DeferredWidgets,
+        qh: &QueueHandle<Self>,
+    ) {
+        self.widgets.apply_deferred(deferred);
+        self.relayout_dock(qh);
+    }
+
     pub(crate) fn refresh_clock(&mut self, qh: &QueueHandle<Self>) {
         if !self.dock.icons.is_empty() || !self.widget_placed(crate::config::WidgetKind::Clock) {
             return;

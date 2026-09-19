@@ -219,7 +219,21 @@ fn main() -> anyhow::Result<()> {
         widgets::set_pinned_output(output);
     }
     let mut dock = Dock::new(config);
-    let initial_widgets = widgets::WidgetSnapshot::refresh(&dock.config.settings);
+    // ----- el canal de IPC se crea ACÁ, antes de tocar Wayland, para que el hilo
+    // que trae las lecturas caras arranque ya y se solape con el resto del
+    // arranque. Lo que llega por acá se drena en el loop (ver `DeferredWidgets`). -----
+    let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<ipc::IpcMessage>();
+    {
+        let tx = ipc_tx.clone();
+        let settings = dock.config.settings.clone();
+        std::thread::spawn(move || {
+            let deferred = widgets::read_deferred(&settings);
+            let _ = tx.send(ipc::IpcMessage::DeferredWidgets(Box::new(deferred)));
+        });
+    }
+    // ----- primer frame sin esperar nada que pueda tardar: batería, media,
+    // bluetooth y volumen entran por el canal. -----
+    let initial_widgets = widgets::WidgetSnapshot::refresh_quick(&dock.config.settings);
     if dock.icons.is_empty() {
         let is_vertical = dock.is_vertical();
         let cross_len = dock.cross_len();
@@ -425,7 +439,8 @@ fn main() -> anyhow::Result<()> {
         app.pinned_output.clone(),
     );
 
-    let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<ipc::IpcMessage>();
+    // ----- el canal ya se creó arriba (para que el hilo de `read_deferred`
+    // arranque temprano): acá sólo se enganchan los que escriben en él. -----
     ipc::spawn_listener(
         ipc_tx.clone(),
         conn.clone(),
@@ -535,6 +550,7 @@ fn main() -> anyhow::Result<()> {
                 ipc::IpcMessage::BatteryChanged => app.refresh_battery(&qh),
                 ipc::IpcMessage::BluetoothChanged => app.refresh_bluetooth(&qh),
                 ipc::IpcMessage::WorkspacesChanged => app.refresh_workspaces(&qh),
+                ipc::IpcMessage::DeferredWidgets(ready) => app.apply_deferred_widgets(*ready, &qh),
                 ipc::IpcMessage::KbdLayoutChanged => app.refresh_kblayout(&qh),
                 ipc::IpcMessage::OverviewChanged(open) => app.set_overview_open(open, &qh),
                 ipc::IpcMessage::ToggleWallpaper => app.toggle_wallpaper_picker(&qh),
