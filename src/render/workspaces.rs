@@ -31,21 +31,23 @@ pub fn workspaces_geometry(workspaces: &[crate::widgets::WorkspaceInfo], render_
     ((n - 1.0) * WS_SLOT + WS_ACTIVE) * render_scale
 }
 
-/// Relleno del panel del HUD alrededor del indicador.
+/// Relleno de la pastilla del HUD alrededor del indicador.
 const WS_FLASH_PAD: f32 = 26.0;
 
-/// Largo del panel del HUD de workspaces. La escala sale de las settings
-/// (`widget_scale`, vía `hit_scale`) y NO del call site: el contenido del HUD se
-/// dibuja con el MISMO factor que el widget del dock (el `output_scale` se cancela,
-/// está en el panel y en el buffer), así que el panel tiene que medirse con él. Una
-/// sola definición del panel: la usan el tamaño de la superficie y el hit test, que
-/// si no se despegan dejan puntos inclickeables (trampa 1). El relleno no se escala:
-/// es padding, no parte del indicador.
-pub fn ws_flash_panel_len(
-    workspaces: &[crate::widgets::WorkspaceInfo],
-    settings: &crate::config::DockSettings,
-) -> f32 {
-    workspaces_geometry(workspaces, hit_scale(settings)) + WS_FLASH_PAD
+/// Caja LÓGICA de la pastilla del HUD de workspaces: el rectángulo que el reparto
+/// del dock le da al widget (`hit_layout`) más el relleno, simétrico.
+///
+/// El HUD no tiene reparto propio: su superficie mide y se ancla igual que la del
+/// dock, así que el indicador cae donde estaba y sólo cambia la pastilla que lo
+/// enmarca. El relleno no se escala aparte: es padding, el call site lo multiplica
+/// por el `render_scale` como al rectángulo.
+pub fn ws_flash_pill(r: &WidgetRect, is_vertical: bool) -> (f32, f32, f32, f32) {
+    let h = WS_FLASH_PAD / 2.0;
+    if is_vertical {
+        (r.x, r.y - h, r.w, r.h + WS_FLASH_PAD)
+    } else {
+        (r.x - h, r.y, r.w + WS_FLASH_PAD, r.h)
+    }
 }
 
 fn first_center(count: usize, bar_len: f32, bar_start: f32, render_scale: f32) -> f32 {
@@ -200,37 +202,6 @@ pub fn workspace_dot_hit(
     workspaces.get(i).map(|ws| ws.id)
 }
 
-/// ----- hit test del HUD de workspaces -----
-/// Mismo cálculo que `workspace_dot_hit`, pero sobre el panel del HUD: ahí los
-/// puntos van centrados en el panel entero (zx=0, zw=panel_w), no en la
-/// posición que ocupa el widget dentro del layout del dock. Coordenadas
-/// lógicas, igual que el dibujo.
-///
-/// `settings` es de donde sale la escala, igual que en `workspace_slot_at`: si el
-/// call site pudiera pasar un `1.0`, al crecer el panel con `widget_scale` el click
-/// caería corrido y no habría nada que lo avise.
-pub fn ws_flash_dot_hit(
-    workspaces: &[crate::widgets::WorkspaceInfo],
-    is_vertical: bool,
-    panel_w: f32,
-    panel_h: f32,
-    settings: &crate::config::DockSettings,
-    x: f64,
-    y: f64,
-) -> Option<i32> {
-    if workspaces.is_empty() {
-        return None;
-    }
-    let (bar_len, bar_start, main) = if is_vertical {
-        (panel_h, 0.0, y as f32)
-    } else {
-        (panel_w, 0.0, x as f32)
-    };
-    let count = slot_count(workspaces);
-    let i = slot_at(count, bar_len, bar_start, main, hit_scale(settings))?;
-    workspaces.get(i).map(|ws| ws.id)
-}
-
 #[cfg(test)]
 mod workspace_hit_tests {
     use super::*;
@@ -312,42 +283,81 @@ mod workspace_hit_tests {
         }
     }
 
-    /// El HUD se dibuja con el MISMO factor que el widget del dock, así que su panel
-    /// crece con `widget_scale` y el hit test tiene que usar esa escala. Con el `1.0`
-    /// de antes el panel quedaba chico y el punto cambiaba de tamaño al ocultarse el
-    /// dock (el pedido era justamente que coincidan).
+    /// El HUD no tiene reparto propio: su pastilla sale del rectángulo que el
+    /// reparto del dock le da al widget de Workspaces. El bug era un panel del
+    /// largo del indicador centrado con `dock_align`: con zonas desparejas
+    /// (izquierda cargada, tray a la derecha) el indicador NO está centrado en el
+    /// dock, así que el punto saltaba de lugar al ocultarse el dock.
     #[test]
-    fn el_panel_del_hud_crece_con_widget_scale_y_el_click_lo_sigue() {
-        let count = 6;
-        let con_escala = crate::config::DockSettings {
+    fn la_pastilla_del_hud_sale_del_rectangulo_del_dock_no_de_un_panel_centrado() {
+        use crate::config::{WidgetKind, WidgetPlacement, WidgetSlot};
+
+        fn snapshot(workspaces: Vec<crate::widgets::WorkspaceInfo>) -> WidgetSnapshot {
+            WidgetSnapshot {
+                time: "11:11".into(),
+                date: "11-Sept".into(),
+                battery: None,
+                media: None,
+                bluetooth: None,
+                workspaces,
+                cpu: None,
+                ram: None,
+                ram_gb: None,
+                volume: None,
+                network: crate::widgets::NetworkInfo {
+                    label: "wifi".into(),
+                    online: true,
+                },
+                kblayout: crate::widgets::KbLayout { short: "EN".into() },
+                custom_texts: Vec::new(),
+                custom_last_polls: Vec::new(),
+            }
+        }
+
+        let p = |kind, slot| WidgetPlacement { kind, slot };
+        let settings = crate::config::DockSettings {
             widget_scale: SCALE,
+            widgets: vec![
+                p(WidgetKind::Clock, WidgetSlot::Left),
+                p(WidgetKind::Battery, WidgetSlot::Left),
+                p(WidgetKind::Volume, WidgetSlot::Left),
+                p(WidgetKind::Workspaces, WidgetSlot::Middle),
+                p(WidgetKind::Tray, WidgetSlot::Right),
+            ],
             ..Default::default()
         };
-        let sin_escala = crate::config::DockSettings::default();
-        let ws: Vec<_> = (0..count)
-            .map(|i| ws(i as i32 + 1, i == count - 1, false))
-            .collect();
-        let chico = ws_flash_panel_len(&ws, &sin_escala);
-        let grande = ws_flash_panel_len(&ws, &con_escala);
-        assert!(grande > chico, "el panel tiene que crecer con widget_scale");
-        // ----- y crecer exactamente lo que crece el indicador: el relleno no se escala
-        assert_eq!(
-            grande - chico,
-            workspaces_geometry(&ws, SCALE) - workspaces_geometry(&ws, 1.0)
-        );
-        for (s, scale) in [(&sin_escala, 1.0), (&con_escala, SCALE)] {
-            let panel = ws_flash_panel_len(&ws, s);
+        let widgets = snapshot((0..6).map(|i| ws(i + 1, i == 1, false)).collect());
+        const BAR: f32 = 700.0;
+
+        for is_vertical in [false, true] {
+            let (w, h) = if is_vertical {
+                (26.0, BAR)
+            } else {
+                (BAR, 26.0)
+            };
+            let rects =
+                super::layout::layout_widgets(&settings, &widgets, 2, is_vertical, w, h, SCALE);
+            let r = rects
+                .iter()
+                .find(|r| r.kind == WidgetKind::Workspaces)
+                .expect("el widget esta colocado");
+            let (main0, main_len) = if is_vertical { (r.y, r.h) } else { (r.x, r.w) };
+            let bar_len = if is_vertical { h } else { w };
+            // ----- el caso del test tiene que ser desparejo, si no no prueba nada -----
             assert!(
-                workspaces_geometry(&ws, scale) <= panel,
-                "el contenido entra"
+                (main0 + main_len / 2.0 - bar_len / 2.0).abs() > 10.0,
+                "el reparto tiene que dejar el indicador lejos del centro: {:.1} vs {:.1}",
+                main0 + main_len / 2.0,
+                bar_len / 2.0
             );
-            // ----- el centro DIBUJADO del último slot tiene que dar el último
-            let x = first_center(count, panel, 0.0, scale) + (count - 1) as f32 * WS_SLOT * scale;
-            assert_eq!(
-                ws_flash_dot_hit(&ws, false, panel, 26.0, s, x as f64, 13.0),
-                Some(count as i32),
-                "click en el centro dibujado ({x:.1}) con widget_scale {scale}"
-            );
+            // ----- la pastilla lo enmarca simétricamente y cruza todo el grosor -----
+            let (px, py, pw, ph) = ws_flash_pill(r, is_vertical);
+            let (p0, p_len) = if is_vertical { (py, ph) } else { (px, pw) };
+            assert!((p0 - (main0 - WS_FLASH_PAD / 2.0)).abs() < 0.01);
+            assert!((p0 + p_len - (main0 + main_len + WS_FLASH_PAD / 2.0)).abs() < 0.01);
+            let cross = if is_vertical { (px, pw) } else { (py, ph) };
+            let rect_cross = if is_vertical { (r.x, r.w) } else { (r.y, r.h) };
+            assert_eq!(cross, rect_cross);
         }
     }
 

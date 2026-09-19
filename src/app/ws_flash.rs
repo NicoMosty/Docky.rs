@@ -30,17 +30,14 @@ impl App {
         if self.dock_visible || !self.widget_placed(crate::config::WidgetKind::Workspaces) {
             return;
         }
-        // ----- el panel se mide con el mismo factor con el que se dibuja el
-        // indicador (lo saca `ws_flash_panel_len` de las settings): con `1.0` el HUD
-        // quedaba más chico que el widget del dock y el punto cambiaba de tamaño al
-        // ocultarse el dock. -----
-        let len = render::ws_flash_panel_len(&self.widgets.workspaces, &self.dock.config.settings);
-        let thick = self.dock.thickness() as f32;
-        let (panel_w, panel_h) = if self.dock.is_vertical() {
-            (thick, len)
-        } else {
-            (len, thick)
-        };
+        // ----- el HUD es, literalmente, la superficie del dock: mismo tamaño y
+        // mismo anclaje. Su indicador se dibuja en el rectángulo que el reparto del
+        // dock le da al widget (`hit_layout`), así que el punto queda donde estaba al
+        // ocultarse el dock y sólo se ve la pastilla que lo enmarca. Antes el panel
+        // del HUD se centraba con `dock_align`, así que con zonas desparejas (p. ej.
+        // 6 widgets a la izquierda y el tray a la derecha) el punto saltaba. -----
+        let (bw, bh) = self.dock.base_size();
+        let (panel_w, panel_h) = (bw as f32, bh as f32);
         let needs_resize = match self.ws_flash_mode.as_ref() {
             None => true,
             Some(m) => m.panel_w != panel_w || m.panel_h != panel_h,
@@ -63,14 +60,19 @@ impl App {
         if needs_resize {
             let s = &self.dock.config.settings;
             let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-            self.layer.set_anchor(anchor);
-            self.layer
-                .set_margin(margin.0, margin.1, margin.2, margin.3);
-            self.layer.set_size(panel_w as u32, panel_h as u32);
-            self.applied_size = Some((panel_w as u32, panel_h as u32));
-            // ----- el HUD también cambia anchor/margin: anotarlo para que la
-            // idempotencia de sync_autohide_surfaces no se confunda -----
-            self.applied_geom = Some((anchor, margin));
+            // ----- idempotente: el HUD mide y se ancla igual que el dock, así que
+            // casi siempre ya está aplicado (cada `set_*` dispara un configure que
+            // puede perder el foco del puntero) -----
+            if self.applied_geom != Some((anchor, margin)) {
+                self.layer.set_anchor(anchor);
+                self.layer
+                    .set_margin(margin.0, margin.1, margin.2, margin.3);
+                self.applied_geom = Some((anchor, margin));
+            }
+            if self.applied_size != Some((panel_w as u32, panel_h as u32)) {
+                self.layer.set_size(panel_w as u32, panel_h as u32);
+                self.applied_size = Some((panel_w as u32, panel_h as u32));
+            }
             log::debug!("wsflash: resize panel {panel_w}x{panel_h}");
         }
         let _ = self.ws_reset_tx.send(());
@@ -108,22 +110,14 @@ impl App {
             _ => return,
         }
         let (x, y) = event.position;
-        let Some((panel_w, panel_h)) = self.ws_flash_mode.as_ref().map(|m| (m.panel_w, m.panel_h))
-        else {
+        if self.ws_flash_mode.is_none() {
             return;
-        };
-        let Some(id) = render::ws_flash_dot_hit(
-            &self.widgets.workspaces,
-            self.dock.is_vertical(),
-            panel_w,
-            panel_h,
-            // ----- la escala la saca el propio hit test de las settings (misma que
-            // el dibujo: el puntero llega en lógicas y el `output_scale` se cancela
-            // entre el panel y el buffer). -----
-            &self.dock.config.settings,
-            x,
-            y,
-        ) else {
+        }
+        // ----- el HUD mide y se ancla como el dock, así que el hit test es el del
+        // dock: no hay una segunda geometría que se pueda desincronizar -----
+        let tray_count = self.tray.lock().unwrap().len();
+        let Some(id) = render::workspace_dot_hit(&self.dock, &self.widgets, tray_count, x, y)
+        else {
             log::debug!("wsflash: click ({x:.0},{y:.0}) fuera de los puntos");
             return;
         };
@@ -163,15 +157,15 @@ impl App {
         let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
         // ----- advance = true: el HUD también anima el deslizamiento del
         // indicador hacia el workspace nuevo (si no, queda clavado en el viejo) -----
+        let tray_count = self.tray.lock().unwrap().len();
         render::draw_ws_flash(
             &mut pixmap,
             &self.dock,
             &self.widgets,
+            tray_count,
             &mut self.marquee,
             true,
             scale,
-            panel_w,
-            panel_h,
         );
         if closing || eased < 0.999 {
             // ----- desvanecido de entrada/salida -----
@@ -228,8 +222,12 @@ impl App {
             self.ws_flash_mode = None;
             self.layer.set_layer(Layer::Top);
             let (w, h) = self.dock.base_size();
-            self.layer.set_size(w, h);
-            self.applied_size = Some((w, h));
+            // ----- el HUD no cambió el tamaño (es el del dock): sólo re-aplicar si
+            // de verdad hace falta -----
+            if self.applied_size != Some((w, h)) {
+                self.layer.set_size(w, h);
+                self.applied_size = Some((w, h));
+            }
             self.draw(qh);
             crate::app::trim_heap();
             return;

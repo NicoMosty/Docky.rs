@@ -470,17 +470,41 @@ pub fn draw_ws_flash(
     pixmap: &mut Pixmap,
     dock: &Dock,
     widgets: &WidgetSnapshot,
+    tray_count: usize,
     marquee: &mut MarqueeState,
     advance: bool,
     render_scale: f32,
-    panel_w: f32,
-    panel_h: f32,
 ) -> bool {
     let s = &dock.config.settings;
-    let w = panel_w * render_scale;
-    let h = panel_h * render_scale;
-    // ----- fondo: el mismo panel del dock, como pastilla redondeada -----
-    let path = rounded_rect_path(0.0, 0.0, w, h, s.corner_radius * render_scale);
+    let is_vertical = dock.is_vertical();
+    // ----- el indicador va en el rectángulo que el reparto del dock le da al widget
+    // de Workspaces (`hit_layout`, en coordenadas LÓGICAS; acá se pasan a físicas).
+    // La superficie del HUD mide y se ancla IGUAL que la del dock, así que el punto
+    // queda donde estaba y sólo se dibuja la pastilla que lo enmarca. Centrarlo en un
+    // panel propio con `dock_align` era el bug: con zonas desparejas (p. ej. 6
+    // widgets a la izquierda y el tray a la derecha) el punto saltaba al ocultarse el
+    // dock (trampa 1: una sola definición del reparto). -----
+    let Some(r) = layout::hit_layout(dock, widgets, tray_count)
+        .into_iter()
+        .find(|r| r.kind == crate::config::WidgetKind::Workspaces)
+    else {
+        return false;
+    };
+    let (rx, ry, rw, rh) = (
+        r.x * render_scale,
+        r.y * render_scale,
+        r.w * render_scale,
+        r.h * render_scale,
+    );
+    // ----- fondo: la pastilla del dock, pero sólo alrededor del indicador -----
+    let (px, py, pw, ph) = ws_flash_pill(&r, is_vertical);
+    let path = rounded_rect_path(
+        px * render_scale,
+        py * render_scale,
+        pw * render_scale,
+        ph * render_scale,
+        s.corner_radius * render_scale,
+    );
     let mut bg = Paint::default();
     bg.set_color_rgba8(
         s.panel_r,
@@ -496,7 +520,7 @@ pub fn draw_ws_flash(
         Transform::identity(),
         None,
     );
-    // ----- sólo el indicador de workspaces, centrado -----
+    // ----- sólo el indicador de workspaces, en el rectángulo del dock -----
     let palette = widget_palette(s);
     let colors = WidgetColors {
         accent: palette.accent,
@@ -508,16 +532,15 @@ pub fn draw_ws_flash(
         &widgets.workspaces,
         marquee,
         advance,
-        0.0,
-        0.0,
-        w,
-        h,
+        rx,
+        ry,
+        rw,
+        rh,
         // ----- mismo factor que el dock (`draw_widgets` también multiplica por
-        // `widget_scale`): el fondo usa `render_scale` pelado porque `panel_w` ya
-        // viene medido con `widget_scale` (`ws_flash_panel_len`). -----
+        // `widget_scale`): el rectángulo ya viene en píxeles físicos. -----
         render_scale * s.widget_scale,
         &colors,
-        dock.is_vertical(),
+        is_vertical,
     )
 }
 
