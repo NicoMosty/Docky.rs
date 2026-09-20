@@ -1471,6 +1471,554 @@ reordenamiento de widgets) y lo posterior:
     metadata, porque no se recuerda el fracaso (mismo comportamiento que antes, sólo
     que fuera del hilo que dibuja).
 
+## Cerrado de AUDIT.md (movido de ahí el 2026-09-20)
+
+Los hallazgos de `AUDIT.md` que ya están resueltos. Cada uno conserva el análisis
+original (que describía el árbol de aquel momento) y, arriba, lo que se hizo y cómo
+se verificó; el número entre paréntesis es la sección que tenía en `AUDIT.md`. Lo que
+sigue **abierto** vive en `AUDIT.md`, no acá.
+
+### A1 — `wpctl` sin timeout: cuelgue indefinido (AUDIT §4.1)
+
+> **Resuelto** (§3): `read_volume()` pasó a `run_with_timeout(cmd, 500ms)`, el
+> mismo helper que usa el resto de las lecturas. Guard:
+> `widgets::percent_decode_tests::un_timeout_mata_al_hijo_colgado`. El análisis de
+> abajo describe el estado **original**.
+
+**Archivo:** `src/widgets.rs:963-975`
+
+```rust
+pub fn read_volume() -> Option<(u8, bool)> {
+    let out = std::process::Command::new("wpctl")
+        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
+        .output()          // <-- sin run_with_timeout
+        .ok()?;
+```
+
+**Impacto:** a diferencia de los otros subprocesos (que usan `run_with_timeout` con
+400-500 ms), este no tiene cota. Si `wpctl` se cuelga —PipeWire caído,
+`pipewire-pulse` a medio arrancar, D-Bus de sesión atascado— el proceso queda
+bloqueado **para siempre**: el dock deja de responder y no se recupera ni con Escape.
+
+**Alcance:** alto. `read_volume()` corre desde tres caminos calientes: `refresh_sys()`
+(cada 2 s, `main.rs:467`), `read_volume_rows()` (panel de volumen) y
+`widgets::volume_step()` (la rueda del mouse, desde `app/pointer.rs:384`, con relectura
+en `:387`).
+
+**Fix:** usar el helper que ya existe:
+
+```rust
+pub fn read_volume() -> Option<(u8, bool)> {
+    let mut cmd = std::process::Command::new("wpctl");
+    cmd.args(["get-volume", "@DEFAULT_AUDIO_SINK@"]);
+    let out = run_with_timeout(cmd, Duration::from_millis(400))?;
+    if !out.status.success() { return None; }
+    …
+}
+```
+
+**Verificación:** test que corre `read_volume` con un `wpctl` falso en `$PATH`
+(`#!/bin/sh` + `exec sleep 60`) y asserta que vuelve en <500 ms. `run_with_timeout`
+es privado del módulo: el test vive en `widgets.rs`, así que no hay que cambiarlo de
+visibilidad.
+
+### A2 — `matugen` sin timeout al elegir fondo de pantalla (AUDIT §4.4)
+
+> **Resuelto por dos vías.** `extract_color_scheme` (los colores que el dock saca del
+> fondo) pasa por `widgets::run_with_timeout` con tope de **10 s** (`wallpaper.rs:347`),
+> y el matugen **del usuario** (`run_matugen`, el de “Matugen Apps”) no lleva timeout
+> pero sale por un hilo propio fire-and-forget en sus dos llamadores
+> (`apply_matugen_to_apps` y `apply_wallpaper`), así que ninguno de los dos puede
+> congelar el hilo que dibuja. Lo que queda de este hallazgo: un matugen colgado deja un
+> hilo vivo.
+
+**Archivo:** `src/wallpaper.rs:292-305` (llamado desde `app/wallpaper_picker.rs:159`)
+
+```rust
+pub fn extract_color_scheme(path: &std::path::Path, scheme: &str) -> Option<ColorScheme> {
+    let output = std::process::Command::new("matugen")
+        .args(["--type", scheme, "image", &path.to_string_lossy(), …])
+        .output()          // <-- sin timeout
+        .ok()?;
+```
+
+Cadena: click/Enter en una miniatura → `choose_wallpaper`
+(`wallpaper_picker.rs:121`) → `sync_accent_from_last_wallpaper` (línea 131) →
+`extract_color_scheme` (línea 159) → `matugen` sincrónico → recién después
+`request_redraw`. matugen decodifica la imagen y cuantiza colores: típicamente cientos
+de ms a un par de segundos, y **sin cota superior** (puede colgarse).
+
+**Son tres puntos de entrada, no uno** (`rg -n 'sync_accent_from_last_wallpaper\(\)' src/`):
+
+| Entrada | Archivo:línea | Se dispara con |
+| --- | --- | --- |
+| Selector de fondos | `wallpaper_picker.rs:131` | click/Enter en una miniatura |
+| Tema "desde el fondo" | `dock_menu_input.rs:150` | elegir el preset "wallpaper" en el panel |
+| Cambio de esquema matugen | `dock_menu_input.rs:241` | elegir otro scheme en el dropdown |
+
+Los dos últimos bloquean el **panel de ajustes**, no el selector de fondos: quien
+depure el freeze mirando sólo el picker va a perseguir el fantasma equivocado.
+
+**Impacto:** el selector de fondos queda congelado desde que elegís la imagen hasta
+que matugen termina. La selección ya se aplicó (`apply_wallpaper` sí está en un
+hilo, `wallpaper.rs:242`), pero la UI no lo muestra.
+
+**Fix:** mover la extracción a un hilo y aplicar el resultado en el frame siguiente,
+igual que ya se hace con las miniaturas (`wallpaper_picker.rs:57` usa
+`thumb_request_tx`/`thumb_result_rx`): canal `mpsc` + `try_recv` en el tick del modo.
+Si se quiere el fix de una línea, `run_with_timeout` con 400 ms (hacerlo
+`pub(crate)`), pero **eso sigue bloqueando hasta 400 ms**; el hilo es lo correcto.
+
+**Verificación:** con un `matugen` falso que duerme 3 s en `$PATH`, el selector debe
+seguir animando y responder a Escape mientras corre.
+
+### A3 — `GetLayout` D-Bus sincrónico en el hilo principal (AUDIT §4.5)
+
+> **Resuelto (2026-09-20).** El `GetLayout` ya no corre en el hilo que dibuja: los dos
+> sitios de `dock_popup.rs` **envían una petición** (`tray::MenuRequest`) a un hilo
+> propio (`tray::spawn_menu_worker`) y el menú vuelve por el canal de IPC
+> (`IpcMessage::TrayMenuReady` → `App::apply_tray_menu`, que descarta el resultado si
+> el usuario ya abrió otra cosa: el guard es `tray_menu_still_wanted`, con test).
+>
+> Además la conexión D-Bus del tray ahora lleva `method_timeout` de **500 ms**
+> (`tray::TRAY_CALL_TIMEOUT`), que es el techo de *cualquier* llamada del tray en vez
+> de los 25 s del default de zbus. La constante está medida, no elegida a ojo:
+> `GetLayout` real con gdbus (incluye el spawn del proceso) dio **10,6-13,4 ms**
+> (nm-applet) y **17,5-20,2 ms** (blueman), o sea ~25-50x de margen.
+>
+> **Verificado end-to-end con `scripts/fake_sni_hang.py`** (un SNI que registra un
+> `Menu` y **nunca contesta** `GetLayout`) más un click real inyectado: el log del
+> falso da `GETLAYOUT` → **500 ms** → `ACTIVATE`, o sea el timeout disparando y el
+> fallback de menú vacío funcionando. Lo importante: **el dock siguió dibujando y
+> procesando clicks durante todo el cuelgue** — con el código viejo el primer click
+> habría congelado el hilo principal 25 s (los clicks del barrido habrían dejado de
+> registrarse; se registraron todos). El camino feliz también: con remmina (app real)
+> el menú se abre igual, `getlayout=1ms`, por el hilo nuevo.
+>
+> **Lo que NO hace**: no hay estado "cargando" en el popup. El menú aparece cuando
+> llega la respuesta (~30 ms normal, 500 ms con la app colgada) y si vuelve vacío se
+> cae al `Activate` de siempre. Se prefirió eso a un spinner para un caso que, con el
+> timeout, dura medio segundo.
+
+**Archivo:** `src/app/dock_popup.rs:75` y `:568`
+
+```rust
+let items = crate::tray::fetch_menu(&service, &menu_path, 0);          // :75
+…
+let submenu = crate::tray::fetch_menu(&service, &menu_path, item.id);  // :568
+```
+
+`fetch_menu` (`tray.rs:199`) es `zbus::blocking::Proxy::call("GetLayout", …)` (llamada en
+`tray.rs:219`), con el
+timeout por defecto de zbus (**25 s**). Se llama desde el handler de click derecho:
+icono del tray, click derecho en los widgets Network/Bluetooth
+(`open_widget_tray_menu` → `find_menu`, que además hace `GetProperty`), y al abrir
+un submenú.
+
+**Impacto:** una app del tray lenta o colgada congela el dock completo hasta 25 s.
+Síntoma reportable: *"el dock se trabó al abrir un menú del tray"*.
+
+**Nota:** el repo ya mide esta latencia (hay un `log::debug!` con
+`setup=/getlayout=` en `tray.rs:226`): el costo se conoce y se aceptó. El fix cambia
+el costo de "bloqueante" a "asíncrono", no lo elimina.
+
+**Fix:** abrir el popup en estado "cargando" y pedir el layout en un hilo, igual que
+`send_menu_event` (`tray.rs:274`, ya usa `std::thread::spawn`). El resultado llega
+por canal y se aplica con `set_tray_items` (`dock_popup.rs:146`) en el tick del
+popup, que ya existe. Mantener el fallback `Activate` si el menú vuelve vacío.
+**Ojo:** cubrir también el submenú (:568) y no perder el estado `tray_stack`.
+
+**Verificación:** un SNI falso que no responda `GetLayout`; el dock tiene que seguir
+animando y el popup mostrar "cargando" → menú o `Activate`.
+
+### A4 — `curl` de carátula en el hilo principal (AUDIT §4.6)
+
+> **Resuelto (2026-09-20).** `read_media` recibe un flag `allow_network` y el hilo que
+> dibuja siempre llama con `false`: sin red, la carátula remota que no está en el caché
+> simplemente se resuelve a `None` (el widget se dibuja igual, sin tapa). La descarga la
+> hace `warm_media_art()` **en el hilo del watcher de media**, que después manda un
+> segundo `MediaChanged` para que la carátula entre en un frame posterior. El único
+> otro llamador con red es `read_deferred`, que ya corre en un hilo propio al arrancar.
+> De paso se cerró **D3**: el `curl` ahora lleva `--fail` (un 404 ya no se cachea como
+> `.jpg`) y `--max-time 1` en vez de 3.
+>
+> **Verificado con un tarpit local** (un server que acepta la conexión y no responde
+> nunca) y un `playerctl` falso que emite metadata cada 300 ms con esa `artUrl`:
+> mientras una descarga estaba **en vuelo** (verificado que era el *mismo* `curl`, hijo
+> del proceso del dock, antes y después), una notificación pedida por IPC se dibujó
+> **0,4 s después**. Es decir: el hilo principal nunca esperó por la red. El
+> `10.255.255.1` que sugería esta auditoría no sirve en esta máquina: rebota en 85 ms,
+> así que no ejercita nada (de ahí el tarpit local).
+
+**Archivo:** `src/widgets.rs:932-954`
+
+```rust
+let status = std::process::Command::new("curl")
+    .args(["-s", "-L", "--max-time", "3", "-o"])
+    .arg(&path)
+    .arg(url)
+    .status()          // <-- bloqueante hasta 3 s
+    .ok()?;
+```
+
+Cadena: watcher `playerctl --follow` (hilo aparte, bien) → `IpcMessage::MediaChanged`
+→ `main.rs:436` → `app.refresh_media` → `WidgetSnapshot::refresh_media` →
+`read_media` → `resolve_art_path`/`cached_remote_art`.
+
+**Impacto:** hasta 3 s de congelamiento del dock **la primera vez** que suena un tema
+con `artUrl` remoto (radio por internet, YouTube vía MPRIS, Spotify con URL http).
+Después queda cacheado y es barato. Un freeze de 3 s por tema nuevo.
+
+**Fix:** sacar `cached_remote_art` del camino sincrónico. El `MediaInfo` se dibuja
+igual sin carátula; la imagen puede llegar en un frame posterior por canal, como las
+miniaturas de fondos. Mínimo aceptable: bajar `--max-time` a 1 y mover la descarga a
+un hilo que publique el resultado. (El `--fail` faltante es D3.)
+
+**Verificación:** `artUrl` http apuntando a un host que no responde
+(`http://10.255.255.1/art.jpg`): el dock debe seguir respondiendo.
+
+### A6 — Error de protocolo Wayland = fin del proceso (AUDIT §4.8)
+
+> **Resuelto** (§3): el dispatch pasó a `catch_unwind` + `reexec()`, que respawnea
+> el binario con el mismo argv (tope de 3 relanzamientos seguidos vía
+> `DOCKYRS_REEXEC`). El código de abajo es el **original**.
+
+**Archivo:** `src/main.rs:431`
+
+```rust
+loop {
+    event_queue.blocking_dispatch(&mut app)?;   // <-- `?` sale de main()
+```
+
+`main` devuelve `anyhow::Result<()>`: un error de protocolo (o del socket) termina el
+proceso con un log y sin dock. Combinado con la trampa 2 (`attach(NULL)` mata el
+cliente por error de protocolo), ésta es la ruta por la que "el dock desapareció".
+
+**Fix mínimo:** loguear y salir explícitamente, para que el fallo sea diagnosticable:
+
+```rust
+if let Err(err) = event_queue.blocking_dispatch(&mut app) {
+    log::error!("dispatch: {err}");
+    return Ok(());
+}
+```
+
+Opcional (más discutible, evaluar con el usuario): `catch_unwind` + rearmar la
+superficie. **No hacerlo sin pedido explícito**: agrega complejidad real.
+
+**Verificación:** por revisión (el `?` sale con el `Err` impreso por anyhow, con
+contexto, en vez de un panic sin mensaje). Para probarlo en vivo hay que matar el
+compositor: **no** uses `niri msg action quit` en tu sesión real (cierra todo); solo
+en una sesión anidada o descartable.
+
+### A7 — `Compositor::detect()` sin memoizar: un `niri msg` por tick (AUDIT §4.2)
+
+> **Mitigado sin memoizar.** `detect()` corta por variable de entorno
+> (`HYPRLAND_INSTANCE_SIGNATURE` / `NIRI_SOCKET`, que los dos compositores exportan) y
+> el sondeo `niri msg` queda sólo para un arranque sin ninguna de las dos; además los
+> workspaces y el layout de teclado salieron del tick de 2 s (llegan por el
+> event-stream), así que `detect()` ya no se llama por tick.
+
+**Archivo:** `src/compositor.rs:7-24` (probe en `:13`)
+
+```rust
+pub fn detect() -> Self {
+    if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
+        Self::Hyprland
+    } else if std::env::var("NIRI_SOCKET").is_ok() {
+        Self::Niri
+    } else if std::process::Command::new("niri")
+        .args(["msg", "--json", "workspaces"])
+        .output()          // <-- sin timeout
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        // ponytail: `niri msg` probea el socket; solo corre al arrancar
+        Self::Niri
+```
+
+**El comentario es falso.** `detect()` se llama desde `read_kblayout()`
+(`widgets.rs:293`, dentro de `refresh_sys`, cada 2 s), `kblayout_next`
+(`widgets.rs:325`, en cada click del widget de layout), `read_workspaces()`
+(`widgets.rs:620`), `workspace_switch`, `power.rs`, `ipc.rs:279`,
+`popup_menu.rs:380` y `desktop.rs:52`. Si el proceso no heredó `NIRI_SOCKET` (lanzado
+por ssh, por una unidad systemd, o con entorno limpio — el `setsid` de este repo no lo
+garantiza), la rama del `niri msg` corre **en cada llamada**, sin timeout, en el hilo
+de UI.
+
+**Impacto:** con `NIRI_SOCKET` ausente, un `fork/exec` de `niri msg` cada 2 s, más
+una llamada extra por cada evento de workspace (`read_workspaces`) y por cada cambio
+de layout de teclado. Si `niri msg` se traba, el dock se traba con él.
+
+**Fix mínimo:** el resultado no cambia en runtime; cachearlo:
+
+```rust
+pub fn detect() -> Self {
+    static DETECTED: std::sync::OnceLock<Compositor> = std::sync::OnceLock::new();
+    *DETECTED.get_or_init(|| { … } )
+}
+```
+
+(Si en algún momento se quiere soportar reconexión al compositor, un
+`OnceLock<Mutex<Compositor>>` con invalidación; hoy YAGNI.)
+
+**Verificación:** `env -u NIRI_SOCKET -u HYPRLAND_INSTANCE_SIGNATURE strace -f -e trace=execve ./target/release/dockyrs 2>&1 | grep -c 'niri.*workspaces'`
+en 10 s: con el fix, 1 (o 0 si el probe falla); sin el fix, ~5.
+
+### B3 — Hilo por conexión IPC, sin timeout de lectura (AUDIT §5.3)
+
+> **Resuelto** (no estaba marcado en `AUDIT.md`). `spawn_listener` lanza **un hilo por
+> cliente** y `send_message` avisa por stderr cuando no puede conectar o escribir, así
+> que un cliente mudo ya no llena la cola de `accept` ni deja muda la IPC entera.
+> Verificado abriendo **200 conexiones mudas**: con el dock nuevo el launcher y las
+> notificaciones siguen andando. El timeout de lectura que pedía el hallazgo no se
+> agregó: con un hilo por cliente, uno trabado cuesta un hilo y nada más.
+
+**Archivo:** `src/ipc.rs:58-61` y `:71`
+
+```rust
+for stream in listener.incoming().flatten() {
+    handle_client(stream, &tx, &conn, &qh);   // read() bloqueante, sin timeout
+}
+```
+
+```rust
+let mut buf = [0u8; 1024];
+let Ok(n) = stream.read(&mut buf) else { return; };
+```
+
+Un cliente que conecta y no escribe deja el hilo bloqueado en `read` para siempre.
+`incoming()` es secuencial: **una** conexión colgada y el dock no acepta más comandos
+IPC (los `--toggle-search` del keybind dejan de funcionar).
+
+**Fix mínimo:** `stream.set_read_timeout(Some(Duration::from_millis(200)))` antes de
+leer. No hace falta thread pool ni async.
+
+**Verificación:** dejar un socket conectado y sin escribir
+(`python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.connect('<path>')"`), después
+`./target/release/dockyrs --toggle-search` debe seguir funcionando.
+
+### C4 — HECHO: AGENTS trampa 1 ya corregida en el árbol (AUDIT §6.4)
+
+> **No había nada que implementar:** la trampa 1 ya decía "superficie compartida +
+> superficies propias del popup y el selector", que era el estado del árbol. Se conserva
+> el texto original abajo como trazabilidad.
+
+La trampa 1 ya dice "superficie compartida + superficies propias del popup y el
+selector". Se conserva el texto original abajo como trazabilidad, sin nada que implementar.
+
+`AGENTS.md` (trampa 1): *"Una sola superficie layer para todo. El dock y cada modo
+(panel de ajustes, OSD, HUD, popups) usan `self.layer`."*
+
+Realidad (`rg -n create_layer_surface src/`): hay **4**: `main.rs:94` (dock + todos los
+modos), `app/popup_menu.rs:16` (menú de click derecho sobre un icono),
+`app/dock_popup.rs:200` (menús del tray y **panel de volumen**), `screenshot/mod.rs:79`
+(selector de región). La propia trampa 1 se contradice más abajo, cuando habla de la
+superficie del popup y su input region.
+
+**No es un bug de código**: es documentación que va a extraviar al próximo agente.
+Corregirla a "una superficie compartida para el dock y los modos que lo acompañan
+(menú, OSD, HUD, launcher, portapapeles, fondos) + superficies propias para el popup
+del tray y el selector de screenshot".
+
+### C8 — HECHO: AGENTS trampa 2 ya corregida en el árbol (AUDIT §6.13)
+
+> **No había nada que implementar:** la trampa 2 ya estaba acotada a la superficie
+> compartida del dock (el popup y el selector de screenshot sí se desmapean a propósito).
+> Se conserva el texto original abajo como trazabilidad.
+
+La trampa 2 ya dice "nunca desmapear **la superficie compartida del dock**" y
+aclara que popup y selector sí se desmapean. Se conserva el texto original abajo
+como trazabilidad, sin nada que implementar.
+
+`AGENTS.md` (trampa 2) dice, sin matices: *"Nunca desmapear la superficie.
+`attach(NULL)` hace que niri resetee el tamaño de la layer a 0 y el cliente muere por
+error de protocolo."*
+
+Pero `attach(None, 0, 0)` se usa en tres lugares y está bien:
+
+```text
+src/screenshot/region.rs:175   selector de región (al cerrar)
+src/app/dock_popup.rs:256      popup del tray (al cerrar)
+src/app/dock_popup.rs:418      popup del tray (al cambiar de submenú)
+```
+
+Ninguno es `self.layer` (la superficie compartida del dock), que efectivamente nunca
+lo hace. La trampa aplica a **la superficie compartida**, que es la única con
+`set_size(w, h)` propio y `set_exclusive_zone(-1)`; las auxiliares son descartables y
+se re-crean al abrirse (`dock_popup.rs:200` crea una capa nueva por popup), así que
+desmapearlas antes de soltarlas es intencional.
+
+**No es un bug de código**: es la documentación enumerando un invariante más ancho de
+lo que es. Corregir la trampa 2 a "nunca desmapear **la superficie compartida del
+dock**", y aclarar que popup y selector sí se desmapean a propósito.
+
+**Verificación:** `rg -n 'attach\(None' src/` → debe devolver sólo los tres sitios de
+arriba, nunca `self.layer`.
+
+### D1 — `workspace_dot_hit` reparte con `1.0`: clicks muertos (AUDIT §4.3)
+
+> **Resuelto** (§3): el reparto salió a `workspaces::workspace_slot_at()`, que lee
+> la escala de `hit_scale(settings)`. El HUD de workspaces ya no tiene geometría
+> propia (`ws_flash_dot_hit` se borró): su superficie mide y se ancla como la del
+> dock y el hit test es `workspace_dot_hit`. Guard:
+> `render::workspaces::workspace_hit_tests::el_hit_test_toma_la_escala_de_las_settings`
+> — verificado revirtiendo el `1.0` a mano: falla, mientras los otros 3 tests del
+> módulo pasan (por eso el guard tiene que mirar el call site y no el helper).
+
+**Archivo:** `src/render/workspaces.rs:126-155` (`first_center(…, 1.0)` en `:148`)
+
+```rust
+pub fn workspace_dot_hit(dock: &Dock, widgets: &WidgetSnapshot, tray_count: usize, x: f64, y: f64) -> Option<i32> {
+    …
+    let rects = hit_layout(dock, widgets, tray_count);      // <- escalado por widget_scale
+    let (bar_len, bar_start, main) = if is_vertical { (r.h, r.y, y as f32) } else { (r.w, r.x, x as f32) };
+    let count = slot_count(workspaces);
+    let first = first_center(count, bar_len, bar_start, 1.0);   // <- AQUÍ: sin escala
+    let half = WS_SLOT / 2.0;                                   // <- y aquí
+    for (i, ws) in workspaces.iter().enumerate() {
+        if (main - (first + i as f32 * WS_SLOT)).abs() <= half {  // <- y aquí
+```
+
+El dibujo sí lo hace bien (`render/workspaces.rs:52-80`):
+
+```rust
+let slot = WS_SLOT * render_scale;          // render_scale = output_scale * widget_scale
+let active = WS_ACTIVE * render_scale;
+let first = first_center(count, bar_len, bar_start, render_scale);
+```
+
+**Es la trampa 10 otra vez, en el sexto hit test.** `hit_layout()` devuelve rects
+**escalados**, así que el `bar_start`/`bar_len` del hit test ya están escalados,
+pero su geometría interna (`first_center` con `1.0`, el paso `WS_SLOT`, la
+tolerancia `WS_SLOT/2`) no. El error por punto es
+`(ω−1)·WS_SLOT·((n−1)/2 − i)` con `ω = widget_scale`:
+
+| n | ω = 1.2166 | error en el punto 0 | tolerancia |
+| --- | --- | --- | --- |
+| 3 | 5.2 px | funciona (pasa desapercibido) | 12 |
+| 6 | 13.0 px | **falla** | 12 |
+| 8 | 18.2 px | **falla** (y también el último) | 12 |
+
+Con `widget_scale = 1.0` (el default) es invisible; con `ω > 1` y ≥6 workspaces, el
+click sobre los puntos de los extremos **no hace nada** (`workspace_dot_hit`
+devuelve `None`) o cae en el workspace vecino. La constante `SCALE_DEL_BUG =
+1.2166064` de `hit_layout_tests` es la escala del setup real, así que esto es el
+entorno del usuario, no un caso teórico.
+
+**`AGENTS.md` lo da por arreglado.** El "Qué se hizo" lista
+`workspace_dot_hit` entre los cinco hit tests que pasan por `render::hit_scale()`.
+Pasa por `hit_layout()` para el rect, pero **no aplica la escala a su propia
+geometría**: el fix quedó a medias. Corregir también ese texto.
+
+**Fix:** usar la escala de hit (ya existe el helper):
+
+```rust
+let sc = hit_scale(&dock.config.settings);
+let first = first_center(count, bar_len, bar_start, sc);
+let half = WS_SLOT / 2.0 * sc;
+for (i, ws) in workspaces.iter().enumerate() {
+    if (main - (first + i as f32 * WS_SLOT * sc)).abs() <= half {
+```
+
+El HUD de workspaces ya no dibuja con un panel propio: su superficie es la del dock
+(mismo tamaño y anclaje) y el indicador sale del mismo `hit_layout`, así que no hay
+un segundo reparto que ajustar (`ws_flash_dot_hit` se borró). Ver el bullet del HUD
+de alineación en `AGENTS.md`.
+
+**Verificación:** `#[cfg(test)] mod ws_hit_tests` en `render/workspaces.rs` con
+`widget_scale = 1.2166064` y n = 6 y 8: el centro dibujado de cada punto
+(`first_center(…, sc) + i·WS_SLOT·sc`) tiene que devolver `workspaces[i].id`. Con el
+bug, i=0 falla. Revertir `hit_scale` a `1.0` debe romper el test (ese es el guard).
+
+### D2 — `percent_decode` paniquea con `%` seguido de multibyte (AUDIT §5.9)
+
+> **Resuelto.** `percent_decode` decodifica sobre **bytes** (junta un `Vec<u8>` y cierra
+> con `from_utf8_lossy`), así que un `%` seguido de un char multibyte ya no corta el char
+> al medio. Guard: `widgets::percent_decode_tests` (`percent_decode("a%€")` → `a%€`,
+> además del caso `%` al final del string).
+
+**Archivo:** `src/widgets.rs:906-923`
+
+```rust
+if bytes[i] == b'%'
+    && i + 2 < bytes.len()
+    && let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+```
+
+`s[i + 1..i + 3]` es slicing por **bytes** de un `&str`: si el carácter tras `%` es
+multibyte, el índice final no cae en frontera de char y Rust **paniquea**
+(`byte index is not a char boundary`). Reproducción: `"a%€"` → bytes
+`61 25 E2 82 AC`, i=1 cumple `i+2 < len`, y `s[2..4]` corta el `€` por la mitad.
+
+El input es externo: `resolve_art_path` aplica `percent_decode` a cualquier
+`file://…` que reporte un reproductor MPRIS. Un panic en el hilo del event loop mata
+el dock (ver A5).
+
+**Fix mínimo:** usar `get`, que devuelve `None` en vez de paniquear:
+
+```rust
+if bytes[i] == b'%'
+    && let Some(hex) = s.get(i + 1..i + 3)
+    && let Ok(byte) = u8::from_str_radix(hex, 16)
+```
+
+**Verificación:** `assert_eq!(percent_decode("a%€"), "a%€")` (hoy paniquea) y
+`assert_eq!(percent_decode("%20"), " ")` (no romper el caso válido).
+
+### D3 — `curl` sin `--fail`: un 404 se cachea como carátula válida (AUDIT §5.10)
+
+> **Resuelto.** El `curl` de la carátula lleva `--fail` y `--max-time 1` (antes 3), así
+> que un 404 no se guarda como `.jpg` ni se reintenta; además la descarga salió del hilo
+> que dibuja (ver A4).
+
+**Archivo:** `src/widgets.rs:942-953`
+
+```rust
+let status = std::process::Command::new("curl")
+    .args(["-s", "-L", "--max-time", "3", "-o"])
+    …
+if !status.success() || std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) == 0 {
+    let _ = std::fs::remove_file(&path);
+    return None;
+}
+```
+
+Sin `--fail`, `curl` devuelve exit code 0 en un 404/403 y **escribe el cuerpo del
+error** (normalmente HTML) en el archivo. El chequeo de "success + tamaño > 0" lo da
+por buena carátula, la guarda como `.jpg`, y a partir de ahí `path.exists()`
+short-circuitea: **nunca reintenta** y la carátula no aparece jamás para ese tema.
+Además contamina `~/.cache/dockyrs/art`.
+
+**Fix:** agregar `--fail` a los args (y verificar el tipo con `image::guess_format`
+si se quiere ser estricto).
+
+**Verificación:** `curl -s -L --fail --max-time 3 -o /tmp/x.jpg https://i.ytimg.com/vi/NOEXISTE000/hqdefault.jpg; echo $?`
+→ 22 con `--fail` (y sin escribir el archivo).
+
+### D11 — `read_ram` sin saturar, y se llama dos veces por refresh (AUDIT §6.9)
+
+> **Resuelto** (no estaba marcado en `AUDIT.md`). `read_ram` calcula con `f64` y
+> `clamp` (no queda ninguna resta en `u64` sin saturar) y se llama una sola vez por
+> refresh (`refresh_sys`), no dos: el arranque en frío dejó de leerla dos veces.
+
+`src/widgets.rs:101-102` y `:212`
+
+```rust
+ram: read_ram().map(|(pct, _)| pct),
+ram_gb: read_ram().map(|(_, gb)| gb),
+```
+
+```rust
+Some((pct, (gb(total - avail), gb(total))))
+```
+
+Dos problemas: (a) el `pct` y los GB pueden venir de **dos muestras distintas** (y se
+parsea `/proc/meminfo` dos veces); (b) `total - avail` en `u64` sin chequeo: si
+`MemAvailable > MemTotal` (kernels/containers con contabilidad rara) es underflow.
+**Fix:** `if let Some((pct, gb)) = read_ram() { self.ram = Some(pct); self.ram_gb = Some(gb); }`
+(patrón que ya usa `refresh_cpu_ram`) y `total.saturating_sub(avail)`.
+
 ## Pendientes conocidos
 
 - **Isla dinámica, lo que sigue** (ordenado por valor/costo, medido contra el código;
@@ -1518,9 +2066,12 @@ reordenamiento de widgets) y lo posterior:
   - Lo que **no** conviene: swipe para descartar (no hay detección de gestos y el
     mouse-out ya cierra), squish/stretch (la forma es un rounded-rect en un eje) y
     badges/Face ID/AirDrop (no hay fuente de dato).
-  - **Prioridad honesta**: AUDIT.md sigue con **B1** (Shift+flecha en auto-repeat
-    cicla los modos en bucle). A2, **A3** y **A4** quedaron cerrados (A3/A4 el
-    2026-09-20: ver "Qué se hizo"), y el resto de la tabla es media/baja.
+  - **Prioridad honesta**: `AUDIT.md` quedó con **26 hallazgos abiertos** (A5 a
+    medias, 12 MEDIA y 13 BAJA) después de la limpieza del 2026-09-20; lo cerrado
+    (A1–A4, A6, A7, B3, C4, C8, D1, D2, D3, D11) vive en “Cerrado de AUDIT.md”,
+    arriba. Lo más visible para el usuario hoy: **B1** (Shift+flecha en auto-repeat
+    cicla los modos en bucle) y **A5** (el `catch_unwind` no cubre los drenajes de
+    IPC posteriores al `match`).
   - **Verificado 2026-09-20 en una pasada por los pendientes**: de los dos puntos
     marcados "sin verificar a ojo" quedó **cero**. La grabación andaba pero tarde
     (trampa 17: el tick dormía 20 s, no 1) y el widget `Mic` quedó confirmado
@@ -1719,10 +2270,14 @@ reordenamiento de widgets) y lo posterior:
     después `00:25`; borrarlo → la isla vuelve a reloj+batería en ~1-2 s). El archivo
     se creó a mano; no hace falta `wf-recorder` para probarlo.
 
-- **A2 cerrado**: `extract_color_scheme` (el matugen que corre en el hilo principal al
-  elegir fondo, 1-2 s) y `run_matugen` pasan por `widgets::run_with_timeout` (que pasó a
-  `pub(crate)`) con un tope de **10 s**: matugen tarda de verdad, así que el tope es
-  holgado, pero colgado ya no deja al dock sin dibujar para siempre.
+- **A2 cerrado, por dos vías**: `extract_color_scheme` (los colores que el dock saca del
+  fondo, que corría en el hilo principal y tarda 1-2 s) pasa por `widgets::run_with_timeout`
+  (que pasó a `pub(crate)`) con un tope de **10 s**: matugen tarda de verdad, así que el
+  tope es holgado, pero colgado ya no deja al dock sin dibujar para siempre. Y el matugen
+  **del usuario** (`run_matugen`, el de "Matugen Apps") sale por un hilo propio
+  fire-and-forget en sus dos llamadores (`apply_matugen_to_apps` y `apply_wallpaper`), así
+  que tampoco frena el loop — ojo: ese no lleva timeout, un matugen colgado deja un hilo
+  vivo (no bloquea la UI, pero no se recicla).
 
 - **Ojo al agregar un widget (corrección)**: son **2 lugares**, no 4 — el enum
   `WidgetKind` y la entrada en `WIDGETS` (con `label`, `natural_len`, `draw` y

@@ -7,13 +7,19 @@
 >
 > Fecha: 2025-09-13. Alcance: `src/` completo (22.5k líneas, 78 archivos `.rs`),
 > `scripts/`, `install.sh`, `README.md`, `AGENTS.md`. Base: rama `niri-backend`.
+>
+> **Este documento lista SÓLO lo que sigue abierto.** Los hallazgos ya cerrados
+> (A1, A2, A3, A4, A6, A7, B3, C4, C8, D1, D2, D3, D11) se movieron a `AGENTS.md`
+> → “Cerrado de AUDIT.md” el 2026-09-20, con lo que se hizo y cómo se verificó; los
+> números de sección que faltan abajo son justamente esos. A5, C5 y D12 quedaron a
+> medias: lo pendiente sigue en su sección, con una nota arriba.
 
 ---
 
 ## 0. Contrato para el agente que implemente
 
-1. **Leer `AGENTS.md` antes de tocar nada.** Las 11 "trampas" son invariantes reales,
-   no sugerencias. La §10 de este documento las resume como checklist.
+1. **Leer `AGENTS.md` antes de tocar nada.** Las "trampas" numeradas son invariantes
+   reales, no sugerencias. La §10 de este documento las resume como checklist.
 2. **Un hallazgo = un cambio atómico + su guard.** El repo tiene una convención
    fuerte: cada bug corregido deja un test que falla si vuelve la regresión
    (`render::layout::hit_layout_tests`, `app::draw::popup_dismiss_tests`,
@@ -23,14 +29,19 @@
 4. **Compilar y verificar, no confiar en diagnósticos cacheados** (trampa 7):
    `cargo build --release` + `cargo test --release` son la autoridad.
 5. **No editar la config de niri del usuario** (`~/.config/niri/…`).
-6. **Estado del árbol de trabajo:** hay trabajo sin commitear (ver §2). No lo
-   reviertas ni hagas `git checkout --` sobre esos archivos.
-7. El orden de implementación sugerido está en **§8**. Los bloqueos del event loop
-   (§4) van primero: son los que el usuario siente.
+6. **Un hallazgo cerrado SE MUDA**: se borra de este documento y va a `AGENTS.md` →
+   “Cerrado de AUDIT.md”, con lo que se hizo, la evidencia y el commit. Este documento
+   lista **sólo lo abierto**: si algo queda acá, es que falta. (Así se hizo la limpieza
+   del 2026-09-20, que movió 13 hallazgos.)
+7. **Estado del árbol de trabajo** (ver §2): limpio y pusheado. Si encontrás algo sin
+   commitear, primero mirá si `AGENTS.md` lo describe: puede ser trabajo a medias de
+   otra sesión. No lo reviertas sin leerlo.
+8. El orden de implementación sugerido está en **§8** (los bloqueos del event loop y la
+   geometría ya se cerraron; lo que queda es churn, E/S y limpieza).
 
 ### Alcance y cobertura
 
-Alcance: `src/` completo (78 archivos, 22.5k líneas), `scripts/`, `install.sh` y docs. Cada hallazgo se verificó contra el código; `cargo test` (37 pass) y `cargo clippy` (17 warnings) se re-ejecutaron sobre este árbol. **Después** de esta auditoría el árbol quedó en **49 tests** y los mismos 17 warnings de clippy: los guards nuevos no agregaron ninguno.
+Alcance: `src/` completo (78 archivos, 22.5k líneas), `scripts/`, `install.sh` y docs. Cada hallazgo se verificó contra el código; `cargo test` (37 pass) y `cargo clippy` (17 warnings) se re-ejecutaron sobre este árbol. Al 2026-09-20 el árbol tiene **147 tests** y **16 warnings** de clippy (18 contando el target de tests, todos preexistentes).
 
 Cobertura más débil (leída por encima): la matemática interna de `menu/theme_picker.rs`, `menu/controls.rs` y `menu/widget_chips.rs` — la pasada sobre ellas no encontró nada.
 
@@ -63,430 +74,78 @@ rg -n 'thread::spawn|Command::new|\.expect\(|\.unwrap\(\)' src/
 
 ## 2. Estado del repositorio (leer antes de empezar)
 
-`git status` tiene trabajo sin commitear: ~31 archivos modificados y 4 fuentes nuevas
-trackear (`.pi/`, este `AUDIT.md` y 4 fuentes nuevas: `src/app/volume_panel.rs`,
-`src/menu/volume_panel.rs`, `src/menu_render/tabs.rs`,
-`src/menu_render/volume_panel.rs`). El diff de `src/` ronda +1600 / −220 líneas.
-
-`AGENTS.md` ya documenta ese trabajo (panel de volumen, barra de pestañas del
-overlay, launcher tipo rofi). **Está sin commitear, no está perdido.** Antes de
-empezar:
+El árbol está **limpio** y todo el trabajo hasta la fecha está commiteado y pusheado en
+`niri-backend` (lineal sobre `master`, que es espejo de `upstream`). Antes de empezar:
 
 ```sh
-git diff --stat          # confirmar que es el trabajo descrito en AGENTS.md
-git add -A && git commit # (a criterio del usuario) dejar base limpia
+cargo build --release   # SIEMPRE antes de reiniciar: `cargo test` no refresca el binario
+cargo test --release    # 147 tests; incluye el crate del raster (workspace)
 ```
 
-Trabajar sobre un árbol sucio hace imposible distinguir "lo rompió el agente" de
-"ya estaba así". **Sugerencia: commitear (o `git stash`) antes de la primera tarea.**
+Si `git status` muestra algo sin commitear cuando retomes este documento, **no** lo
+descartes: puede ser trabajo a medias de otra sesión (mirá si `AGENTS.md` lo describe
+antes de tocarlo).
 
 ---
 
 ## 3. Resumen ejecutivo
 
-> **Corregidos después de esta auditoría** (detalle en la sección "Qué se hizo" de
-> `AGENTS.md`): **A1** — `read_volume()` pasó a `run_with_timeout`;
-> **A2** — `extract_color_scheme` y `run_matugen` pasan por `run_with_timeout` con
-> tope de 10 s (matugen tarda 1-2 s de verdad, pero colgado ya no deja al dock sin
-> dibujar);
-> **A3, A4 y D3 resueltos (2026-09-20, ver §4.5 y §4.6).** El `GetLayout` del tray
-> se resuelve en un hilo propio (`tray::spawn_menu_worker` → `IpcMessage::TrayMenuReady`)
-> y la conexión lleva `method_timeout` de **500 ms** medido; la carátula remota se baja
-> en el hilo del watcher de media y el hilo que dibuja llama a `read_media(false)`
-> (sin red). Verificado end-to-end con un SNI que nunca contesta y con un click real
-> inyectado, y con un tarpit local + `playerctl` falso para la carátula.
-> **A6** — `catch_unwind` + `reexec()` con tope de 3 en `DOCKYRS_REEXEC`;
-> **A7** — mitigado sin memoizar: `Compositor::detect()` corta por `HYPRLAND_INSTANCE_SIGNATURE`/`NIRI_SOCKET`
-> (que niri/uwsm exportan siempre) y el `niri msg` de sondeo queda sólo para un
-> arranque sin env; además los workspaces y el layout de teclado salieron del tick de
-> 2 s (llegan por el event-stream), así que `detect()` se llama por evento, no por tick;
-> **D1** — el reparto salió a `workspaces::slot_at()`, que recibe `hit_scale()`;
-> **A5 parcial** — cerrados los 3 panics alcanzables (`percent_decode` sobre bytes,
-> el buffer oculto de `draw_hidden`, `icons.get()` en el click de apps).
-> Tests nuevos: `render::workspaces::workspace_hit_tests`,
-> `widgets::percent_decode_tests`, `main::reexec_tests`.
-> **A5 sigue abierto en parte**: el guard cubre sólo el dispatch, no los drenajes
-> de IPC posteriores al `match` en `main.rs`, y los `.lock().unwrap()` (≈60) no se
-> tocaron. **B1** (auto-repeat de Shift+flecha) sigue abierto. El resto de la tabla
-> sigue pendiente.
+**Pendientes: 26 hallazgos** (1 ALTA parcial, 12 MEDIA y 13 BAJA). Lo ya cerrado está en
+`AGENTS.md` → “Cerrado de AUDIT.md”: **A1, A2, A3, A4, A6, A7, B3, C4, C8, D1, D2, D3 y
+D11**, con la evidencia de cómo se verificó cada uno. Lo que quedó a medias (A5, C5, D12)
+tiene una nota al principio de su sección.
 
 | ID | Sev. | Título | Archivo |
 | --- | --- | --- | --- |
-| **A1** | ALTA | `wpctl` sin timeout bloquea el event loop **indefinidamente** | `widgets.rs:964` |
-| **A2** | ALTA | `matugen` sin timeout bloquea al elegir fondo (~1-2 s, sin cota) | `wallpaper.rs:292` |
-| **A3** | ALTA | `GetLayout` D-Bus del tray en el hilo principal (timeout zbus 25 s) | `dock_popup.rs:75,568` |
-| **A4** | ALTA | `curl` de carátula en el hilo principal (hasta 3 s por tema) | `widgets.rs:943` |
 | **A5** | ALTA | Cualquier panic mata el dock; no hay recuperación ni supervisión | varios (§4.7) |
-| **A6** | ALTA | Error de protocolo Wayland termina el proceso sin reintento | `main.rs:431` |
-| **A7** | ALTA | `Compositor::detect()` sin memoizar: `niri msg` sin timeout cada 2 s | `compositor.rs:13` |
-| **D1** | ALTA | `workspace_dot_hit` reparte con `1.0`: clicks muertos con ≥6 workspaces | `render/workspaces.rs:148` |
 | **B1** | MEDIA | Shift+flecha en auto-repeat cicla los 4 modos en bucle | `handlers.rs:323` |
 | **B2** | MEDIA | Socket IPC en `/tmp` si falta `XDG_RUNTIME_DIR` (accesible a otros usuarios) | `ipc.rs:28` |
-| **B3** | MEDIA | Hilo por conexión IPC sin timeout (DoS trivial) | `ipc.rs:59` |
-| **B4** | MEDIA | Watcher de niri filtra por substring: `niri msg` por cada evento de ventana | `ipc.rs:303` |
+| **B4** | MEDIA | Watcher de niri: `niri msg` por cada evento de ventana | `ipc.rs:303` |
 | **B5** | MEDIA | Conexión D-Bus del tray cacheada sin reconexión → tray muerto permanente | `tray.rs:187` |
 | **B6** | MEDIA | `repo_dir()` depende de la ruta del binario: theming se pierde sin aviso | `app/mod.rs:494` |
 | **B7** | MEDIA | `configure` no reconcilia `new_size` con lo dibujado → clicks corridos | `handlers.rs:154` |
 | **B8** | MEDIA | Carátula: metadata MPRIS no confiable → request saliente + escritura en caché | `widgets.rs:932` |
-| **D2** | MEDIA | `percent_decode` paniquea con `%` seguido de multibyte (input MPRIS) | `widgets.rs:906` |
-| **D3** | HECHO | `curl` sin `--fail`: un 404 se cacheaba como `.jpg` y no reintentaba | `widgets.rs:943` |
+| **B10** | MEDIA | Elegir fuente pisa `gtk-*.ini`/`kdeglobals`/`kitty.conf` sin escritura atómica | `app/fonts.rs:63,110` |
+| **B11** | MEDIA | `dockyrs-notifyd` ignora `--profile`: con instancias por perfil no llega ninguna notificación | `bin/dockyrs-notifyd.rs:13` |
+| **B12** | MEDIA | Pegar del portapapeles lee con `read_to_end` sin tope → OOM con texto enorme | `clipboard/paste.rs:56` |
 | **D4** | MEDIA | Caché de carátulas en disco sin tope (crece con cada tema nuevo) | `widgets.rs:925` |
 | **D5** | MEDIA | El `Watcher` del tray no purga items muertos; los re-resuelve todos cada 2 s | `tray.rs:348` |
 | **D6** | MEDIA | `draw_text_clipped` aloca y zero-llena un `Pixmap` por frame (~30 fps) | `render/media.rs:8` |
 | **D7** | MEDIA | `draw_widgets` reparte el layout 2-3 veces por frame | `render/layout.rs:319,497,584` |
-| **D8** | MEDIA | Etiqueta de RAM duplicada entre reparto y dibujo (trampa 12) | `render/layout.rs:240` |
+| **D8** | MEDIA | Etiqueta de RAM duplicada entre reparto y dibujo (trampa 12) | `render/cpu_ram.rs:207` / `widget.rs:888` |
 | **C1** | BAJA | 12 funciones con 8-11 argumentos (síntoma: `DrawArgs` a medio migrar) | §6.1 |
-| **C2** | BAJA | `DockMenuMode.closing` es código muerto | `app/dock_menu.rs:130,401,405` |
-| **C3** | BAJA | `Config::load` descarta apps+settings si el JSON no parsea | `config.rs:285` |
-| **C4** | HECHO | AGENTS trampa 1 ya corregida en el árbol (superficie compartida + popup/selector propios) | §6.4 |
-| **C5** | BAJA | Huecos de tests (watchers/IPC/timers/workspaces/percent_decode) | §6.5 |
-| **C6** | BAJA | `notify` por IPC truncado a 1024 bytes sin avisar | `ipc.rs:71` |
+| **C2** | BAJA | `DockMenuMode.closing` es código muerto | `app/dock_menu.rs:349` |
+| **C3** | BAJA | `Config::load` descarta apps+settings si el JSON no parsea | `config.rs:506` |
+| **C5** | BAJA | Huecos de tests (watchers/timers) — el resto ya está cubierto | §6.5 |
+| **C6** | BAJA | `notify` por IPC truncado a 1024 bytes sin avisar | `ipc.rs:121` |
+| **C7** | BAJA | `dockyrs-notifyd` detiene dunst/mako/swaync/fnott/wired en cada arranque | `bin/dockyrs-notifyd.rs:78` |
 | **D9** | BAJA | `nearest_tray_index` resta `count - 1` (underflow latente) | `render/tray.rs:7` |
-| **D10** | BAJA | `read_cpu` suma `guest`/`guest_nice` (doble conteo) | `widgets.rs:174` |
-| **D11** | BAJA | `read_ram` resta en `u64` sin saturar; y se llama 2× por refresh | `widgets.rs:101,212` |
-| **D12** | BAJA | Código muerto/no-op en render (`let _ = label_len`, `ICON_OVERSAMPLE`, `bg_margin`) | §6.10 |
-| **D13** | BAJA | `IconCache::get` aloca un `String` por lookup, incluso con hit | `icon_cache.rs:23` |
-| **B10** | MEDIA | Elegir fuente pisa `gtk-*.ini`/`kdeglobals`/`kitty.conf` sin escritura atómica | `app/fonts.rs:63,110` |
-| **B11** | MEDIA | `dockyrs-notifyd` ignora `--profile`: con instancias por perfil no llega ninguna notificación | `bin/dockyrs-notifyd.rs:13` |
-| **B12** | MEDIA | Pegar del portapapeles lee con `read_to_end` sin tope → OOM con texto enorme | `clipboard/paste.rs:56` |
-| **C7** | BAJA | `dockyrs-notifyd` detiene dunst/mako/swaync/fnott/wired en cada arranque | `bin/dockyrs-notifyd.rs:69` |
-| **C8** | HECHO | AGENTS trampa 2 ya corregida en el árbol (acotada a la superficie compartida) | `screenshot/region.rs:175` |
+| **D10** | BAJA | `read_cpu` suma `guest`/`guest_nice` (doble conteo) | `widgets.rs:477` |
+| **D12** | BAJA | Código muerto/no-op en render (`ICON_OVERSAMPLE = 1.0` sigue vivo) | §6.10 |
+| **D13** | BAJA | `IconCache::get` aloca un `String` por lookup, incluso con hit | `icon_cache.rs:26` |
 
-Prioridad de ejecución: **A1 → A7 → A2 → A3 → A4 → D1 → A5 → A6 → B4 → B1 → D2 → B2/B3 → D3/D4/D5 → B5 → B6 → B7 → B8 → B10 → B11 → B12 → D6/D7/D8 → C\* → D9-D13.**
+Prioridad de ejecución: **A5 (el resto del guard) → D2/D9/D10 (panics y aritmética) →
+B4/D5/D6/D7 (churn) → B2/B5/B6/B7/B8/B10/B11/B12/C6/C7 (E/S y seguridad) → B1 y el
+resto de C/D → D4/D8/D12/D13.** El detalle, en §8.
 
 ---
 
 ## 4. Severidad ALTA
 
-### 4.1 — `wpctl` sin timeout: cuelgue indefinido {#a1}
-
-> **Resuelto** (§3): `read_volume()` pasó a `run_with_timeout(cmd, 500ms)`, el
-> mismo helper que usa el resto de las lecturas. Guard:
-> `widgets::percent_decode_tests::un_timeout_mata_al_hijo_colgado`. El análisis de
-> abajo describe el estado **original**.
-
-**Archivo:** `src/widgets.rs:963-975`
-
-```rust
-pub fn read_volume() -> Option<(u8, bool)> {
-    let out = std::process::Command::new("wpctl")
-        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
-        .output()          // <-- sin run_with_timeout
-        .ok()?;
-```
-
-**Impacto:** a diferencia de los otros subprocesos (que usan `run_with_timeout` con
-400-500 ms), este no tiene cota. Si `wpctl` se cuelga —PipeWire caído,
-`pipewire-pulse` a medio arrancar, D-Bus de sesión atascado— el proceso queda
-bloqueado **para siempre**: el dock deja de responder y no se recupera ni con Escape.
-
-**Alcance:** alto. `read_volume()` corre desde tres caminos calientes: `refresh_sys()`
-(cada 2 s, `main.rs:467`), `read_volume_rows()` (panel de volumen) y
-`widgets::volume_step()` (la rueda del mouse, desde `app/pointer.rs:384`, con relectura
-en `:387`).
-
-**Fix:** usar el helper que ya existe:
-
-```rust
-pub fn read_volume() -> Option<(u8, bool)> {
-    let mut cmd = std::process::Command::new("wpctl");
-    cmd.args(["get-volume", "@DEFAULT_AUDIO_SINK@"]);
-    let out = run_with_timeout(cmd, Duration::from_millis(400))?;
-    if !out.status.success() { return None; }
-    …
-}
-```
-
-**Verificación:** test que corre `read_volume` con un `wpctl` falso en `$PATH`
-(`#!/bin/sh` + `exec sleep 60`) y asserta que vuelve en <500 ms. `run_with_timeout`
-es privado del módulo: el test vive en `widgets.rs`, así que no hay que cambiarlo de
-visibilidad.
+Los números que faltan (4.1–4.6 y 4.8) son hallazgos **ya cerrados**: ver `AGENTS.md` →
+“Cerrado de AUDIT.md”. Queda uno, y sólo en parte: el listado de abajo describe el estado
+**original**, y el guard de arriba dice qué falta.
 
 ---
 
-### 4.2 — `Compositor::detect()` sin memoizar: un `niri msg` por tick {#a7}
-
-**Archivo:** `src/compositor.rs:7-24` (probe en `:13`)
-
-```rust
-pub fn detect() -> Self {
-    if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
-        Self::Hyprland
-    } else if std::env::var("NIRI_SOCKET").is_ok() {
-        Self::Niri
-    } else if std::process::Command::new("niri")
-        .args(["msg", "--json", "workspaces"])
-        .output()          // <-- sin timeout
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        // ponytail: `niri msg` probea el socket; solo corre al arrancar
-        Self::Niri
-```
-
-**El comentario es falso.** `detect()` se llama desde `read_kblayout()`
-(`widgets.rs:293`, dentro de `refresh_sys`, cada 2 s), `kblayout_next`
-(`widgets.rs:325`, en cada click del widget de layout), `read_workspaces()`
-(`widgets.rs:620`), `workspace_switch`, `power.rs`, `ipc.rs:279`,
-`popup_menu.rs:380` y `desktop.rs:52`. Si el proceso no heredó `NIRI_SOCKET` (lanzado
-por ssh, por una unidad systemd, o con entorno limpio — el `setsid` de este repo no lo
-garantiza), la rama del `niri msg` corre **en cada llamada**, sin timeout, en el hilo
-de UI.
-
-**Impacto:** con `NIRI_SOCKET` ausente, un `fork/exec` de `niri msg` cada 2 s, más
-una llamada extra por cada evento de workspace (`read_workspaces`) y por cada cambio
-de layout de teclado. Si `niri msg` se traba, el dock se traba con él.
-
-**Fix mínimo:** el resultado no cambia en runtime; cachearlo:
-
-```rust
-pub fn detect() -> Self {
-    static DETECTED: std::sync::OnceLock<Compositor> = std::sync::OnceLock::new();
-    *DETECTED.get_or_init(|| { … } )
-}
-```
-
-(Si en algún momento se quiere soportar reconexión al compositor, un
-`OnceLock<Mutex<Compositor>>` con invalidación; hoy YAGNI.)
-
-**Verificación:** `env -u NIRI_SOCKET -u HYPRLAND_INSTANCE_SIGNATURE strace -f -e trace=execve ./target/release/dockyrs 2>&1 | grep -c 'niri.*workspaces'`
-en 10 s: con el fix, 1 (o 0 si el probe falla); sin el fix, ~5.
-
 ---
-
-### 4.3 — `workspace_dot_hit` reparte con `1.0`: clicks muertos {#d1}
-
-> **Resuelto** (§3): el reparto salió a `workspaces::workspace_slot_at()`, que lee
-> la escala de `hit_scale(settings)`. El HUD de workspaces ya no tiene geometría
-> propia (`ws_flash_dot_hit` se borró): su superficie mide y se ancla como la del
-> dock y el hit test es `workspace_dot_hit`. Guard:
-> `render::workspaces::workspace_hit_tests::el_hit_test_toma_la_escala_de_las_settings`
-> — verificado revirtiendo el `1.0` a mano: falla, mientras los otros 3 tests del
-> módulo pasan (por eso el guard tiene que mirar el call site y no el helper).
-
-**Archivo:** `src/render/workspaces.rs:126-155` (`first_center(…, 1.0)` en `:148`)
-
-```rust
-pub fn workspace_dot_hit(dock: &Dock, widgets: &WidgetSnapshot, tray_count: usize, x: f64, y: f64) -> Option<i32> {
-    …
-    let rects = hit_layout(dock, widgets, tray_count);      // <- escalado por widget_scale
-    let (bar_len, bar_start, main) = if is_vertical { (r.h, r.y, y as f32) } else { (r.w, r.x, x as f32) };
-    let count = slot_count(workspaces);
-    let first = first_center(count, bar_len, bar_start, 1.0);   // <- AQUÍ: sin escala
-    let half = WS_SLOT / 2.0;                                   // <- y aquí
-    for (i, ws) in workspaces.iter().enumerate() {
-        if (main - (first + i as f32 * WS_SLOT)).abs() <= half {  // <- y aquí
-```
-
-El dibujo sí lo hace bien (`render/workspaces.rs:52-80`):
-
-```rust
-let slot = WS_SLOT * render_scale;          // render_scale = output_scale * widget_scale
-let active = WS_ACTIVE * render_scale;
-let first = first_center(count, bar_len, bar_start, render_scale);
-```
-
-**Es la trampa 10 otra vez, en el sexto hit test.** `hit_layout()` devuelve rects
-**escalados**, así que el `bar_start`/`bar_len` del hit test ya están escalados,
-pero su geometría interna (`first_center` con `1.0`, el paso `WS_SLOT`, la
-tolerancia `WS_SLOT/2`) no. El error por punto es
-`(ω−1)·WS_SLOT·((n−1)/2 − i)` con `ω = widget_scale`:
-
-| n | ω = 1.2166 | error en el punto 0 | tolerancia |
-| --- | --- | --- | --- |
-| 3 | 5.2 px | funciona (pasa desapercibido) | 12 |
-| 6 | 13.0 px | **falla** | 12 |
-| 8 | 18.2 px | **falla** (y también el último) | 12 |
-
-Con `widget_scale = 1.0` (el default) es invisible; con `ω > 1` y ≥6 workspaces, el
-click sobre los puntos de los extremos **no hace nada** (`workspace_dot_hit`
-devuelve `None`) o cae en el workspace vecino. La constante `SCALE_DEL_BUG =
-1.2166064` de `hit_layout_tests` es la escala del setup real, así que esto es el
-entorno del usuario, no un caso teórico.
-
-**`AGENTS.md` lo da por arreglado.** El "Qué se hizo" lista
-`workspace_dot_hit` entre los cinco hit tests que pasan por `render::hit_scale()`.
-Pasa por `hit_layout()` para el rect, pero **no aplica la escala a su propia
-geometría**: el fix quedó a medias. Corregir también ese texto.
-
-**Fix:** usar la escala de hit (ya existe el helper):
-
-```rust
-let sc = hit_scale(&dock.config.settings);
-let first = first_center(count, bar_len, bar_start, sc);
-let half = WS_SLOT / 2.0 * sc;
-for (i, ws) in workspaces.iter().enumerate() {
-    if (main - (first + i as f32 * WS_SLOT * sc)).abs() <= half {
-```
-
-El HUD de workspaces ya no dibuja con un panel propio: su superficie es la del dock
-(mismo tamaño y anclaje) y el indicador sale del mismo `hit_layout`, así que no hay
-un segundo reparto que ajustar (`ws_flash_dot_hit` se borró). Ver el bullet del HUD
-de alineación en `AGENTS.md`.
-
-**Verificación:** `#[cfg(test)] mod ws_hit_tests` en `render/workspaces.rs` con
-`widget_scale = 1.2166064` y n = 6 y 8: el centro dibujado de cada punto
-(`first_center(…, sc) + i·WS_SLOT·sc`) tiene que devolver `workspaces[i].id`. Con el
-bug, i=0 falla. Revertir `hit_scale` a `1.0` debe romper el test (ese es el guard).
-
----
-
-### 4.4 — `matugen` sin timeout al elegir fondo de pantalla {#a2}
-
-**Archivo:** `src/wallpaper.rs:292-305` (llamado desde `app/wallpaper_picker.rs:159`)
-
-```rust
-pub fn extract_color_scheme(path: &std::path::Path, scheme: &str) -> Option<ColorScheme> {
-    let output = std::process::Command::new("matugen")
-        .args(["--type", scheme, "image", &path.to_string_lossy(), …])
-        .output()          // <-- sin timeout
-        .ok()?;
-```
-
-Cadena: click/Enter en una miniatura → `choose_wallpaper`
-(`wallpaper_picker.rs:121`) → `sync_accent_from_last_wallpaper` (línea 131) →
-`extract_color_scheme` (línea 159) → `matugen` sincrónico → recién después
-`request_redraw`. matugen decodifica la imagen y cuantiza colores: típicamente cientos
-de ms a un par de segundos, y **sin cota superior** (puede colgarse).
-
-**Son tres puntos de entrada, no uno** (`rg -n 'sync_accent_from_last_wallpaper\(\)' src/`):
-
-| Entrada | Archivo:línea | Se dispara con |
-| --- | --- | --- |
-| Selector de fondos | `wallpaper_picker.rs:131` | click/Enter en una miniatura |
-| Tema "desde el fondo" | `dock_menu_input.rs:150` | elegir el preset "wallpaper" en el panel |
-| Cambio de esquema matugen | `dock_menu_input.rs:241` | elegir otro scheme en el dropdown |
-
-Los dos últimos bloquean el **panel de ajustes**, no el selector de fondos: quien
-depure el freeze mirando sólo el picker va a perseguir el fantasma equivocado.
-
-**Impacto:** el selector de fondos queda congelado desde que elegís la imagen hasta
-que matugen termina. La selección ya se aplicó (`apply_wallpaper` sí está en un
-hilo, `wallpaper.rs:242`), pero la UI no lo muestra.
-
-**Fix:** mover la extracción a un hilo y aplicar el resultado en el frame siguiente,
-igual que ya se hace con las miniaturas (`wallpaper_picker.rs:57` usa
-`thumb_request_tx`/`thumb_result_rx`): canal `mpsc` + `try_recv` en el tick del modo.
-Si se quiere el fix de una línea, `run_with_timeout` con 400 ms (hacerlo
-`pub(crate)`), pero **eso sigue bloqueando hasta 400 ms**; el hilo es lo correcto.
-
-**Verificación:** con un `matugen` falso que duerme 3 s en `$PATH`, el selector debe
-seguir animando y responder a Escape mientras corre.
-
----
-
-### 4.5 — `GetLayout` D-Bus sincrónico en el hilo principal {#a3}
-
-> **Resuelto (2026-09-20).** El `GetLayout` ya no corre en el hilo que dibuja: los dos
-> sitios de `dock_popup.rs` **envían una petición** (`tray::MenuRequest`) a un hilo
-> propio (`tray::spawn_menu_worker`) y el menú vuelve por el canal de IPC
-> (`IpcMessage::TrayMenuReady` → `App::apply_tray_menu`, que descarta el resultado si
-> el usuario ya abrió otra cosa: el guard es `tray_menu_still_wanted`, con test).
->
-> Además la conexión D-Bus del tray ahora lleva `method_timeout` de **500 ms**
-> (`tray::TRAY_CALL_TIMEOUT`), que es el techo de *cualquier* llamada del tray en vez
-> de los 25 s del default de zbus. La constante está medida, no elegida a ojo:
-> `GetLayout` real con gdbus (incluye el spawn del proceso) dio **10,6-13,4 ms**
-> (nm-applet) y **17,5-20,2 ms** (blueman), o sea ~25-50x de margen.
->
-> **Verificado end-to-end con `scripts/fake_sni_hang.py`** (un SNI que registra un
-> `Menu` y **nunca contesta** `GetLayout`) más un click real inyectado: el log del
-> falso da `GETLAYOUT` → **500 ms** → `ACTIVATE`, o sea el timeout disparando y el
-> fallback de menú vacío funcionando. Lo importante: **el dock siguió dibujando y
-> procesando clicks durante todo el cuelgue** — con el código viejo el primer click
-> habría congelado el hilo principal 25 s (los clicks del barrido habrían dejado de
-> registrarse; se registraron todos). El camino feliz también: con remmina (app real)
-> el menú se abre igual, `getlayout=1ms`, por el hilo nuevo.
->
-> **Lo que NO hace**: no hay estado "cargando" en el popup. El menú aparece cuando
-> llega la respuesta (~30 ms normal, 500 ms con la app colgada) y si vuelve vacío se
-> cae al `Activate` de siempre. Se prefirió eso a un spinner para un caso que, con el
-> timeout, dura medio segundo.
-
-**Archivo:** `src/app/dock_popup.rs:75` y `:568`
-
-```rust
-let items = crate::tray::fetch_menu(&service, &menu_path, 0);          // :75
-…
-let submenu = crate::tray::fetch_menu(&service, &menu_path, item.id);  // :568
-```
-
-`fetch_menu` (`tray.rs:199`) es `zbus::blocking::Proxy::call("GetLayout", …)` (llamada en
-`tray.rs:219`), con el
-timeout por defecto de zbus (**25 s**). Se llama desde el handler de click derecho:
-icono del tray, click derecho en los widgets Network/Bluetooth
-(`open_widget_tray_menu` → `find_menu`, que además hace `GetProperty`), y al abrir
-un submenú.
-
-**Impacto:** una app del tray lenta o colgada congela el dock completo hasta 25 s.
-Síntoma reportable: *"el dock se trabó al abrir un menú del tray"*.
-
-**Nota:** el repo ya mide esta latencia (hay un `log::debug!` con
-`setup=/getlayout=` en `tray.rs:226`): el costo se conoce y se aceptó. El fix cambia
-el costo de "bloqueante" a "asíncrono", no lo elimina.
-
-**Fix:** abrir el popup en estado "cargando" y pedir el layout en un hilo, igual que
-`send_menu_event` (`tray.rs:274`, ya usa `std::thread::spawn`). El resultado llega
-por canal y se aplica con `set_tray_items` (`dock_popup.rs:146`) en el tick del
-popup, que ya existe. Mantener el fallback `Activate` si el menú vuelve vacío.
-**Ojo:** cubrir también el submenú (:568) y no perder el estado `tray_stack`.
-
-**Verificación:** un SNI falso que no responda `GetLayout`; el dock tiene que seguir
-animando y el popup mostrar "cargando" → menú o `Activate`.
-
----
-
-### 4.6 — `curl` de carátula en el hilo principal {#a4}
-
-> **Resuelto (2026-09-20).** `read_media` recibe un flag `allow_network` y el hilo que
-> dibuja siempre llama con `false`: sin red, la carátula remota que no está en el caché
-> simplemente se resuelve a `None` (el widget se dibuja igual, sin tapa). La descarga la
-> hace `warm_media_art()` **en el hilo del watcher de media**, que después manda un
-> segundo `MediaChanged` para que la carátula entre en un frame posterior. El único
-> otro llamador con red es `read_deferred`, que ya corre en un hilo propio al arrancar.
-> De paso se cerró **D3**: el `curl` ahora lleva `--fail` (un 404 ya no se cachea como
-> `.jpg`) y `--max-time 1` en vez de 3.
->
-> **Verificado con un tarpit local** (un server que acepta la conexión y no responde
-> nunca) y un `playerctl` falso que emite metadata cada 300 ms con esa `artUrl`:
-> mientras una descarga estaba **en vuelo** (verificado que era el *mismo* `curl`, hijo
-> del proceso del dock, antes y después), una notificación pedida por IPC se dibujó
-> **0,4 s después**. Es decir: el hilo principal nunca esperó por la red. El
-> `10.255.255.1` que sugería esta auditoría no sirve en esta máquina: rebota en 85 ms,
-> así que no ejercita nada (de ahí el tarpit local).
-
-**Archivo:** `src/widgets.rs:932-954`
-
-```rust
-let status = std::process::Command::new("curl")
-    .args(["-s", "-L", "--max-time", "3", "-o"])
-    .arg(&path)
-    .arg(url)
-    .status()          // <-- bloqueante hasta 3 s
-    .ok()?;
-```
-
-Cadena: watcher `playerctl --follow` (hilo aparte, bien) → `IpcMessage::MediaChanged`
-→ `main.rs:436` → `app.refresh_media` → `WidgetSnapshot::refresh_media` →
-`read_media` → `resolve_art_path`/`cached_remote_art`.
-
-**Impacto:** hasta 3 s de congelamiento del dock **la primera vez** que suena un tema
-con `artUrl` remoto (radio por internet, YouTube vía MPRIS, Spotify con URL http).
-Después queda cacheado y es barato. Un freeze de 3 s por tema nuevo.
-
-**Fix:** sacar `cached_remote_art` del camino sincrónico. El `MediaInfo` se dibuja
-igual sin carátula; la imagen puede llegar en un frame posterior por canal, como las
-miniaturas de fondos. Mínimo aceptable: bajar `--max-time` a 1 y mover la descarga a
-un hilo que publique el resultado. (El `--fail` faltante es D3.)
-
-**Verificación:** `artUrl` http apuntando a un host que no responde
-(`http://10.255.255.1/art.jpg`): el dock debe seguir respondiendo.
 
 ---
 
 ### 4.7 — Un panic mata el dock, sin recuperación {#a5}
 
-> **Parcialmente resuelto.** Cerrados los 3 panics alcanzables (ver §3):
+> **Parcialmente resuelto.** Cerrados los 3 panics alcanzables (ver `AGENTS.md` →
+> “Cerrado de AUDIT.md”):
 > `percent_decode` decodifica sobre bytes, el buffer oculto de `draw_hidden` ya no
 > paniquea, y el click de apps usa `icons.get()`. Además hay `catch_unwind` en el
 > dispatch con `reexec()`. **Lo que sigue abierto**: los `catch_unwind` NO cubren
@@ -524,43 +183,11 @@ debe devolver sólo sitios del arranque (donde fallar es correcto) y tests.
 
 ---
 
-### 4.8 — Error de protocolo Wayland = fin del proceso {#a6}
-
-> **Resuelto** (§3): el dispatch pasó a `catch_unwind` + `reexec()`, que respawnea
-> el binario con el mismo argv (tope de 3 relanzamientos seguidos vía
-> `DOCKYRS_REEXEC`). El código de abajo es el **original**.
-
-**Archivo:** `src/main.rs:431`
-
-```rust
-loop {
-    event_queue.blocking_dispatch(&mut app)?;   // <-- `?` sale de main()
-```
-
-`main` devuelve `anyhow::Result<()>`: un error de protocolo (o del socket) termina el
-proceso con un log y sin dock. Combinado con la trampa 2 (`attach(NULL)` mata el
-cliente por error de protocolo), ésta es la ruta por la que "el dock desapareció".
-
-**Fix mínimo:** loguear y salir explícitamente, para que el fallo sea diagnosticable:
-
-```rust
-if let Err(err) = event_queue.blocking_dispatch(&mut app) {
-    log::error!("dispatch: {err}");
-    return Ok(());
-}
-```
-
-Opcional (más discutible, evaluar con el usuario): `catch_unwind` + rearmar la
-superficie. **No hacerlo sin pedido explícito**: agrega complejidad real.
-
-**Verificación:** por revisión (el `?` sale con el `Err` impreso por anyhow, con
-contexto, en vez de un panic sin mensaje). Para probarlo en vivo hay que matar el
-compositor: **no** uses `niri msg action quit` en tu sesión real (cierra todo); solo
-en una sesión anidada o descartable.
-
----
-
 ## 5. Severidad MEDIA — robustez, corrección y E/S
+
+Faltan 5.3 (B3), 5.9 (D2) y 5.10 (D3): ya cerrados, ver `AGENTS.md` → “Cerrado de
+AUDIT.md”. El resto sigue abierto, y los números se conservan para no romper las
+referencias del §10 y del anexo.
 
 ### 5.1 — El auto-repeat de Shift+flecha cicla modos en bucle {#b1}
 
@@ -617,34 +244,6 @@ enviar `toggle-search`, `notify<sep>…` (spam de notificaciones), `screenshot-r
 
 **Verificación:** `unset XDG_RUNTIME_DIR; ./target/release/dockyrs &` y
 `stat -c %a /tmp/dockyrs.sock` → inaccesible para otros usuarios.
-
----
-
-### 5.3 — Hilo por conexión IPC, sin timeout de lectura {#b3}
-
-**Archivo:** `src/ipc.rs:58-61` y `:71`
-
-```rust
-for stream in listener.incoming().flatten() {
-    handle_client(stream, &tx, &conn, &qh);   // read() bloqueante, sin timeout
-}
-```
-
-```rust
-let mut buf = [0u8; 1024];
-let Ok(n) = stream.read(&mut buf) else { return; };
-```
-
-Un cliente que conecta y no escribe deja el hilo bloqueado en `read` para siempre.
-`incoming()` es secuencial: **una** conexión colgada y el dock no acepta más comandos
-IPC (los `--toggle-search` del keybind dejan de funcionar).
-
-**Fix mínimo:** `stream.set_read_timeout(Some(Duration::from_millis(200)))` antes de
-leer. No hace falta thread pool ni async.
-
-**Verificación:** dejar un socket conectado y sin escribir
-(`python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.connect('<path>')"`), después
-`./target/release/dockyrs --toggle-search` debe seguir funcionando.
 
 ---
 
@@ -793,71 +392,14 @@ bueno: `--max-time 3`, extensión derivada de la URL (no del contenido → sin p
 traversal) y hash de la URL como nombre (sin path injection).
 
 **Fix mínimo:** aceptar sólo `http`/`https`, ignorar `file://` inexistente, y limitar
-el tamaño descargado (`--max-filesize`). El `--fail` de D3 es parte de esto.
+el tamaño descargado (`--max-filesize`). El `--fail` de este hallazgo ya está puesto;
+lo que falta es el tope.
 
 **Verificación:** unit tests de `resolve_art_path`/`youtube_thumbnail_url` con URLs
 hostiles (`file:///etc/passwd`, `http://x/../../y.png`, URLs de 10 KB,
 `http://x/%`).
 
 ---
-
-### 5.9 — `percent_decode` paniquea con `%` seguido de multibyte {#d2}
-
-**Archivo:** `src/widgets.rs:906-923`
-
-```rust
-if bytes[i] == b'%'
-    && i + 2 < bytes.len()
-    && let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16)
-```
-
-`s[i + 1..i + 3]` es slicing por **bytes** de un `&str`: si el carácter tras `%` es
-multibyte, el índice final no cae en frontera de char y Rust **paniquea**
-(`byte index is not a char boundary`). Reproducción: `"a%€"` → bytes
-`61 25 E2 82 AC`, i=1 cumple `i+2 < len`, y `s[2..4]` corta el `€` por la mitad.
-
-El input es externo: `resolve_art_path` aplica `percent_decode` a cualquier
-`file://…` que reporte un reproductor MPRIS. Un panic en el hilo del event loop mata
-el dock (ver A5).
-
-**Fix mínimo:** usar `get`, que devuelve `None` en vez de paniquear:
-
-```rust
-if bytes[i] == b'%'
-    && let Some(hex) = s.get(i + 1..i + 3)
-    && let Ok(byte) = u8::from_str_radix(hex, 16)
-```
-
-**Verificación:** `assert_eq!(percent_decode("a%€"), "a%€")` (hoy paniquea) y
-`assert_eq!(percent_decode("%20"), " ")` (no romper el caso válido).
-
----
-
-### 5.10 — `curl` sin `--fail`: un 404 se cachea como carátula válida {#d3}
-
-**Archivo:** `src/widgets.rs:942-953`
-
-```rust
-let status = std::process::Command::new("curl")
-    .args(["-s", "-L", "--max-time", "3", "-o"])
-    …
-if !status.success() || std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) == 0 {
-    let _ = std::fs::remove_file(&path);
-    return None;
-}
-```
-
-Sin `--fail`, `curl` devuelve exit code 0 en un 404/403 y **escribe el cuerpo del
-error** (normalmente HTML) en el archivo. El chequeo de "success + tamaño > 0" lo da
-por buena carátula, la guarda como `.jpg`, y a partir de ahí `path.exists()`
-short-circuitea: **nunca reintenta** y la carátula no aparece jamás para ese tema.
-Además contamina `~/.cache/dockyrs/art`.
-
-**Fix:** agregar `--fail` a los args (y verificar el tipo con `image::guess_format`
-si se quiere ser estricto).
-
-**Verificación:** `curl -s -L --fail --max-time 3 -o /tmp/x.jpg https://i.ytimg.com/vi/NOEXISTE000/hqdefault.jpg; echo $?`
-→ 22 con `--fail` (y sin escribir el archivo).
 
 ---
 
@@ -1108,7 +650,10 @@ hexdigits / no-control con `take(6)` / `take(24)`): no la toques.
 
 ## 6. Severidad BAJA
 
-### 6.1 — 9 funciones con 8-11 argumentos (clippy `too_many_arguments`) {#c1}
+Faltan 6.4 (C4) y 6.13 (C8): ya cerrados. 6.5 (C5) y 6.10 (D12) quedaron a medias: en su
+sección está dicho qué falta.
+
+### 6.1 — 12 funciones con 8-11 argumentos (clippy `too_many_arguments`) {#c1}
 
 ```text
 src/menu_render/mod.rs:134      (8/7)
@@ -1171,28 +716,18 @@ dock "reseteado" y perdió su configuración.
 **Fix mínimo:** no pisar el archivo. Guardar el ilegible como `config.json.bak-<ts>`
 antes de caer a los defaults, y loguear `error` en vez de `warn`.
 
-### 6.4 — HECHO: AGENTS trampa 1 ya corregida en el árbol {#c4}
-
-La trampa 1 ya dice "superficie compartida + superficies propias del popup y el
-selector". Se conserva el texto original abajo como trazabilidad, sin nada que implementar.
-
-`AGENTS.md` (trampa 1): *"Una sola superficie layer para todo. El dock y cada modo
-(panel de ajustes, OSD, HUD, popups) usan `self.layer`."*
-
-Realidad (`rg -n create_layer_surface src/`): hay **4**: `main.rs:94` (dock + todos los
-modos), `app/popup_menu.rs:16` (menú de click derecho sobre un icono),
-`app/dock_popup.rs:200` (menús del tray y **panel de volumen**), `screenshot/mod.rs:79`
-(selector de región). La propia trampa 1 se contradice más abajo, cuando habla de la
-superficie del popup y su input region.
-
-**No es un bug de código**: es documentación que va a extraviar al próximo agente.
-Corregirla a "una superficie compartida para el dock y los modos que lo acompañan
-(menú, OSD, HUD, launcher, portapapeles, fondos) + superficies propias para el popup
-del tray y el selector de screenshot".
-
 ### 6.5 — Huecos de tests {#c5}
 
-37 tests, y los que hay son buenos: geometría y hit tests con escala
+> **Parcialmente resuelto.** De la lista de abajo ya están cubiertos: 1 (el reparto de
+> `workspaces.rs` tiene `workspace_hit_tests`), 2 en la parte de `percent_decode`
+> (`percent_decode_tests`), 3 (`ipc.rs` tiene 3 tests, incluido el filtro del
+> `event-stream`) y 5 en parte (los timers siguen sin test propio). **Lo que falta:**
+> los timers (`spawn_*_timer`), `wallpaper_program()`, `resolve_art_path` (B8),
+> `tray_geometry` con `widget_scale ≠ 1` y `Dock::drag_to`/`icon_at`. Con eso los tests
+> pasaron de 37 a **147**.
+
+37 tests cuando se escribió esto, y los que hay son buenos: geometría y hit tests con
+escala
 (`hit_layout_tests`, `tray_hit_tests`, `tabs_tests`), parseo de JSON de terceros
 (`volume_panel_tests`, `usage_tests`, `desktop::entry_tests`), lógica con signos
 (`wheel_tests`, `battery_tone_tests`), máquina de estados del popup
@@ -1201,9 +736,10 @@ bug real detrás: es la mejor parte del repo.
 
 Sin cobertura, ordenado por riesgo:
 
-1. **`render/workspaces.rs`: no tiene ningún `#[cfg(test)]`** — y ahí está el bug D1.
-   Es el hueco más caro.
-2. `percent_decode` y `resolve_art_path` (`widgets.rs`): D2 y B8.
+1. **`render/workspaces.rs`**: ya cubierto por `workspace_hit_tests` (era el hueco más
+   caro, el del bug D1).
+2. `resolve_art_path` (`widgets.rs`): B8. (`percent_decode` ya tiene
+   `percent_decode_tests`.)
 3. `ipc.rs`: parseo de mensajes (separador `\u{1f}`, truncado de 1024 bytes) y path
    del socket.
 4. El filtro del `event-stream` de niri (B4): extraerlo a función pura y testearlo con
@@ -1252,26 +788,11 @@ los 10 campos lo cuenta doble y sesga el porcentaje. **Fix:**
 `let total: u64 = fields.iter().take(8).sum();`. **Verificación:** test con la línea
 sintética `cpu  100 0 100 800 0 0 0 0 200 0 0 0` → total 1000, no 1200.
 
-### 6.9 — `read_ram` sin saturar, y se llama dos veces por refresh {#d11}
-
-`src/widgets.rs:101-102` y `:212`
-
-```rust
-ram: read_ram().map(|(pct, _)| pct),
-ram_gb: read_ram().map(|(_, gb)| gb),
-```
-
-```rust
-Some((pct, (gb(total - avail), gb(total))))
-```
-
-Dos problemas: (a) el `pct` y los GB pueden venir de **dos muestras distintas** (y se
-parsea `/proc/meminfo` dos veces); (b) `total - avail` en `u64` sin chequeo: si
-`MemAvailable > MemTotal` (kernels/containers con contabilidad rara) es underflow.
-**Fix:** `if let Some((pct, gb)) = read_ram() { self.ram = Some(pct); self.ram_gb = Some(gb); }`
-(patrón que ya usa `refresh_cpu_ram`) y `total.saturating_sub(avail)`.
-
 ### 6.10 — Código muerto / no-op en render {#d12}
+
+> **Parcialmente resuelto.** De la tabla de abajo quedan vivos `ICON_OVERSAMPLE`
+> (`render/mod.rs:41`, multiplicado por 1.0) y el parámetro `_text_cache` muerto de
+> `draw_network_widget`. El `let _ = label_len` y `bg_margin` ya no están.
 
 | Archivo:línea | Código | Nota |
 | --- | --- | --- |
@@ -1330,44 +851,13 @@ se quiere conservar el comportamiento, hacerlo opt-in por env
 **Verificación:** con dunst corriendo, arrancar `dockyrs-notifyd` y comprobar con
 `systemctl --user is-active dunst` que sigue activo.
 
-### 6.13 — HECHO: AGENTS trampa 2 ya corregida en el árbol {#c8}
-
-La trampa 2 ya dice "nunca desmapear **la superficie compartida del dock**" y
-aclara que popup y selector sí se desmapean. Se conserva el texto original abajo
-como trazabilidad, sin nada que implementar.
-
-`AGENTS.md` (trampa 2) dice, sin matices: *"Nunca desmapear la superficie.
-`attach(NULL)` hace que niri resetee el tamaño de la layer a 0 y el cliente muere por
-error de protocolo."*
-
-Pero `attach(None, 0, 0)` se usa en tres lugares y está bien:
-
-```text
-src/screenshot/region.rs:175   selector de región (al cerrar)
-src/app/dock_popup.rs:256      popup del tray (al cerrar)
-src/app/dock_popup.rs:418      popup del tray (al cambiar de submenú)
-```
-
-Ninguno es `self.layer` (la superficie compartida del dock), que efectivamente nunca
-lo hace. La trampa aplica a **la superficie compartida**, que es la única con
-`set_size(w, h)` propio y `set_exclusive_zone(-1)`; las auxiliares son descartables y
-se re-crean al abrirse (`dock_popup.rs:200` crea una capa nueva por popup), así que
-desmapearlas antes de soltarlas es intencional.
-
-**No es un bug de código**: es la documentación enumerando un invariante más ancho de
-lo que es. Corregir la trampa 2 a "nunca desmapear **la superficie compartida del
-dock**", y aclarar que popup y selector sí se desmapean a propósito.
-
-**Verificación:** `rg -n 'attach\(None' src/` → debe devolver sólo los tres sitios de
-arriba, nunca `self.layer`.
-
 ---
 
 ## 7. Anexo — verificado sin acción (no mezclar con lo pendiente)
 
 | Verificado | Por qué no se toca |
 | --- | --- |
-| `run_with_timeout` (`widgets.rs:4`) | patrón correcto (poll `try_wait` + `kill`); fallan los que no lo usan (A1, A4, A7) |
+| `run_with_timeout` (`widgets.rs:4`) | patrón correcto (poll `try_wait` + `kill`); los que no lo usaban (A1, A4, A7) ya están arreglados |
 | `clipboard/storage.rs` | atómica a `.tmp`, `0600`, dir `0700`, magic + topes |
 | `tray::argb_to_pixmap` (`tray.rs:126`) | valida dims y `data.len()` antes de indexar |
 | `layout_widgets` + `clamp` (`render/layout.rs:120-124`) | `min ≤ max` por construcción; no simplificar |
@@ -1389,66 +879,45 @@ arriba, nunca `self.layer`.
 
 ## 8. Plan de implementación sugerido
 
-Cada etapa es verificable por sí sola, en orden de impacto para el usuario.
+Cada etapa es verificable por sí sola, en orden de impacto para el usuario. Las etapas
+1 y 4 (menos B4/D4/D5) **ya están hechas**: ver `AGENTS.md` → “Cerrado de AUDIT.md”.
 
-### Etapa 1 — Congelamientos (A1, A7, A2, A3, A4)
+### Etapa pendiente — Panics y aritmética (A5, D9, D10)
 
-| # | Cambio | Verificación |
-| --- | --- | --- |
-| 1.1 | `read_volume` con `run_with_timeout(400ms)` | `wpctl` falso que duerme |
-| 1.2 | `Compositor::detect()` memoizado con `OnceLock` | `strace` con `NIRI_SOCKET` sin setear |
-| 1.3 | `extract_color_scheme` a hilo + canal, aplicado en el tick del modo | `matugen` falso que duerme 3 s |
-| 1.4 | `fetch_menu` (menú y submenú) a hilo + canal, popup en "cargando" | SNI que no responde `GetLayout` |
-| 1.5 | `cached_remote_art` fuera del camino sincrónico (+ `--fail`, ver D3) | `artUrl` a host que no responde |
+`percent_decode` con `get` (hecho), quitar los `expect`/`unwrap` de la tabla de A5,
+helper de lock del tray que sobreviva al envenenamiento, `catch_unwind` alrededor de los
+drenajes de IPC después del `match`, `saturating_sub` en `nearest_tray_index` y no sumar
+`guest`/`guest_nice` en `read_cpu`.
 
-**Guard:** un test por cambio con el subproceso falso en `$PATH` (1.1) o el probe
-cacheado (1.2, que sí es testeable de forma determinista).
+**Guard:** `nearest_tray_index` con 0 (D9) y el test sintético de `/proc/stat` (D10).
 
-### Etapa 2 — Geometría e hit tests (D1, D8)
+### Etapa pendiente — Churn (B4, D4, D5, D6, D7, D8)
 
-1. `workspace_dot_hit` con `hit_scale` + `ws_hit_tests` (el guard más valioso de todo
-   el audit: es el bug que el repo ya creía arreglado).
-2. `ram_label` única para reparto y dibujo.
+Leer los workspaces del **payload** del evento de niri (el `WorkspacesChanged` ya trae la
+lista; hoy cada evento dispara un `niri msg --json workspaces`), purga del `Watcher` por
+`name_has_owner`, Pixmap reusable en `draw_text_clipped`, layout calculado una sola vez,
+tope de la caché de carátulas y una sola `ram_label` para reparto y dibujo.
 
-**Guard:** el test de D1 tiene que **fallar** si se revierte `hit_scale` a `1.0` —
-verificalo revirtiéndolo a mano (es la convención del repo: `hit_layout_tests` se
-verificó así).
+**Guard:** test del tope de la caché y de la etiqueta única (D8, trampa 12).
 
-### Etapa 3 — Panics y arranque (A5, A6, D2, D9, D10, D11)
-
-`percent_decode` con `get`, quitar los `expect`/`unwrap` de la tabla de A5, helper de
-lock del tray que sobreviva al envenenamiento, manejo explícito del error de dispatch,
-`saturating_sub` en tray/ram, `take(8)` en `read_cpu`, un solo `read_ram`.
-
-**Guard:** tests de `percent_decode` (D2), `nearest_tray_index` con 0 (D9), y el test
-sintético de `/proc/stat` (D10).
-
-### Etapa 4 — Churn (B4, D5, D6, D7, D3, D4)
-
-Filtro del `event-stream` por tipo de evento, purga del `Watcher` por `name_has_owner`,
-Pixmap reusable en `draw_text_clipped`, layout calculado una sola vez, `--fail` +
-tope de la caché de carátulas.
-
-**Guard:** test del filtro de niri con fixtures JSON reales; test del tope de la caché.
-
-### Etapa 5 — E/S y seguridad (B2, B3, B5, B6, B7, B8, B10, B11, B12, C6, C7)
+### Etapa pendiente — E/S y seguridad (B2, B5, B6, B7, B8, B10, B11, B12, C6, C7)
 
 Socket con permisos y timeout de lectura, reconexión D-Bus, no fallar en silencio con
 los `sync-*.sh`, `warn` en el desajuste de `configure`, validación de URLs, lectura
-completa y acotada de `notify`/paste, suspender sin `zzz`, escritura atómica de la
-config de fuentes, perfil en `dockyrs-notifyd` y que deje de matar otros daemons.
+completa y acotada de `notify`/paste, escritura atómica de la config de fuentes, perfil
+en `dockyrs-notifyd` y que deje de matar otros daemons.
 
 **Guard:** tests de escritura atómica (el original sobrevive), del tope de paste y de
 `socket_path` con perfil.
 
-### Etapa 6 — Limpieza (B1 y todo C/D12/D13)
+### Etapa pendiente — Limpieza (B1 y el resto de C/D: C1, C2, C3, C5, D12, D13)
 
 Auto-repeat de Shift+flecha, `DrawArgs` extendido a `render/`, `DockMenuMode.closing`,
-no-op de render, `IconCache` sin alloc por hit, backup del config ilegible, corregir
-`AGENTS.md` (trampas 1, 2 y D1/C2) y cerrar los huecos de C5.
+no-op de render (`ICON_OVERSAMPLE`), `IconCache` sin alloc por hit, backup del config
+ilegible y cerrar los huecos de tests que quedan (watchers/timers).
 
-**No empezar por acá.** Las etapas 1-4 cambian lo que el usuario siente; la 6 sola no
-arregla nada visible.
+**No empezar por acá.** Las etapas de arriba cambian lo que el usuario siente; esta sola
+no arregla nada visible.
 
 ---
 
@@ -1468,7 +937,8 @@ pkill -x dockyrs
 setsid ./target/release/dockyrs >/tmp/dockyrs.log 2>&1 </dev/null &
 
 # pruebas de UI sin mouse
-python3 scripts/pointer.py --help
+python3 scripts/pointer.py --help          # puntero virtual (y teclado) por uinput
+python3 scripts/click_at.py 47 346         # click en una coordenada absoluta
 RUST_LOG="debug,zbus=warn,tracing=warn,sctk=info" ./target/release/dockyrs >/tmp/menu.log 2>&1
 ```
 
@@ -1496,10 +966,10 @@ niri msg --json layers      # mira namespace, layer y keyboard_interactivity
 Resumen de `AGENTS.md` como checklist de revisión:
 
 1. Una superficie compartida para dock + modos; el popup del tray y el selector de
-   screenshot tienen superficies propias (C4 ya corregido en el árbol).
+   screenshot tienen superficies propias.
 2. Nunca `attach(NULL)` **en la superficie compartida del dock**: ocultar = buffer
    transparente (`draw_hidden`). El popup y el selector de screenshot sí se desmapean
-   a propósito (C8 ya corregido en el árbol).
+   a propósito.
 3. La superficie del dock es el disparador del autohide; la input region queda activa
    incluso oculto.
 4. Si un modo cambia el tamaño, anotarlo en `applied_size`/`applied_geom` o restaurarlo
@@ -1509,9 +979,9 @@ Resumen de `AGENTS.md` como checklist de revisión:
 6. `cargo test`/`clippy` no regeneran `target/release/dockyrs`.
 7. El orden de widgets sale de `settings.widgets`; `place_widget` inserta, no `push`.
 8. Los hit tests reparten con `render::hit_layout()`/`hit_scale()`, **incluida su
-   geometría interna** (D1: `workspace_dot_hit` es el contraejemplo vivo).
+   geometría interna** (D8, la etiqueta de RAM duplicada, es el caso vivo hoy).
 9. Geometría compartida entre reparto y dibujo en **una** función
-   (`volume_content_len`, `VOLUME_ICON_*`, y ahora `ram_label`).
+   (`volume_content_len`, `VOLUME_ICON_*`): la de RAM todavía no (D8).
 10. El teclado de la superficie compartida pasa siempre por `enforce_keyboard()`; no
     setear `KeyboardInteractivity` a mano en caminos nuevos sin justificarlo (hay 17
     sitios manuales hoy en `app_*`, `screenshot/*` y `main.rs`: candidatos a unificar).
