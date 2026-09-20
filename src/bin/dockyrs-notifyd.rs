@@ -28,7 +28,9 @@ fn socket_dir() -> PathBuf {
         .ok()
         .filter(|d| !d.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("dockyrs-{}", unsafe { libc::getuid() })))
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("dockyrs-{}", unsafe { libc::getuid() }))
+        })
 }
 
 fn socket_path(profile: &str, dir: &Path) -> PathBuf {

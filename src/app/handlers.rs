@@ -206,11 +206,7 @@ impl LayerShellHandler for App {
             // pedimos, el buffer queda de otro tamaño que el layout y los clicks caen
             // corridos respecto a lo dibujado, porque el hit test usa coordenadas locales
             // del reparto (AUDIT.md B7) -----
-            match accion_del_configure(
-                self.applied_size,
-                (cw, ch),
-                self.configure_reconciliado,
-            ) {
+            match accion_del_configure(self.applied_size, (cw, ch), self.configure_reconciliado) {
                 ConfigureAccion::Adoptar => {
                     // ----- primer configure: es el que manda (todavía no pedimos nada) y
                     // queda anotado para poder detectar desajustes después -----

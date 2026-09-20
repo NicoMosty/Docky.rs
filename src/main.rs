@@ -715,10 +715,7 @@ fn spawn_osd_timer(
 /// Está separado de Wayland para poder probarlo con un canal de verdad: los cuatro timers
 /// del dock compartían este patrón sin un solo test, y el borde `plazo == 0` (que dispara
 /// en el acto) no estaba cubierto (AUDIT.md C5).
-fn correr_timer_con_reset(
-    rx: &std::sync::mpsc::Receiver<u64>,
-    mut disparar: impl FnMut(),
-) {
+fn correr_timer_con_reset(rx: &std::sync::mpsc::Receiver<u64>, mut disparar: impl FnMut()) {
     use std::sync::mpsc::RecvTimeoutError;
     let mut dur;
     loop {
@@ -859,7 +856,8 @@ mod timers_tests {
         assert_eq!(disparos.load(Ordering::SeqCst), 2);
         // ----- cerrar el canal termina el hilo (si no, el test colgaría acá) -----
         drop(tx);
-        hilo.join().expect("el timer tiene que salir al cerrarse el canal");
+        hilo.join()
+            .expect("el timer tiene que salir al cerrarse el canal");
     }
 
     /// Y el borde que el audit pedía cubrir: un plazo de 0 dispara en el acto y **no** deja
