@@ -776,8 +776,9 @@ reordenamiento de widgets) y lo posterior:
   - Verificado a mano: las tres pantallas contra píxeles, y abrir/cerrar cada modo
     con `niri msg --json layers` (abierto ⇒ `Exclusive`, cerrado ⇒ `None`, el dock
     vuelve a 629×26, 0 panics).
-  - **Lo que queda distinto es el alto** (236 / 460 / 196): el ancho era lo que se
-    percibía al ciclar, pero si molesta el siguiente paso es un alto común.
+  - **Lo que quedaba distinto era el alto** (236 / 460 / 196 en horizontal): el ancho
+    era lo que se percibía al ciclar. En el horizontal sigue así a propósito; en el
+    vertical se unificó (ver el bullet del alto común).
   - Costo del ancho común: las filas de texto del portapapeles quedan con mucho
     espacio a la derecha (el título y el subtítulo son cortos). Se podría repartir
     el contenido de la fila (p. ej. los caracteres a la derecha) si se quiere
@@ -1727,6 +1728,35 @@ reordenamiento de widgets) y lo posterior:
     siguen en 170 porque su miniatura mide 150.
   - La banda de pestañas **no es clickeable** (los modos se cambian con Shift+←/→):
     sumarle click es el hit test de `band_rect` + `cycle_overlay` desde el handler.
+
+- **En el vertical los cuatro paneles del overlay comparten el ALTO**
+  (`menu::OVERLAY_PANEL_H` = 640), que es el espejo de `OVERLAY_PANEL_W` en el
+  horizontal: el borde de arriba y el de abajo no se mueven al ciclar con Shift+←/→.
+  Medido antes: apps 556, portapapeles 434, notifs 434 y fondos 640 ⇒ el panel saltaba
+  206 px al cambiar de pestaña. El ancho (cross) **no** se toca: los fondos siguen en
+  196 por la miniatura de 150 y el resto en 356.
+  - **Las filas que entran salen del alto del frame**, no de una constante: los tres
+    paneles que listan cosas tienen su propia cuenta y las tres descuentan su padding
+    de abajo — `menu_render::clip_visible_rows(frame)`, `menu::notif_visible_rows(frame)`
+    y `menu::app_search_strip_h(frame, true)`. En el horizontal dan exactamente las de
+    siempre (7 / 12 / 2 filas), así que el panel ancho no cambió: para el launcher y el
+    portapapeles el test compara las dos orientaciones.
+  - La fila que no entra **queda asomando** (el viewport es el alto real, no filas
+    enteras): es la pista de que hay más, y es lo que el portapapeles ya hacía con su
+    fila +1. En el launcher el vertical pasó de 5 filas a 5 + un peek de la 6ª.
+  - El precio: en las listas cortas (notifs con 3 avisos, portapapeles vacío) el panel
+    es alto y sobra aire abajo. Es lo que pide un alto común; la alternativa es que el
+    panel vuelva a crecer con el contenido y el borde salte al ciclar.
+  - El `along`/`WALLPAPER_PANEL_MIN_W` de `open_wallpaper_picker` se borró: en el
+    vertical el alto es `OVERLAY_PANEL_H` y en el horizontal `WALLPAPER_PANEL_H`.
+  - `NOTIF_VISIBLE_ROWS` y `APP_SEARCH_VERTICAL_VISIBLE` se borraron (los reemplazan
+    esas cuentas). PageUp/PageDown del panel de notifs ahora avanza **una página de
+    verdad** (`notif_visible_rows`), no las 5 filas de la constante vieja.
+  - Guard: `menu_render::clipboard::clip_vertical_tests::las_filas_salen_del_alto_del_frame`
+    (el frame ancho da las 7 de siempre y el vertical pide más). A mano: los cuatro
+    `--toggle-*` con el dock en `Left` ⇒ las cuatro superficies abren 640 de alto
+    (390/390/230/390) y volver a 26x584 al cerrar; con ↓ 200 veces el tope del scroll
+    deja la última fila entera y el peek no se despega del borde.
 
 - Calendario del reloj: no se pasa de mes con el mouse (no tiene ‹ › clickeables,
   sólo ←/→) y no selecciona días ni navega semanas: muestra el mes y marca hoy. El
