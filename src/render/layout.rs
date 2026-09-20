@@ -4,6 +4,7 @@ use super::*;
 use crate::config::WidgetKind;
 use crate::widget::{Canvas, Ctx, spec_for};
 
+#[derive(Clone, Copy)]
 pub(crate) struct WidgetRect {
     pub(crate) kind: crate::config::WidgetKind,
     pub(crate) slot: crate::config::WidgetSlot,
@@ -286,7 +287,11 @@ pub(super) fn draw_widgets(
     let tray_count = tray.len();
     let cross_len = if is_vertical { w } else { h };
     let mut animating = false;
-    for r in layout_widgets(s, widgets, tray_count, is_vertical, w, h, render_scale) {
+    // ----- el reparto se calcula UNA vez por frame y de acá salen el dibujo, los
+    // separadores y la píldora del SSID: antes cada uno llamaba a `layout_widgets`
+    // (2-3 repartos de todos los widgets por frame, AUDIT.md D7) -----
+    let rects = layout_widgets(s, widgets, tray_count, is_vertical, w, h, render_scale);
+    for r in &rects {
         // ----- el `kind` viaja en el contexto para que la entrada genérica
         // `Custom` sepa qué texto en caché tiene que medir y dibujar -----
         let cx = Ctx {
@@ -318,20 +323,11 @@ pub(super) fn draw_widgets(
             bar_len: if is_vertical { h } else { w },
         };
         // ----- el `|=` es por Media (marquee) y Workspaces (animacion) -----
-        animating |= (spec.draw)(&mut canvas, &r, &cx);
+        animating |= (spec.draw)(&mut canvas, r, &cx);
     }
     // ----- separadores sutiles entre zonas -----
     {
         use crate::config::WidgetSlot;
-        let rects = layout_widgets(
-            &dock.config.settings,
-            widgets,
-            tray_count,
-            dock.is_vertical(),
-            w,
-            h,
-            render_scale,
-        );
         // (min, max) por zona sobre el eje principal; max < 0 = vacía
         let mut bounds = [(0.0f32, -1.0f32); 3];
         for r in &rects {
@@ -383,7 +379,7 @@ pub(super) fn draw_widgets(
             dock,
             text_cache,
             widgets,
-            tray_count,
+            &rects,
             w,
             h,
             render_scale,
@@ -618,7 +614,9 @@ fn draw_network_hover_pill(
     dock: &Dock,
     text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,
-    tray_count: usize,
+    // ----- el reparto que ya calculó `draw_widgets`: antes lo volvía a pedir acá
+    // (un tercer reparto por frame mientras el mouse está sobre Network, AUDIT.md D7) -----
+    rects: &[WidgetRect],
     w: f32,
     h: f32,
     render_scale: f32,
@@ -637,17 +635,11 @@ fn draw_network_hover_pill(
     if label.is_empty() {
         return;
     }
-    let Some(rect) = layout_widgets(
-        &dock.config.settings,
-        widgets,
-        tray_count,
-        dock.is_vertical(),
-        w,
-        h,
-        render_scale,
-    )
-    .into_iter()
-    .find(|r| r.kind == WidgetKind::Network) else {
+    let Some(rect) = rects
+        .iter()
+        .find(|r| r.kind == WidgetKind::Network)
+        .copied()
+    else {
         return;
     };
     let fs = super::widget_text_px(
