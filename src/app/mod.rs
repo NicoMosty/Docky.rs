@@ -814,9 +814,9 @@ mod overlay_tabs_tests {
             !toca_leer_workspaces(Some(Duration::from_millis(0))),
             "la ráfaga no"
         );
-        assert!(!toca_leer_workspaces(Some(
-            Duration::from_millis(WS_READ_MIN_MS - 1)
-        )));
+        assert!(!toca_leer_workspaces(Some(Duration::from_millis(
+            WS_READ_MIN_MS - 1
+        ))));
         assert!(toca_leer_workspaces(Some(Duration::from_millis(
             WS_READ_MIN_MS
         ))));

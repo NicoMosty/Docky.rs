@@ -1840,7 +1840,11 @@ mod art_cache_tests {
             .flatten()
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        assert_eq!(quedan, vec!["4.jpg".to_string()], "queda el último: {quedan:?}");
+        assert_eq!(
+            quedan,
+            vec!["4.jpg".to_string()],
+            "queda el último: {quedan:?}"
+        );
         // ----- y por debajo del tope no toca nada -----
         std::fs::write(dir.join("5.jpg"), b"x").unwrap();
         prune_art_cache(&dir, 200);
