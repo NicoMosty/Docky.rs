@@ -1326,6 +1326,34 @@ fn art_cache_dir() -> PathBuf {
     dir
 }
 
+/// Tope de archivos de la caché de carátulas. Cada tema nuevo (o cada URL distinta) deja
+/// su archivo y sin tope la carpeta crece para siempre (AUDIT.md D4). Mismo criterio que
+/// la caché de miniaturas: al pasarse, se borra hasta quedar en la mitad, por `mtime`, así
+/// no se poda en cada descarga.
+const ART_DISK_CAP: usize = 200;
+
+fn prune_art_cache(dir: &std::path::Path, cap: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let modified = e.metadata().ok()?.modified().ok()?;
+            path.is_file().then_some((modified, path))
+        })
+        .collect();
+    if files.len() <= cap {
+        return;
+    }
+    files.sort();
+    let sobra = files.len() - cap / 2;
+    for (_, path) in files.iter().take(sobra) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn art_cache_path(url: &str) -> PathBuf {
     let mut dir = art_cache_dir();
     let hash = url.bytes().fold(5381u64, |acc, b| {
@@ -1366,6 +1394,8 @@ fn download_art(url: &str, path: &std::path::Path) -> Option<()> {
         let _ = std::fs::remove_file(path);
         return None;
     }
+    // ----- recién bajada: es el momento barato para podar -----
+    prune_art_cache(&art_cache_dir(), ART_DISK_CAP);
     Some(())
 }
 
@@ -1781,5 +1811,40 @@ mod cpu_totales_tests {
         assert_eq!(cpu_totales("cpu 1 2"), None);
         assert_eq!(cpu_totales(""), None);
         assert_eq!(cpu_totales("cpu"), None);
+    }
+}
+
+#[cfg(test)]
+mod art_cache_tests {
+    use super::*;
+
+    /// D4: la poda de la caché de carátulas deja la mitad del tope y se lleva las más
+    /// viejas, no las que acaba de bajar el usuario.
+    #[test]
+    fn la_poda_saca_las_mas_viejas_y_deja_la_mitad() {
+        let dir = std::env::temp_dir().join(format!("dockyrs-art-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir temporal");
+        let mut nombres = Vec::new();
+        for i in 0..5 {
+            let p = dir.join(format!("{i}.jpg"));
+            std::fs::write(&p, b"x").expect("escribir");
+            // mtimes distintos y en orden (el sort es por mtime)
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            nombres.push(p);
+        }
+        // con un tope chico: 5 archivos y cap 2 => quedan cap/2 = 1, el más nuevo
+        prune_art_cache(&dir, 2);
+        let quedan: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(quedan, vec!["4.jpg".to_string()], "queda el último: {quedan:?}");
+        // ----- y por debajo del tope no toca nada -----
+        std::fs::write(dir.join("5.jpg"), b"x").unwrap();
+        prune_art_cache(&dir, 200);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
