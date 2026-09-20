@@ -10,9 +10,10 @@
 >
 > **Este documento lista SÓLO lo que sigue abierto.** Los hallazgos ya cerrados
 > (A1, A2, A3, A4, A6, A7, B1, B2, B3, B10, C3, C4, C6, C8, D1, D2, D3, D9, D10, D11,
-> D12 y D13) se movieron a `AGENTS.md` → “Cerrado de AUDIT.md”, con lo que se hizo y
-> cómo se verificó; los números de sección que faltan abajo son justamente esos. A5 y C5
-> quedaron a medias: lo pendiente sigue en su sección, con una nota arriba.
+> D12 y D13) más los de la Ronda 2 (B4, D4, D5, D6, D7, D8) se movieron a `AGENTS.md` →
+> “Cerrado de AUDIT.md”, con lo que se hizo y cómo se verificó; los números de sección
+> que faltan abajo son justamente esos. A5 y C5 quedaron a medias: lo pendiente sigue en
+> su sección, con una nota arriba.
 
 ---
 
@@ -32,7 +33,7 @@
 6. **Un hallazgo cerrado SE MUDA**: se borra de este documento y va a `AGENTS.md` →
    “Cerrado de AUDIT.md”, con lo que se hizo, la evidencia y el commit. Este documento
    lista **sólo lo abierto**: si algo queda acá, es que falta. (Así se hizo el 2026-09-20,
-   que movió 13 hallazgos en la limpieza y 9 más al cerrar la Ronda 1.)
+   que movió 13 hallazgos en la limpieza, 9 al cerrar la Ronda 1 y 6 en la Ronda 2.)
 7. **Estado del árbol de trabajo** (ver §2): limpio y pusheado. Si encontrás algo sin
    commitear, primero mirá si `AGENTS.md` lo describe: puede ser trabajo a medias de
    otra sesión. No lo reviertas sin leerlo.
@@ -90,32 +91,26 @@ antes de tocarlo).
 
 ## 3. Resumen ejecutivo
 
-**Pendientes: 17 hallazgos** (1 ALTA a medias, 12 MEDIA y 4 BAJA). Lo ya cerrado está en
-`AGENTS.md` → “Cerrado de AUDIT.md” (22 hallazgos, con la evidencia de cómo se verificó
+**Pendientes: 11 hallazgos** (1 ALTA a medias, 6 MEDIA y 4 BAJA). Lo ya cerrado está en
+`AGENTS.md` → “Cerrado de AUDIT.md” (28 hallazgos, con la evidencia de cómo se verificó
 cada uno). Lo que quedó a medias (A5 y C5) tiene una nota al principio de su sección.
 
 | ID | Sev. | Título | Archivo |
 | --- | --- | --- | --- |
 | **A5** | ALTA | Cualquier panic mata el dock; no hay recuperación ni supervisión | varios (§4.7) |
-| **B4** | MEDIA | Watcher de niri: `niri msg` por cada evento de ventana | `ipc.rs:303` |
 | **B5** | MEDIA | Conexión D-Bus del tray cacheada sin reconexión → tray muerto permanente | `tray.rs:187` |
 | **B6** | MEDIA | `repo_dir()` depende de la ruta del binario: theming se pierde sin aviso | `app/mod.rs:494` |
 | **B7** | MEDIA | `configure` no reconcilia `new_size` con lo dibujado → clicks corridos | `handlers.rs:154` |
 | **B8** | MEDIA | Carátula: metadata MPRIS no confiable → request saliente + escritura en caché | `widgets.rs:932` |
 | **B11** | MEDIA | `dockyrs-notifyd` ignora `--profile`: con instancias por perfil no llega ninguna notificación | `bin/dockyrs-notifyd.rs:13` |
 | **B12** | MEDIA | Pegar del portapapeles lee con `read_to_end` sin tope → OOM con texto enorme | `clipboard/paste.rs:56` |
-| **D4** | MEDIA | Caché de carátulas en disco sin tope (crece con cada tema nuevo) | `widgets.rs:925` |
-| **D5** | MEDIA | El `Watcher` del tray no purga items muertos; los re-resuelve todos cada 2 s | `tray.rs:348` |
-| **D6** | MEDIA | `draw_text_clipped` aloca y zero-llena un `Pixmap` por frame (~30 fps) | `render/media.rs:8` |
-| **D7** | MEDIA | `draw_widgets` reparte el layout 2-3 veces por frame | `render/layout.rs:319,497,584` |
-| **D8** | MEDIA | Etiqueta de RAM duplicada entre reparto y dibujo (trampa 12) | `render/cpu_ram.rs:207` / `widget.rs:888` |
 | **C1** | BAJA | 12 funciones con 8-11 argumentos (síntoma: `DrawArgs` a medio migrar) | §6.1 |
 | **C2** | BAJA | `DockMenuMode.closing` es código muerto | `app/dock_menu.rs:349` |
 | **C5** | BAJA | Huecos de tests (watchers/timers) — el resto ya está cubierto | §6.5 |
 | **C7** | BAJA | `dockyrs-notifyd` detiene dunst/mako/swaync/fnott/wired en cada arranque | `bin/dockyrs-notifyd.rs:78` |
 
-Prioridad de ejecución: **B4/D5/D6/D7/D8 (churn medible) → B12/B5/B6/B7/B11/C7 (E/S) →
-A5 (el resto del guard) → C1/C2/C5 y D4.** El detalle, en §8.
+Prioridad de ejecución: **B12 (lectura sin tope del paste) → B5/B6/B7/B11/C7 (E/S) →
+A5 (el resto del guard) → C1/C2/C5.** El detalle, en §8.
 
 ---
 
@@ -124,8 +119,6 @@ A5 (el resto del guard) → C1/C2/C5 y D4.** El detalle, en §8.
 Los números que faltan (4.1–4.6 y 4.8) son hallazgos **ya cerrados**: ver `AGENTS.md` →
 “Cerrado de AUDIT.md”. Queda uno, y sólo en parte: el listado de abajo describe el estado
 **original**, y el guard de arriba dice qué falta.
-
----
 
 ---
 
@@ -172,48 +165,10 @@ debe devolver sólo sitios del arranque (donde fallar es correcto) y tests.
 
 ## 5. Severidad MEDIA — robustez, corrección y E/S
 
-Faltan 5.1 (B1), 5.2 (B2), 5.3 (B3), 5.9 (D2), 5.10 (D3) y 5.16 (B10): ya cerrados, ver
-`AGENTS.md` → “Cerrado de AUDIT.md”. El resto sigue abierto, y los números se conservan
-para no romper las referencias del §10 y del anexo.
-
----
-
-### 5.4 — Watcher de niri: `niri msg` por cada evento de ventana {#b4}
-
-**Archivo:** `src/ipc.rs:298-308`
-
-```rust
-// ponytail: filtrado por substring, sin parsear JSON por evento
-if (line.contains("Workspace") || line.contains("workspace"))
-    && tx.send(IpcMessage::WorkspacesChanged).is_ok()
-```
-
-`line.contains("workspace")` matchea en minúscula **cualquier** evento con
-`workspace_id`, y el `event-stream` de niri lo incluye en `WindowOpenedOrChanged`,
-`WindowFocusChanged`, `WindowClosed`, etc. Cada uno dispara `WorkspacesChanged` →
-`app.refresh_workspaces` → `read_workspaces()` →
-**`Command::new("niri").args(["msg","--json","workspaces"])`** (`widgets.rs:627`) →
-`sync_widget_bar_len` + `relayout_dock`.
-
-**Impacto:** un proceso `niri msg` + un relayout completo **cada vez que cambiás el
-foco de una ventana**. Es el churn más grande del programa y es innecesario: el
-indicador de workspaces no cambió.
-
-**Contexto:** el `ponytail:` marca la simplificación como deliberada con techo
-conocido. El techo llegó: el costo no es "filtrar de más", es un subproceso por
-evento de ventana.
-
-**Fix:** parsear el JSON y filtrar por tipo de evento (una línea por evento;
-`serde_json::from_str::<serde_json::Value>(&line)` y mirar la clave de nivel
-superior: `WorkspaceActivated`, `WorkspacesChanged`, `WorkspaceActiveWindowChanged`
-son los relevantes). Una deserialización por evento es mucho más barata que un
-`fork/exec`. Mantener el fallback por substring si el JSON no parsea (versiones
-viejas de niri).
-
-**Verificación:** con `RUST_LOG=debug`, focusear/abrir/cerrar ventanas y contar las
-líneas `wsflash: refresh before=… after=…`. Test: el filtro extraído a una función
-pura (`fn niri_event_is_relevant(line: &str) -> bool`) con 4-5 líneas JSON reales de
-`niri msg --json event-stream` como fixture literal, incluidas dos de ventana.
+Faltan 5.1 (B1), 5.2 (B2), 5.3 (B3), 5.4 (B4), 5.9 (D2), 5.10 (D3), 5.11 (D4), 5.12 (D5),
+5.13 (D6), 5.14 (D7), 5.15 (D8) y 5.16 (B10): ya cerrados, ver `AGENTS.md` → “Cerrado de
+AUDIT.md”. El resto sigue abierto, y los números se conservan para no romper las
+referencias del §10 y del anexo.
 
 ---
 
@@ -332,135 +287,7 @@ hostiles (`file:///etc/passwd`, `http://x/../../y.png`, URLs de 10 KB,
 
 ---
 
-### 5.11 — La caché de carátulas en disco crece sin tope {#d4}
-
-**Archivo:** `src/widgets.rs:925-930` (`art_cache_dir`; `cached_remote_art` en `:932-954`)
-
-```rust
-fn art_cache_dir() -> PathBuf {
-    let mut dir = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    dir.push("dockyrs"); dir.push("art"); dir
-}
-```
-
-Cada URL distinta (cada video de YouTube escuchado, cada tema con `artUrl` remoto)
-deja un `.jpg` **permanente**. Nada purga por cantidad ni por antigüedad: es la única
-caché del proyecto sin tope (`TextCache`/`IconCache` tienen `CACHE_CAP`).
-
-**Fix:** antes de insertar, si `read_dir(dir).count() > N` (p. ej. 200), borrar los
-más viejos por `metadata.modified()`.
-
-**Verificación:** test con `dir` temporal: insertar N+1 entradas y afirmar que el
-directorio queda ≤ N.
-
 ---
-
-### 5.12 — El `Watcher` del tray no purga items muertos {#d5}
-
-**Archivo:** `src/tray.rs:77` (registro) y `:350-371` (loop de polling)
-
-```rust
-fn register_status_notifier_item(&self, service: &str, …) {
-    …
-    if !items.iter().any(|s| s == &entry) { items.push(entry); }
-}
-```
-
-```rust
-loop {
-    let raw: Vec<String> = watcher_proxy…get_property("RegisteredStatusNotifierItems")…;
-    let icons: Vec<TrayIcon> = raw.iter().filter_map(|raw_svc| resolve_item(&conn, raw_svc))…
-    …
-    std::thread::sleep(Duration::from_millis(2000));
-}
-```
-
-`Watcher.items` **sólo crece**: nada lo limpia cuando un cliente muere (no hay
-`NameOwnerChanged`). Como el poll itera **todos** los registrados cada 2 s y
-`resolve_item` hace un `GetAll` por D-Bus, el costo por poll crece con el uptime: cada
-app de tray relanzada deja basura que se sigue consultando (y fallando) para siempre.
-Encima `fingerprint_icons` hashea el `pixmap.data()` completo de todos los iconos en
-cada poll.
-
-**Fix mínimo:** antes de resolver, filtrar con `conn.name_has_owner(service)`; y
-purgar de `Watcher.items` los que no tienen owner (o suscribirse a
-`NameOwnerChanged`). El poll ya está en su propio hilo y eso está bien; el problema es
-la lista que no se limpia.
-
-**Verificación:** test que registra dos items, simula la caída de uno (o llama a un
-`prune()` nuevo) y verifica que `registered_status_notifier_items()` no crece.
-En runtime: `busctl --user get-property org.kde.StatusNotifierWatcher /StatusNotifierWatcher RegisteredStatusNotifierItems`
-tras relanzar la misma app de tray 3 veces.
-
----
-
-### 5.13 — `draw_text_clipped` aloca un `Pixmap` por frame {#d6}
-
-**Archivo:** `src/render/media.rs:8-20` y `:23-42`
-
-```rust
-let avail_i = avail_w.round().max(1.0) as u32;
-let Some(mut clip) = Pixmap::new(avail_i, glyphs.height()) else { return; };
-tile_text(&mut clip, glyphs, avail_w, offset);
-```
-
-El widget Media se redibuja en cada frame del marquee (`MARQUEE_TICK_MS = 33`,
-~30 fps) y cada llamada crea **y zero-llena** un buffer nuevo que se descarta
-inmediatamente. Es la allocation más caliente del frame, y hay dos variantes
-(normal y rotada) con el mismo patrón.
-
-**Fix:** guardar un `Pixmap` reutilizable en `MarqueeState` (o `TextCache`) y
-recrearlo sólo cuando cambien `w`/`h` (`Pixmap` no tiene `resize`).
-
-**Verificación:** `heaptrack` o `perf stat -e page-faults` con un título largo en
-reproducción; la bajada de allocations es la señal. No hay test unitario razonable.
-
----
-
-### 5.14 — `draw_widgets` reparte el layout 2-3 veces por frame {#d7}
-
-**Archivo:** `src/render/layout.rs:319`, `:497` y `:584`
-
-```rust
-for r in layout_widgets(s, widgets, tray_count, is_vertical, w, h, render_scale) {   // :319
-…
-let rects = layout_widgets(&dock.config.settings, widgets, tray_count, …);           // :497 (separadores)
-…
-let Some(rect) = layout_widgets(&dock.config.settings, widgets, tray_count, …)       // :584 (hover de Network)
-```
-
-Cada `layout_widgets` aloca `members_of` + `lens_of` por zona y recalcula
-`widget_natural_len` (con formato de strings) de todos los widgets. El camino de los
-separadores lo repite entero, y el hover del pill de Network lo repite por tercera
-vez.
-
-**Fix:** calcular `let rects = layout_widgets(...)` una vez en `draw_widgets`,
-dibujar desde ahí y pasar `&rects` a los separadores y al pill de hover.
-
-**Verificación:** `cargo clippy --release --all-targets` limpio + (opcional) un
-contador `#[cfg(test)]` de llamadas a `layout_widgets` por frame.
-
----
-
-### 5.15 — Etiqueta de RAM duplicada entre reparto y dibujo (trampa 12) {#d8}
-
-**Archivo:** `src/render/layout.rs:240` vs `src/render/cpu_ram.rs:200`
-
-```rust
-Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),   // layout.rs:240 (mide)
-Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),   // cpu_ram.rs:200 (dibuja)
-```
-
-El ancho reservado y el texto dibujado deben salir de **una** función (mismo criterio
-que `volume_content_len`/`VOLUME_ICON_*`, documentado en la trampa 1 del "Qué se
-hizo"). Hoy coinciden sólo porque el `format!` está copiado: cambiar el formato en un
-lado deja el texto pisando el borde.
-
-**Fix:** `pub(super) fn ram_label(widgets: &WidgetSnapshot) -> Option<String>` en
-`layout.rs`, usada en ambos.
-
-**Verificación:** test que compare `widget_natural_len(Ram, …)` contra el ancho real
-del label rasterizado para `ram_gb = (12.34, 32.0)` y `(9.9, 8.0)`.
 
 ---
 
@@ -659,7 +486,7 @@ se quiere conservar el comportamiento, hacerlo opt-in por env
 | `ws_flash` (`render/workspaces.rs` `ws_flash_pill`) | el HUD reusa el rectángulo de `hit_layout` del dock: no hay escala que ajustar, era el bug ya resuelto |
 | offsets `menu`/`menu_render` | dibujo y hit test comparten función en los 7 casos (`app_search_strip_y`, `clip_content_y`, `wallpaper_hit_test`, `overlay_tabs_h`, `volume_track_*`, `volume_pct_from_x`, `build_volume_controls`) |
 | `find_menu`/`activate`/`send_menu_event` (`tray.rs`) | un hilo por click de usuario; aceptable |
-| poll 2 s del tray (`tray.rs:350`) | hilo propio; el problema es la lista sin purgar (D5) |
+| poll 2 s del tray (`tray.rs:350`) | hilo propio; los items muertos se purgan (era D5, ya cerrado) |
 | `pactl_json` (`widgets.rs:459`) | techo de 400 ms documentado en el `ponytail:` |
 | media wide (`layout.rs:133-146`) | reserva de más intencional; mismo hit test |
 | `on_setting_changed` + `Release` (`popup_menu.rs:355`, `dock_menu_input.rs:523-539`) | throttle de 80 ms pero el valor final siempre se guarda |
@@ -673,26 +500,16 @@ se quiere conservar el comportamiento, hacerlo opt-in por env
 
 ## 8. Plan de implementación sugerido
 
-Cada etapa es verificable por sí sola, en orden de impacto para el usuario. Las etapas
-de congelamientos, geometría y panics chicos **ya están hechas** (ver `AGENTS.md` →
-“Cerrado de AUDIT.md”): lo que queda es churn, E/S y limpieza.
+Cada etapa es verificable por sí sola, en orden de impacto para el usuario. Las etapas de
+congelamientos, geometría, panics chicos y churn **ya están hechas** (ver `AGENTS.md` →
+“Cerrado de AUDIT.md”, con las mediciones): lo que queda es E/S y limpieza.
 
-### Etapa pendiente — Churn medible (B4, D5, D6, D7, D8, D4)
+### Etapa pendiente — E/S y seguridad (B12, B5, B6, B7, B8, B11, C7)
 
-Leer los workspaces del **payload** del evento de niri (el `WorkspacesChanged` ya trae la
-lista; hoy cada evento dispara un `niri msg --json workspaces`), purga del `Watcher` por
-`name_has_owner`, Pixmap reusable en `draw_text_clipped`, layout calculado una sola vez,
-una sola `ram_label` para reparto y dibujo y tope de la caché de carátulas. **Medir**
-antes y después (los turnos de CPU del proceso y el RPM de llamadas D-Bus): el reposo ya
-está en el piso, así que sin medición no se sabe si el cambio sirvió.
-
-**Guard:** test del tope de la caché y de la etiqueta única (D8, trampa 12).
-
-### Etapa pendiente — E/S y seguridad (B5, B6, B7, B8, B11, B12, C7)
-
-Reconexión D-Bus, no fallar en silencio con los `sync-*.sh`, `warn` en el desajuste de
-`configure`, validación de URLs, lectura acotada del paste, perfil en `dockyrs-notifyd` y
-que deje de matar otros daemons.
+Lectura acotada del paste (B12, el único que puede tumbar el proceso por una entrada
+grande), reconexión D-Bus del tray, no fallar en silencio con los `sync-*.sh`,
+`warn` en el desajuste de `configure`, validación de URLs de la carátula, perfil en
+`dockyrs-notifyd` y que deje de matar otros daemons.
 
 **Guard:** test del tope de paste, de la reconexión y de `repo_dir` sin repo.
 
@@ -702,8 +519,8 @@ El resto del guard de A5 (los drenajes de IPC después del `match` y el helper d
 tray), `DrawArgs` extendido a `render/` (C1), `DockMenuMode.closing` (C2) y los huecos de
 tests que quedan (C5).
 
-**No empezar por acá.** Las etapas de arriba cambian lo que el usuario siente; esta sola
-no arregla nada visible.
+**No empezar por acá.** La etapa de E/S cambia lo que el usuario siente; esta sola no
+arregla nada visible.
 
 ---
 
@@ -767,7 +584,8 @@ Resumen de `AGENTS.md` como checklist de revisión:
 8. Los hit tests reparten con `render::hit_layout()`/`hit_scale()`, **incluida su
    geometría interna** (D8, la etiqueta de RAM duplicada, es el caso vivo hoy).
 9. Geometría compartida entre reparto y dibujo en **una** función
-   (`volume_content_len`, `VOLUME_ICON_*`): la de RAM todavía no (D8).
+   (`volume_content_len`, `VOLUME_ICON_*`, `ram_label`): la de RAM era el último caso
+   (D8, ya cerrado).
 10. El teclado de la superficie compartida pasa siempre por `enforce_keyboard()`; no
     setear `KeyboardInteractivity` a mano en caminos nuevos sin justificarlo (hay 17
     sitios manuales hoy en `app_*`, `screenshot/*` y `main.rs`: candidatos a unificar).

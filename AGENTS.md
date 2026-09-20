@@ -1490,8 +1490,7 @@ sigue **abierto** vive en `AUDIT.md`, no acá.
 
 Se movieron en dos tandas el 2026-09-20: **13** en la limpieza (A1, A2, A3, A4, A6, A7,
 B3, C4, C8, D1, D2, D3, D11) y **9** al cerrar la Ronda 1 (B1, B2, B10, C3, C6, D9, D10,
-D12, D13).
-
+D12, D13) y 6 más en la Ronda 2 (B4, D4, D5, D6, D7, D8).
 ### A1 — `wpctl` sin timeout: cuelgue indefinido (AUDIT §4.1)
 
 > **Resuelto** (§3): `read_volume()` pasó a `run_with_timeout(cmd, 500ms)`, el
@@ -1878,6 +1877,51 @@ leer. No hace falta thread pool ni async.
 (`python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.connect('<path>')"`), después
 `./target/release/dockyrs --toggle-search` debe seguir funcionando.
 
+### B4 — Watcher de niri: `niri msg` por cada evento de ventana (AUDIT §5.4)
+
+> **Cerrado con medición.** El filtro es por NOMBRE de evento (ya no por substring) y
+> `WorkspacesChanged` usa su payload en vez de lanzar `niri msg`. Medido envolviendo a
+> `niri` en un script que registra cada spawn del dock: 3 ventanas abriendo y cerrando
+> **27 → 14** lecturas, 6 cambios de workspace **5 → 2**, y 0 en reposo. De las 14 que
+> quedan, la mitad son el reintento de ráfaga del throttle (`ws_read_pending`, se cobra en
+> el tick de 1 s) que existe para no perderse un segundo cambio real dentro de la ventana
+de 150 ms.
+
+**Archivo:** `src/ipc.rs:298-308`
+
+```rust
+// ponytail: filtrado por substring, sin parsear JSON por evento
+if (line.contains("Workspace") || line.contains("workspace"))
+    && tx.send(IpcMessage::WorkspacesChanged).is_ok()
+```
+
+`line.contains("workspace")` matchea en minúscula **cualquier** evento con
+`workspace_id`, y el `event-stream` de niri lo incluye en `WindowOpenedOrChanged`,
+`WindowFocusChanged`, `WindowClosed`, etc. Cada uno dispara `WorkspacesChanged` →
+`app.refresh_workspaces` → `read_workspaces()` →
+**`Command::new("niri").args(["msg","--json","workspaces"])`** (`widgets.rs:627`) →
+`sync_widget_bar_len` + `relayout_dock`.
+
+**Impacto:** un proceso `niri msg` + un relayout completo **cada vez que cambiás el
+foco de una ventana**. Es el churn más grande del programa y es innecesario: el
+indicador de workspaces no cambió.
+
+**Contexto:** el `ponytail:` marca la simplificación como deliberada con techo
+conocido. El techo llegó: el costo no es "filtrar de más", es un subproceso por
+evento de ventana.
+
+**Fix:** parsear el JSON y filtrar por tipo de evento (una línea por evento;
+`serde_json::from_str::<serde_json::Value>(&line)` y mirar la clave de nivel
+superior: `WorkspaceActivated`, `WorkspacesChanged`, `WorkspaceActiveWindowChanged`
+son los relevantes). Una deserialización por evento es mucho más barata que un
+`fork/exec`. Mantener el fallback por substring si el JSON no parsea (versiones
+viejas de niri).
+
+**Verificación:** con `RUST_LOG=debug`, focusear/abrir/cerrar ventanas y contar las
+líneas `wsflash: refresh before=… after=…`. Test: el filtro extraído a una función
+pura (`fn niri_event_is_relevant(line: &str) -> bool`) con 4-5 líneas JSON reales de
+`niri msg --json event-stream` como fixture literal, incluidas dos de ventana.
+
 ### B10 — Elegir fuente pisa la config del usuario sin escritura atómica (AUDIT §5.16)
 
 > **Resuelto.** Las escrituras de `gtk-3.0/settings.ini`, `gtk-4.0/settings.ini`,
@@ -2158,6 +2202,154 @@ si se quiere ser estricto).
 **Verificación:** `curl -s -L --fail --max-time 3 -o /tmp/x.jpg https://i.ytimg.com/vi/NOEXISTE000/hqdefault.jpg; echo $?`
 → 22 con `--fail` (y sin escribir el archivo).
 
+### D4 — La caché de carátulas en disco crece sin tope (AUDIT §5.11)
+
+> **Resuelto.** `prune_art_cache()` con tope de 200 archivos y la misma política que la
+> caché de miniaturas (se poda al bajar una carátula nueva, por `mtime`, y baja a la
+> mitad). Guard: `widgets::art_cache_tests`.
+
+**Archivo:** `src/widgets.rs:925-930` (`art_cache_dir`; `cached_remote_art` en `:932-954`)
+
+```rust
+fn art_cache_dir() -> PathBuf {
+    let mut dir = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    dir.push("dockyrs"); dir.push("art"); dir
+}
+```
+
+Cada URL distinta (cada video de YouTube escuchado, cada tema con `artUrl` remoto)
+deja un `.jpg` **permanente**. Nada purga por cantidad ni por antigüedad: es la única
+caché del proyecto sin tope (`TextCache`/`IconCache` tienen `CACHE_CAP`).
+
+**Fix:** antes de insertar, si `read_dir(dir).count() > N` (p. ej. 200), borrar los
+más viejos por `metadata.modified()`.
+
+**Verificación:** test con `dir` temporal: insertar N+1 entradas y afirmar que el
+directorio queda ≤ N.
+
+### D5 — El `Watcher` del tray no purga items muertos (AUDIT §5.12)
+
+> **Resuelto.** El `Watcher` (que sirve la interfaz) y el hilo del poll comparten la
+> lista de items, y el poll purga por `NameHasOwner` antes de resolver (también saca
+> repetidos; ante error de D-Bus asume VIVO, para no borrar un ícono que existe).
+> Verificado en vivo con `scripts/fake_sni_hang.py`: la lista pasa de 3 a 4 items al
+> registrarse y vuelve a 3 al morir, con `tray: purgo 1 item(s) de servicios que ya no
+> estan` en el log. Guard: `tray::tray_purga_tests`.
+
+**Archivo:** `src/tray.rs:77` (registro) y `:350-371` (loop de polling)
+
+```rust
+fn register_status_notifier_item(&self, service: &str, …) {
+    …
+    if !items.iter().any(|s| s == &entry) { items.push(entry); }
+}
+```
+
+```rust
+loop {
+    let raw: Vec<String> = watcher_proxy…get_property("RegisteredStatusNotifierItems")…;
+    let icons: Vec<TrayIcon> = raw.iter().filter_map(|raw_svc| resolve_item(&conn, raw_svc))…
+    …
+    std::thread::sleep(Duration::from_millis(2000));
+}
+```
+
+`Watcher.items` **sólo crece**: nada lo limpia cuando un cliente muere (no hay
+`NameOwnerChanged`). Como el poll itera **todos** los registrados cada 2 s y
+`resolve_item` hace un `GetAll` por D-Bus, el costo por poll crece con el uptime: cada
+app de tray relanzada deja basura que se sigue consultando (y fallando) para siempre.
+Encima `fingerprint_icons` hashea el `pixmap.data()` completo de todos los iconos en
+cada poll.
+
+**Fix mínimo:** antes de resolver, filtrar con `conn.name_has_owner(service)`; y
+purgar de `Watcher.items` los que no tienen owner (o suscribirse a
+`NameOwnerChanged`). El poll ya está en su propio hilo y eso está bien; el problema es
+la lista que no se limpia.
+
+**Verificación:** test que registra dos items, simula la caída de uno (o llama a un
+`prune()` nuevo) y verifica que `registered_status_notifier_items()` no crece.
+En runtime: `busctl --user get-property org.kde.StatusNotifierWatcher /StatusNotifierWatcher RegisteredStatusNotifierItems`
+tras relanzar la misma app de tray 3 veces.
+
+### D6 — `draw_text_clipped` aloca un `Pixmap` por frame (AUDIT §5.13)
+
+> **Resuelto.** `con_scratch`: un Pixmap por hilo que se limpia y se reusa, y sólo se
+> re-aloca cuando cambia el tamaño (en régimen estable el título mide siempre lo mismo).
+> Guard: `render::media::clip_scratch_tests`, verificado revirtiendo la limpieza (falla
+> con 12 píxeles de tinta vieja). **No se pudo verificar en vivo** porque esta config no
+> tiene el widget `Media` colocado: es el mismo dibujo de antes, sin el `Pixmap::new` por
+> frame.
+
+**Archivo:** `src/render/media.rs:8-20` y `:23-42`
+
+```rust
+let avail_i = avail_w.round().max(1.0) as u32;
+let Some(mut clip) = Pixmap::new(avail_i, glyphs.height()) else { return; };
+tile_text(&mut clip, glyphs, avail_w, offset);
+```
+
+El widget Media se redibuja en cada frame del marquee (`MARQUEE_TICK_MS = 33`,
+~30 fps) y cada llamada crea **y zero-llena** un buffer nuevo que se descarta
+inmediatamente. Es la allocation más caliente del frame, y hay dos variantes
+(normal y rotada) con el mismo patrón.
+
+**Fix:** guardar un `Pixmap` reutilizable en `MarqueeState` (o `TextCache`) y
+recrearlo sólo cuando cambien `w`/`h` (`Pixmap` no tiene `resize`).
+
+**Verificación:** `heaptrack` o `perf stat -e page-faults` con un título largo en
+reproducción; la bajada de allocations es la señal. No hay test unitario razonable.
+
+### D7 — `draw_widgets` reparte el layout 2-3 veces por frame (AUDIT §5.14)
+
+> **Resuelto.** El reparto se calcula UNA vez por frame y de ahí salen el dibujo, los
+> separadores entre zonas y la píldora del SSID (antes 2-3 repartos de todos los widgets
+> por frame). `WidgetRect` pasa a `Copy` para pasarlo por valor.
+
+**Archivo:** `src/render/layout.rs:319`, `:497` y `:584`
+
+```rust
+for r in layout_widgets(s, widgets, tray_count, is_vertical, w, h, render_scale) {   // :319
+…
+let rects = layout_widgets(&dock.config.settings, widgets, tray_count, …);           // :497 (separadores)
+…
+let Some(rect) = layout_widgets(&dock.config.settings, widgets, tray_count, …)       // :584 (hover de Network)
+```
+
+Cada `layout_widgets` aloca `members_of` + `lens_of` por zona y recalcula
+`widget_natural_len` (con formato de strings) de todos los widgets. El camino de los
+separadores lo repite entero, y el hover del pill de Network lo repite por tercera
+vez.
+
+**Fix:** calcular `let rects = layout_widgets(...)` una vez en `draw_widgets`,
+dibujar desde ahí y pasar `&rects` a los separadores y al pill de hover.
+
+**Verificación:** `cargo clippy --release --all-targets` limpio + (opcional) un
+contador `#[cfg(test)]` de llamadas a `layout_widgets` por frame.
+
+### D8 — Etiqueta de RAM duplicada entre reparto y dibujo (trampa 12) (AUDIT §5.15)
+
+> **Resuelto.** `render::ram_label()` es la única definición del texto y la llaman
+> `len_ram` (la medida) y `draw_ram_widget` (el dibujo): era el caso vivo de la trampa 12
+> que seguía abierto.
+
+**Archivo:** `src/render/layout.rs:240` vs `src/render/cpu_ram.rs:200`
+
+```rust
+Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),   // layout.rs:240 (mide)
+Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),   // cpu_ram.rs:200 (dibuja)
+```
+
+El ancho reservado y el texto dibujado deben salir de **una** función (mismo criterio
+que `volume_content_len`/`VOLUME_ICON_*`, documentado en la trampa 1 del "Qué se
+hizo"). Hoy coinciden sólo porque el `format!` está copiado: cambiar el formato en un
+lado deja el texto pisando el borde.
+
+**Fix:** `pub(super) fn ram_label(widgets: &WidgetSnapshot) -> Option<String>` en
+`layout.rs`, usada en ambos.
+
+**Verificación:** test que compare `widget_natural_len(Ram, …)` contra el ancho real
+del label rasterizado para `ram_gb = (12.34, 32.0)` y `(9.9, 8.0)`.
+
 ### D9 — `nearest_tray_index` resta `count - 1` (AUDIT §6.7)
 
 > **Resuelto.** `nearest_tray_index` usa `saturating_sub(1)`: con el tray vacío ya no
@@ -2304,14 +2496,16 @@ requeriría cambiar la key a algo tipo `Arc<str>`. **Verificación:** test con
   - Lo que **no** conviene: swipe para descartar (no hay detección de gestos y el
     mouse-out ya cierra), squish/stretch (la forma es un rounded-rect en un eje) y
     badges/Face ID/AirDrop (no hay fuente de dato).
-  - **Prioridad honesta**: `AUDIT.md` quedó con **17 hallazgos abiertos** (A5 a
-    medias, 12 MEDIA y 4 BAJA) después de cerrar la Ronda 1 el 2026-09-20; los 22
-    cerrados viven en “Cerrado de AUDIT.md”, arriba. Lo que más se siente hoy: **B4**
-    (cada evento de niri dispara un `niri msg --json workspaces`, cuando el propio
-    evento ya trae la lista) y **D5** (el tray re-resuelve todos los items cada 2 s).
-    **A5** sigue a medias: el `catch_unwind` no cubre los drenajes de IPC posteriores
-    al `match`, y ahí la decisión documentada en `main.rs` es arreglar en la fuente,
-    no envolver más código.
+  - **Prioridad honesta**: `AUDIT.md` quedó con **11 hallazgos abiertos** (A5 a medias,
+    6 MEDIA y 4 BAJA) después de cerrar la Ronda 2 el 2026-09-20; los 28 cerrados viven
+    en “Cerrado de AUDIT.md”, arriba. Lo que queda, por orden: **B12** (pegar del
+    portapapeles lee sin tope — el único que puede tumbar el proceso), después
+    **B5/B6/B7/B8/B11/C7** (reconexión D-Bus, `repo_dir`, `configure`, URLs de la
+    carátula, `--profile` del notifyd, y que el notifyd deje de matar otros daemons) y
+    al final **A5/C1/C2/C5** (el resto del guard, `DrawArgs`, `closing` muerto y huecos
+    de tests). **A5** sigue a medias: el `catch_unwind` no cubre los drenajes de IPC
+    posteriores al `match`, y ahí la decisión documentada en `main.rs` es arreglar en la
+    fuente, no envolver más código.
   - **Verificado 2026-09-20 en una pasada por los pendientes**: de los dos puntos
     marcados "sin verificar a ojo" quedó **cero**. La grabación andaba pero tarde
     (trampa 17: el tick dormía 20 s, no 1) y el widget `Mic` quedó confirmado
