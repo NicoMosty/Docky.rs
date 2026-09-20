@@ -1,41 +1,53 @@
 use super::*;
 
 impl App {
+    /// Guarda el aviso en el historial (el más nuevo primero, tope
+    /// `NOTIF_HISTORY_CAP`) y, si el panel está abierto, lo re-abre para que el alto
+    /// crezca con la fila nueva (el frame sale de la cantidad de avisos).
+    ///
+    /// La hora es la del reloj del dock **sin AM/PM** (`11:38`): la misma cadena que
+    /// muestra la isla, así no hay un segundo formato de hora en el código.
+    pub(crate) fn push_notification(
+        &mut self,
+        title: String,
+        body: String,
+        qh: &QueueHandle<Self>,
+    ) {
+        let at = crate::widgets::sin_ampm(&self.widgets.time).to_string();
+        self.notifications
+            .insert(0, menu::NotifyEntry { title, body, at });
+        self.notifications.truncate(menu::NOTIF_HISTORY_CAP);
+        if self.notifications_mode.is_some() {
+            self.notifications_mode = None;
+            self.open_notifications(qh);
+        }
+    }
+
     pub(crate) fn show_notification(
         &mut self,
         title: String,
         body: String,
         qh: &QueueHandle<Self>,
     ) {
-        if self.wallpaper_mode.is_some()
-            || self.dock_menu_mode.is_some()
-            || self.app_search_mode.is_some()
-            || self.menu.is_some()
-            || self.osd_mode.is_some()
-            || self.clipboard_mode.is_some()
-        {
-            return;
-        }
+        // ----- el historial primero: el panel tiene el aviso aunque el toast no llegue
+        // a verse. Y no hay corte por modos abiertos: el toast vive en su propia
+        // superficie, así que ya no le roba la suya a ningún panel -----
+        self.push_notification(title.clone(), body.clone(), qh);
         let length = menu::OSD_NOTIFICATION_BASE_LEN + menu::NOTIFICATION_GROWTH_W;
-        let mut body_lines = 1usize;
-        let (panel_w, panel_h) = if self.dock.is_vertical() {
-            let cross = menu::OSD_NOTIFICATION_BASE_THICKNESS.max(menu::NOTIFICATION_MIN_PANEL_H)
-                + menu::NOTIFICATION_GROWTH_H;
-            (cross, length)
-        } else {
-            // ----- grow for wrapped body -----
-            let pad = menu::MENU_PADDING;
-            let text_x = pad + 9.0 * 2.0 + 14.0;
-            let max_w = (length - text_x - pad).max(1.0);
-            body_lines =
-                menu_render::wrap_to_width(&body, 8.5, max_w, menu::NOTIFICATION_BODY_MAX_LINES)
-                    .len()
-                    .max(1);
-            let block_h = 9.5 * 1.4 + 3.0 + body_lines as f32 * 8.5 * 1.4;
-            let cross = (block_h + pad * 2.0)
-                .max(menu::NOTIFICATION_MIN_PANEL_H + menu::NOTIFICATION_GROWTH_H);
-            (length, cross)
-        };
+        // ----- el toast va SIEMPRE apaisado (76x300 era el tubo vertical del dock: es
+        // una caja de esquina, no una píldora pegada al borde del dock) -----
+        let pad = menu::MENU_PADDING;
+        let text_x = pad + 9.0 * 2.0 + 14.0;
+        let max_w = (length - text_x - pad).max(1.0);
+        // ----- el alto del cuerpo (líneas) define el cross y el timeout -----
+        let body_lines =
+            menu_render::wrap_to_width(&body, 8.5, max_w, menu::NOTIFICATION_BODY_MAX_LINES)
+                .len()
+                .max(1);
+        let block_h = 9.5 * 1.4 + 3.0 + body_lines as f32 * 8.5 * 1.4;
+        let cross =
+            (block_h + pad * 2.0).max(menu::NOTIFICATION_MIN_PANEL_H + menu::NOTIFICATION_GROWTH_H);
+        let (panel_w, panel_h) = (length, cross);
         let timeout =
             (menu::NOTIFICATION_TIMEOUT_MS + body_lines.saturating_sub(1) as u64 * 900).min(15000);
         let needs_resize = match self.notification_mode.as_ref() {
@@ -60,25 +72,76 @@ impl App {
             m.panel_w = panel_w;
             m.panel_h = panel_h;
         }
-        if needs_resize {
-            let s = &self.dock.config.settings;
-            let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-            self.layer.set_anchor(anchor);
-            self.layer
-                .set_margin(margin.0, margin.1, margin.2, margin.3);
-            self.layer.set_size(panel_w as u32, panel_h as u32);
+        // ----- la superficie del toast: se crea al primer aviso y se le ajusta el
+        // tamaño si el cuerpo cambió de alto (no se re-crea: eso la desmapearía) -----
+        if self.toast_layer.is_none() {
+            self.create_toast_surface(panel_w, panel_h, qh);
+        } else if needs_resize && let Some(l) = self.toast_layer.as_ref() {
+            l.set_size(
+                panel_w.round().max(1.0) as u32,
+                panel_h.round().max(1.0) as u32,
+            );
+            l.commit();
         }
-        self.layer.set_layer(Layer::Overlay);
         let _ = self.notification_reset_tx.send(timeout);
-        self.request_redraw(qh);
+        // ----- una superficie recién creada no tiene tamaño hasta que llega el
+        // configure (el attach antes de eso lo rechaza el compositor): ahí es donde se
+        // pinta la primera vez, en `handlers::configure` -----
+        if self.toast_layer.is_some() && !needs_resize {
+            self.draw_notification_mode(qh);
+        }
     }
 
-    pub(crate) fn close_notification_mode(&mut self, qh: &QueueHandle<Self>) {
-        if let Some(m) = self.notification_mode.as_mut() {
-            m.closing = true;
-            m.target_anim = 0.0;
+    /// Superficie del toast: `Layer::Overlay` **anclada arriba a la derecha**, sin zona
+    /// exclusiva, sin teclado y con la input region **vacía** (los clicks la atraviesan:
+    /// el aviso se va solo con su timeout). Es descartable, como el popup.
+    fn create_toast_surface(&mut self, panel_w: f32, panel_h: f32, qh: &QueueHandle<Self>) {
+        let surface = self.compositor.create_surface(qh);
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            surface,
+            Layer::Overlay,
+            Some("dockyrs-notify"),
+            self.pinned_output.as_ref(),
+        );
+        const MARGIN: i32 = 8;
+        layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
+        layer.set_margin(MARGIN, MARGIN, 0, 0);
+        layer.set_size(
+            panel_w.round().max(1.0) as u32,
+            panel_h.round().max(1.0) as u32,
+        );
+        layer.set_exclusive_zone(-1);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        if let Ok(region) = Region::new(&self.compositor) {
+            // ----- el aviso se come el click en SU rectángulo: es lo que lo descarta.
+            // La superficie mide justo eso, así que no intercepta nada de más -----
+            region.add(
+                0,
+                0,
+                panel_w.round().max(1.0) as i32,
+                panel_h.round().max(1.0) as i32,
+            );
+            layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
         }
-        self.request_redraw(qh);
+        layer.commit();
+        log::debug!("notify: toast {panel_w}x{panel_h} arriba a la derecha");
+        self.toast_layer = Some(layer);
+    }
+
+    /// Cierra el toast. Es **inmediato a propósito**: antes se iba con un fade que
+    /// dependía de los frame callbacks de la superficie, y si esos no llegaban el aviso
+    /// se quedaba pegado en pantalla para siempre. El aviso dura su timeout y se suelta.
+    pub(crate) fn close_notification_mode(&mut self, _qh: &QueueHandle<Self>) {
+        if self.notification_mode.is_none() {
+            return;
+        }
+        self.notification_mode = None;
+        // ----- soltar la superficie la desmapea (es descartable, como el popup) -----
+        self.toast_layer = None;
+        trim_heap();
     }
 
     pub(super) fn draw_notification_mode(&mut self, qh: &QueueHandle<Self>) {
@@ -105,6 +168,8 @@ impl App {
             panel_w: m.panel_w,
             panel_h: m.panel_h,
             dock: &self.dock,
+            // ----- el toast va en la esquina: siempre apaisado -----
+            is_vertical: false,
             render_scale: scale,
         };
         let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
@@ -163,12 +228,15 @@ impl App {
             .expect("failed to create shm buffer");
         bgra_from_rgba(pixmap.data(), canvas);
 
-        let surface = self.layer.wl_surface();
+        // ----- el buffer va a la superficie DEL TOAST (no a la del dock) -----
+        let Some(layer) = self.toast_layer.as_ref() else {
+            return;
+        };
+        let surface = layer.wl_surface();
         surface.set_buffer_scale(self.output_scale.max(1));
         buffer.attach_to(surface).expect("failed to attach buffer");
         surface.damage_buffer(0, 0, width, height);
         surface.frame(qh, surface.clone());
-        self.awaiting_frame = true;
         surface.commit();
     }
 
@@ -190,10 +258,9 @@ impl App {
 
         if closing && anim <= 0.0 {
             self.notification_mode = None;
-            self.layer.set_layer(Layer::Top);
-            let (w, h) = self.dock.base_size();
-            self.layer.set_size(w, h);
-            self.draw(qh);
+            // ----- soltar la superficie del toast la desmapea: es descartable, no la
+            // compartida del dock (esa sí es trampa 2) -----
+            self.toast_layer = None;
             trim_heap();
             return;
         }

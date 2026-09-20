@@ -174,15 +174,20 @@ mod tabs_tests {
         let (_, _, bw, bh) = band_rect(196.0, 640.0, true, true);
         assert_eq!(bw, OVERLAY_TABS_W);
         let slot = bh / OVERLAY_TABS.len() as f32;
-        assert_eq!(slot, 160.0);
         assert!(
             slot > OVERLAY_TABS_W,
-            "el slot tiene que ser mas largo que ancho"
+            "el slot ({slot}) tiene que ser mas largo que el grosor ({OVERLAY_TABS_W})"
         );
         // ----- fila (panel ancho): 4 slots a lo ancho -----
         let (_, _, bw, bh) = band_rect(640.0, 236.0, false, true);
         assert_eq!(bh, OVERLAY_TABS_H);
-        assert_eq!(bw / OVERLAY_TABS.len() as f32, 160.0);
+        // ----- y en la fila tiene que alcanzar para la etiqueta más larga
+        // ("Wallpapers", ~74) más su padding: con 5 pestañas en 640 son 128 -----
+        let slot_w = bw / OVERLAY_TABS.len() as f32;
+        assert!(
+            slot_w > 84.0,
+            "el slot ({slot_w}) no alcanza para la etiqueta más larga"
+        );
     }
 
     /// La pastilla activa mide igual en las cuatro pestañas: sale del texto MÁS

@@ -30,11 +30,16 @@ pub enum IpcMessage {
     OverviewChanged(bool),
     ToggleWallpaper,
     ToggleClipboard,
+    ToggleNotifications,
     ScreenshotFull,
     ScreenshotRegion,
     ToggleDockMenu,
     TestNotification,
     Notify(String, String),
+    /// El menú de un item del tray ya resuelto. NO viene del socket: lo manda el hilo
+    /// de `tray::spawn_menu_worker`, porque `GetLayout` es bloqueante y no puede
+    /// correr en el hilo que dibuja (A3 de AUDIT.md).
+    TrayMenuReady(Box<crate::tray::MenuResult>),
 }
 
 const NOTIFY_SEP: char = '\u{1f}';
@@ -48,9 +53,17 @@ fn socket_path(profile: &str) -> std::path::PathBuf {
     })
 }
 
+/// Escribe el comando en el socket del dock. Si no se puede (el dock no corre o su
+/// IPC está trabada) lo dice por stderr: un `--toggle-search` que falla en silencio
+/// se ve como "el keybind no anda" y se pierde una tarde buscando en el lado equivocado.
 pub fn send_message(text: &str, profile: &str) {
-    if let Ok(mut stream) = UnixStream::connect(socket_path(profile)) {
-        let _ = stream.write_all(text.as_bytes());
+    match UnixStream::connect(socket_path(profile)) {
+        Ok(mut stream) => {
+            if let Err(err) = stream.write_all(text.as_bytes()) {
+                log::warn!("no pude mandarle {text:?} al dock: {err}");
+            }
+        }
+        Err(err) => log::warn!("no pude conectar con el dock (¿está corriendo?): {err}"),
     }
 }
 
@@ -85,9 +98,16 @@ pub fn spawn_listener(
         }
     };
     std::thread::spawn(move || {
+        // ----- UN HILO POR CLIENTE. Antes `handle_client` corría en línea en este
+        // mismo hilo: un cliente queda mudo (o el read se cuelga por lo que sea) y el
+        // accept no vuelve a correr, así que la cola del socket se llena y TODOS los
+        // `--toggle-*` / notify empiezan a dar `ConnectionRefused` — con la app viva,
+        // el socket en LISTENING y cero logs. Visto en vivo. Con un hilo por cliente,
+        // uno trabado cuesta un hilo y nada más. -----
         for stream in listener.incoming().flatten() {
             preparar_cliente(&stream);
-            handle_client(stream, &tx, &conn, &qh);
+            let (tx, conn, qh) = (tx.clone(), conn.clone(), qh.clone());
+            std::thread::spawn(move || handle_client(stream, &tx, &conn, &qh));
         }
     });
 }
@@ -109,6 +129,7 @@ fn handle_client(
         "osd-brightness" => Some(IpcMessage::OsdBrightness),
         "toggle-wallpaper" => Some(IpcMessage::ToggleWallpaper),
         "toggle-clipboard" => Some(IpcMessage::ToggleClipboard),
+        "toggle-notifications" => Some(IpcMessage::ToggleNotifications),
         "screenshot-full" => Some(IpcMessage::ScreenshotFull),
         "screenshot-region" => Some(IpcMessage::ScreenshotRegion),
         "toggle-dock-menu" => Some(IpcMessage::ToggleDockMenu),
@@ -263,6 +284,16 @@ pub fn spawn_media_watcher(
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     let _ = line;
                     if tx.send(IpcMessage::MediaChanged).is_ok() {
+                        conn.display().sync(&qh, ());
+                        let _ = conn.flush();
+                    }
+                    // ----- la caratula remota se baja ACÁ, en el hilo del watcher: es
+                    // el único lugar donde `curl` puede esperar sin que el dock deje
+                    // de dibujar. El título ya se avisó arriba; si apareció una
+                    // carátula nueva, un segundo aviso la hace entrar sin que el hilo
+                    // que dibuja haya tocado la red (A4 de AUDIT.md). -----
+                    if crate::widgets::warm_media_art() && tx.send(IpcMessage::MediaChanged).is_ok()
+                    {
                         conn.display().sync(&qh, ());
                         let _ = conn.flush();
                     }

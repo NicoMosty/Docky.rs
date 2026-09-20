@@ -30,6 +30,19 @@ impl App {
         if self.dock_visible || !self.widget_placed(crate::config::WidgetKind::Workspaces) {
             return;
         }
+        // ----- con la isla en pantalla el indicador va EN EL MEDIO de la isla: en vez
+        // de reemplazarla (el HUD de siempre, que la hacía "desaparecer" 3 s), la isla
+        // se abre en dos y el indicador entra entre la hora y la batería. El HUD queda
+        // como fallback para cuando no hay isla (sin actividades no hay dónde ponerlo). -----
+        if !super::render::island_activities(&self.widgets, 0.0).is_empty() {
+            log::debug!("wsflash: split -> abrir la isla con el indicador en el medio");
+            self.island_ws_target = 1.0;
+            // ----- el timer del HUD ya está armado a `WS_FLASH_TIMEOUT_MS`: el canal
+            // sólo reinicia el plazo -----
+            let _ = self.ws_reset_tx.send(());
+            self.request_redraw(qh);
+            return;
+        }
         // ----- el HUD es, literalmente, la superficie del dock: mismo tamaño y
         // mismo anclaje. Su indicador se dibuja en el rectángulo que el reparto del
         // dock le da al widget (`hit_layout`), así que el punto queda donde estaba al
@@ -80,6 +93,11 @@ impl App {
     }
 
     pub(crate) fn close_ws_flash_mode(&mut self, qh: &QueueHandle<Self>) {
+        // ----- el split de la isla se cierra con su propia animación (no hay HUD que
+        // desmapear) -----
+        if self.island_ws_target > 0.0 {
+            self.island_ws_target = 0.0;
+        }
         if let Some(m) = self.ws_flash_mode.as_mut() {
             m.closing = true;
             m.target_anim = 0.0;

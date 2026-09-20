@@ -73,7 +73,14 @@ fn has_family(family: &str) -> bool {
     family_set().contains(family)
 }
 
-fn rasterize(text: &str, size_px: f32, color: &str, weight: u16, family: &str) -> Option<Pixmap> {
+fn rasterize(
+    text: &str,
+    size_px: f32,
+    color: &str,
+    weight: u16,
+    family: &str,
+    italic: bool,
+) -> Option<Pixmap> {
     if text.is_empty() {
         return None;
     }
@@ -82,13 +89,14 @@ fn rasterize(text: &str, size_px: f32, color: &str, weight: u16, family: &str) -
         .max(1.0);
     let h = (size_px * 1.5).ceil();
     let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}"><text x="0" y="{baseline}" font-family="{family}" font-weight="{weight}" font-size="{size}" fill="{color}">{text}</text></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}"><text x="0" y="{baseline}" font-family="{family}" font-weight="{weight}" font-style="{style}" font-size="{size}" fill="{color}">{text}</text></svg>"#,
         w = canvas_w,
         h = h,
         baseline = size_px * 1.05,
         size = size_px,
         color = escape_attr(color),
         weight = weight,
+        style = if italic { "italic" } else { "normal" },
         family = escape_attr(family),
         text = escape(text)
     );
@@ -143,7 +151,23 @@ impl TextCache {
         weight: u16,
     ) -> Option<Rc<Pixmap>> {
         let family = std::mem::take(&mut self.default_family);
-        let result = self.lookup(text, size_px, color, weight, &family);
+        let result = self.lookup(text, size_px, color, weight, &family, false);
+        self.default_family = family;
+        result
+    }
+
+    /// Igual que `get` pero en itálica. Se rasteriza armando un SVG
+    /// (`font-style="italic"`), así que la cara la elige el mismo motor de fuentes que
+    /// el resto: la negrilla ya viajaba por `weight`, la itálica es este flag extra.
+    pub fn get_italic(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        color: &str,
+        weight: u16,
+    ) -> Option<Rc<Pixmap>> {
+        let family = std::mem::take(&mut self.default_family);
+        let result = self.lookup(text, size_px, color, weight, &family, true);
         self.default_family = family;
         result
     }
@@ -156,7 +180,7 @@ impl TextCache {
         weight: u16,
         family: &str,
     ) -> Option<Rc<Pixmap>> {
-        self.lookup(text, size_px, color, weight, family)
+        self.lookup(text, size_px, color, weight, family, false)
     }
 
     // ----- reused key buffer -----
@@ -167,6 +191,7 @@ impl TextCache {
         color: &str,
         weight: u16,
         family: &str,
+        italic: bool,
     ) -> Option<Rc<Pixmap>> {
         use std::fmt::Write;
         let fallback;
@@ -182,8 +207,9 @@ impl TextCache {
         self.key_buf.clear();
         let _ = write!(
             self.key_buf,
-            "{}\u{1f}{weight}\u{1f}{color}\u{1f}{family}\u{1f}{text}",
-            size_px as u32
+            "{}\u{1f}{weight}\u{1f}{color}\u{1f}{family}\u{1f}{}\u{1f}{text}",
+            size_px as u32,
+            if italic { 'i' } else { 'n' }
         );
         if let Some(hit) = self.cache.get(&self.key_buf) {
             return hit.clone();
@@ -191,7 +217,7 @@ impl TextCache {
         if self.cache.len() >= CACHE_CAP {
             self.cache.clear();
         }
-        let pixmap = rasterize(text, size_px, color, weight, family).map(Rc::new);
+        let pixmap = rasterize(text, size_px, color, weight, family, italic).map(Rc::new);
         self.cache.insert(self.key_buf.clone(), pixmap.clone());
         pixmap
     }

@@ -105,14 +105,19 @@ pub(crate) fn draw_workspaces_widget(
     let first = first_center(count, bar_len, bar_start, render_scale);
 
     let (ar, ag, ab, _) = colors.accent;
-    for i in 0..count {
+    let accent = (ar, ag, ab);
+    for (i, ws) in workspaces.iter().enumerate() {
+        if i >= count {
+            break;
+        }
         let c = first + i as f32 * slot;
         let (cx, cy) = if is_vertical {
             (cross_center, c)
         } else {
             (c, cross_center)
         };
-        draw_ws_shape(pixmap, cx, cy, dot, dot, (ar, ag, ab), 70);
+        let (rgb, alpha) = ws_tone(ws.urgent, 70, accent);
+        draw_ws_shape(pixmap, cx, cy, dot, dot, rgb, alpha);
     }
 
     let c = first + (marquee.ws_current - 1.0).max(0.0) * slot;
@@ -121,8 +126,29 @@ pub(crate) fn draw_workspaces_widget(
     } else {
         (c, cross_center, active, dot)
     };
-    draw_ws_shape(pixmap, cx, cy, w, h, (ar, ag, ab), 255);
+    // ----- la pastilla del activo también se pinta si su workspace es urgente -----
+    let activo_urgente = workspaces
+        .iter()
+        .position(|w| w.active)
+        .and_then(|i| workspaces.get(i))
+        .is_some_and(|w| w.urgent);
+    let (rgb, alpha) = ws_tone(activo_urgente, 255, accent);
+    draw_ws_shape(pixmap, cx, cy, w, h, rgb, alpha);
     animating
+}
+
+/// Rojo de la urgencia: el mismo que usa el OSD para el mute.
+const WS_URGENT_RGB: (u8, u8, u8) = (255, 69, 58);
+
+/// Tono de un punto de workspace: el acento del tema, y **rojo pleno** si el
+/// workspace es urgente (algo pide atención: la señal que hoy no existía en el dock).
+/// Es una función aparte para poder fijarla en un test sin renderizar.
+fn ws_tone(urgent: bool, alpha: u8, accent: (u8, u8, u8)) -> ((u8, u8, u8), u8) {
+    if urgent {
+        (WS_URGENT_RGB, 255)
+    } else {
+        (accent, alpha)
+    }
 }
 
 fn draw_ws_shape(
@@ -203,6 +229,23 @@ pub fn workspace_dot_hit(
 }
 
 #[cfg(test)]
+mod ws_tone_tests {
+    use super::*;
+
+    /// Rojo pleno si el workspace es urgente (la señal de "algo te reclama"), y el
+    /// acento del tema con su alfa si no. Es lo que ve el usuario en el punto, así que
+    /// el contrato es el color, no el trazo.
+    #[test]
+    fn el_urgente_va_en_rojo_y_el_resto_en_el_acento() {
+        let acento = (200, 180, 170);
+        assert_eq!(ws_tone(true, 70, acento), (WS_URGENT_RGB, 255));
+        assert_eq!(ws_tone(false, 70, acento), (acento, 70));
+        assert_eq!(ws_tone(false, 255, acento), (acento, 255));
+        assert_ne!(WS_URGENT_RGB, acento);
+    }
+}
+
+#[cfg(test)]
 mod workspace_hit_tests {
     use super::*;
 
@@ -211,6 +254,7 @@ mod workspace_hit_tests {
             id,
             active,
             empty,
+            urgent: false,
             output: String::new(),
         }
     }
@@ -304,6 +348,8 @@ mod workspace_hit_tests {
                 ram: None,
                 ram_gb: None,
                 volume: None,
+                mic: None,
+                recording: None,
                 network: crate::widgets::NetworkInfo {
                     label: "wifi".into(),
                     online: true,

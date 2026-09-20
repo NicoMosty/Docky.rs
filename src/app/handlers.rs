@@ -37,6 +37,15 @@ impl CompositorHandler for App {
             self.draw_region_frame();
             return;
         }
+        // ----- el toast tiene superficie propia: su frame es el reloj de su fade -----
+        let is_toast = self
+            .toast_layer
+            .as_ref()
+            .is_some_and(|l| l.wl_surface() == surface);
+        if is_toast {
+            self.tick_notification_frame(qh);
+            return;
+        }
         if surface == self.layer.wl_surface() {
             self.awaiting_frame = false;
             if self.notification_mode.is_some() {
@@ -55,9 +64,11 @@ impl CompositorHandler for App {
                 self.tick_clipboard_frame(qh);
             } else {
                 let icons_animating = self.dock.step_animation();
+                let splitting = self.tick_island_split_frame(qh);
+                let revealing = self.tick_reveal_frame(qh);
                 if self.marquee.workspace_animating() {
                     self.tick_workspace(qh);
-                } else if icons_animating {
+                } else if !splitting && !revealing && icons_animating {
                     self.draw(qh);
                 }
             }
@@ -113,6 +124,12 @@ impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         if layer.wl_surface() == self.layer.wl_surface() {
             self.exit = true;
+        } else if self
+            .toast_layer
+            .as_ref()
+            .is_some_and(|l| l.wl_surface() == layer.wl_surface())
+        {
+            self.toast_layer = None;
         } else if self
             .menu
             .as_ref()
@@ -173,6 +190,14 @@ impl LayerShellHandler for App {
             .is_some_and(|p| p.layer.wl_surface() == layer.wl_surface() && !p.closing)
         {
             self.draw_popup_mode(qh);
+        } else if self
+            .toast_layer
+            .as_ref()
+            .is_some_and(|l| l.wl_surface() == layer.wl_surface())
+        {
+            // ----- el configure del toast: el tamaño ya lo fijó `create_toast_surface`,
+            // así que acá sólo se pinta -----
+            self.draw_notification_mode(qh);
         } else if self
             .click_catcher
             .as_ref()
@@ -269,7 +294,17 @@ impl PointerHandler for App {
                 .as_ref()
                 .map(|c| event.surface == *c.surface())
                 .unwrap_or(false);
-            if is_menu {
+            // ----- el toast de notificaciones: un click lo descarta -----
+            let is_toast = self
+                .toast_layer
+                .as_ref()
+                .map(|l| event.surface == *l.wl_surface())
+                .unwrap_or(false);
+            if is_toast {
+                if let PointerEventKind::Press { .. } = event.kind {
+                    self.close_notification_mode(qh);
+                }
+            } else if is_menu {
                 self.handle_menu_pointer_event(event, qh);
             } else if is_popup {
                 self.handle_popup_pointer_event(event, qh);
@@ -347,7 +382,9 @@ impl KeyboardHandler for App {
             Keysym::Left | Keysym::Right | Keysym::Up | Keysym::Down
         )
         .then_some((event.keysym, 0, 0.0));
-        if self.clipboard_mode.is_some() {
+        if self.notifications_mode.is_some() {
+            self.handle_notifications_key(event, qh);
+        } else if self.clipboard_mode.is_some() {
             self.handle_clipboard_key(event, qh);
         } else if self.app_search_mode.is_some() {
             self.handle_app_search_key(event, qh);

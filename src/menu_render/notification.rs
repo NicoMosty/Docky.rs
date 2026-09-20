@@ -6,6 +6,9 @@ pub struct NotificationArgs<'a> {
     pub panel_w: f32,
     pub panel_h: f32,
     pub dock: &'a Dock,
+    /// `true` = el dock está al costado. El toast de la esquina lo fuerza a `false`:
+    /// es una caja apaisada, no una píldora pegada al borde del dock.
+    pub is_vertical: bool,
     pub render_scale: f32,
 }
 
@@ -31,7 +34,7 @@ pub fn draw_notification(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: 
 
     let acc = accent(settings);
 
-    if args.dock.is_vertical() {
+    if args.is_vertical {
         draw_notification_vertical(pixmap, text_cache, args, settings, w, h, acc);
     } else {
         draw_notification_horizontal(pixmap, text_cache, args, settings, w, h, acc);
@@ -56,8 +59,8 @@ pub(crate) fn draw_notification_horizontal(
     draw_bell_icon(pixmap, icon_cx, icon_cy, icon_r, icon_color, s);
 
     let text_x = icon_cx + icon_r + 14.0 * s;
-    let title_size = 9.5 * s;
-    let body_size = 8.5 * s;
+    let title_size = 11.5 * s;
+    let body_size = 10.0 * s;
     let gap = 3.0 * s;
     let line_h = body_size * 1.4;
     let max_w = (w - text_x - pad).max(0.0);
@@ -114,8 +117,8 @@ pub(crate) fn draw_notification_vertical(
     let icon_cy = pad + icon_r;
     draw_bell_icon(pixmap, icon_cx, icon_cy, icon_r, icon_color, s);
 
-    let title_size = 9.5 * s;
-    let body_size = 8.5 * s;
+    let title_size = 11.5 * s;
+    let body_size = 10.0 * s;
     let gap = 10.0 * s;
     let start_y = icon_cy + icon_r + 14.0 * s;
     let max_len = (h - pad - start_y).max(0.0);

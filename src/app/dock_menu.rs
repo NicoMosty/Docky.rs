@@ -127,6 +127,12 @@ pub(super) fn draw_dock_into(
             false,
             false,
             scale,
+            // ----- los paneles se dibujan con el dock entero: la animación de
+            // aparición es de la superficie del dock, no de la composición del panel.
+            // El split de la isla tampoco aplica: con el panel abierto el dock está
+            // visible y la isla no existe. -----
+            1.0,
+            0.0,
         );
     }
     dst.draw_pixmap(
@@ -156,6 +162,8 @@ impl App {
         if let Some(m) = self.app_search_mode.as_ref() {
             Some(menu::panel_size(m.frame, m.is_vertical))
         } else if let Some(m) = self.clipboard_mode.as_ref() {
+            Some(menu::panel_size(m.frame, m.is_vertical))
+        } else if let Some(m) = self.notifications_mode.as_ref() {
             Some(menu::panel_size(m.frame, m.is_vertical))
         } else if let Some(m) = self.wallpaper_mode.as_ref() {
             Some(menu::panel_size(m.frame, m.is_vertical))
@@ -373,6 +381,7 @@ impl App {
     pub(super) fn enforce_keyboard(&mut self) {
         let exclusive = self.dock_menu_mode.is_some()
             || self.app_search_mode.is_some()
+            || self.notifications_mode.is_some()
             || self.clipboard_mode.is_some()
             || self.wallpaper_mode.is_some();
         let on_demand = self.menu.is_some() || self.popup_mode.is_some();

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-fn run_with_timeout(
+pub(crate) fn run_with_timeout(
     mut cmd: std::process::Command,
     timeout: Duration,
 ) -> Option<std::process::Output> {
@@ -151,6 +151,10 @@ pub struct WorkspaceInfo {
     pub active: bool,
     /// Sin ventanas: el autohide deja el dock fijo en pantalla.
     pub empty: bool,
+    /// Algo del workspace pide atención (`is_urgent` de niri: ventana urgente, la
+    /// misma señal que niri marca con el borde rojo). El dock lo muestra con el punto
+    /// en rojo. Hyprland no lo expone, así que ahí queda en false.
+    pub urgent: bool,
     pub output: String,
 }
 
@@ -197,6 +201,11 @@ pub struct WidgetSnapshot {
     pub ram: Option<u8>,
     pub ram_gb: Option<(f32, f32)>,
     pub volume: Option<(u8, bool)>,
+    /// Micrófono por defecto: (nivel, muteado). Se lee SÓLO si el widget está
+    /// colocado (`wpctl` es otro spawn en el tick): ver `App::refresh_sys`.
+    pub mic: Option<(u8, bool)>,
+    /// Segundos de grabación en curso (`None` = no hay). Se lee siempre: es un `stat`.
+    pub recording: Option<u64>,
     pub network: NetworkInfo,
     pub kblayout: KbLayout,
     /// Un texto opcional por widget personalizado con script, alineado por
@@ -236,7 +245,7 @@ pub fn read_deferred(settings: &crate::config::DockSettings) -> DeferredWidgets 
     let volume_wanted = settings.has_widget(WidgetKind::Volume);
     std::thread::scope(|s| {
         let battery = battery_wanted.then(|| s.spawn(read_battery));
-        let media = media_wanted.then(|| s.spawn(read_media));
+        let media = media_wanted.then(|| s.spawn(|| read_media(true)));
         let bluetooth = bluetooth_wanted.then(|| s.spawn(read_bluetooth));
         let volume = volume_wanted.then(|| s.spawn(read_volume));
         // ----- un hilo que paniquea no puede tumbar el arranque: el dock se
@@ -248,6 +257,18 @@ pub fn read_deferred(settings: &crate::config::DockSettings) -> DeferredWidgets 
             volume: volume.and_then(|h| h.join().unwrap_or(None)),
         }
     })
+}
+
+/// La hora sin el sufijo AM/PM. Lo usa `WidgetSnapshot::time_short` (la hora de la
+/// isla): el " PM" ocupa media pastilla de 26 px y sobra. El resto del formato no se
+/// toca ("09:30" queda igual) y el sufijo tiene que venir en mayúsculas, que es como lo
+/// produce `strftime` con `%p` en este locale.
+pub fn sin_ampm(t: &str) -> &str {
+    let t = t.trim();
+    match t.strip_suffix("AM").or_else(|| t.strip_suffix("PM")) {
+        Some(sin) => sin.trim_end(),
+        None => t,
+    }
 }
 
 impl WidgetSnapshot {
@@ -298,6 +319,10 @@ impl WidgetSnapshot {
             ram: ram.map(|(pct, _)| pct),
             ram_gb: ram.map(|(_, gb)| gb),
             volume: None,
+            // ----- el micrófono no se difiere: su lectura es un `wpctl` de ~19 ms y
+            // el tick lo trae enseguida (ver `App::refresh_sys`) -----
+            mic: None,
+            recording: None,
             network,
             kblayout,
             custom_texts: Vec::new(),
@@ -333,6 +358,26 @@ impl WidgetSnapshot {
         changed
     }
 
+    /// Micrófono por defecto: relee y avisa si cambió. El gate (widget colocado) lo
+    /// hace el llamador, que es quien sabe qué hay en la barra.
+    /// Grabación en curso: `record-toggle.sh` escribe la ruta de salida en
+    /// `~/.cache/dockyrs-recording-path` al empezar y la borra al terminar, así que
+    /// alcanza con mirar el archivo (y su `mtime`, que es cuándo empezó). Es un
+    /// `stat`, no un spawn: se puede leer en cada tick sin gatear por widget.
+    pub fn refresh_recording(&mut self) -> bool {
+        let rec = read_recording();
+        let changed = rec != self.recording;
+        self.recording = rec;
+        changed
+    }
+
+    pub fn refresh_mic(&mut self) -> bool {
+        let mic = read_mic();
+        let changed = mic != self.mic;
+        self.mic = mic;
+        changed
+    }
+
     /// Sólo el layout de teclado. Lo dispara el event-stream de niri
     /// (`KeyboardLayoutsChanged`), no el tick: el widget se actualiza al instante y el
     /// tick de 2 s se ahorra el `niri msg -j keyboard-layouts` (~14 ms por spawn,
@@ -357,6 +402,13 @@ impl WidgetSnapshot {
         changed
     }
 
+    /// La hora sin el sufijo AM/PM: es lo que muestra la **isla** (26 px de grosor y el
+    /// " PM" se come media pastilla) y el ancho que le reserva `len_clock` sale de la
+    /// MISMA cadena (trampa 12). No toca el resto del formato: "09:30" queda igual.
+    pub fn time_short(&self) -> &str {
+        sin_ampm(&self.time)
+    }
+
     pub fn refresh_workspaces(&mut self) {
         self.workspaces = read_workspaces();
     }
@@ -371,7 +423,9 @@ impl WidgetSnapshot {
     }
 
     pub fn refresh_media(&mut self) {
-        self.media = read_media();
+        // ----- sin red: `read_media` solo mira el cache. La descarga la hace el
+        // watcher de media en su hilo (A4 de AUDIT.md). -----
+        self.media = read_media(false);
     }
 
     pub fn refresh_bluetooth(&mut self) {
@@ -928,10 +982,15 @@ fn read_workspaces_niri() -> Vec<WorkspaceInfo> {
                 .get("active_window_id")
                 .map(|v| v.is_null())
                 .unwrap_or(false);
+            let urgent = w
+                .get("is_urgent")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             (id > 0).then_some(WorkspaceInfo {
                 id,
                 active,
                 empty,
+                urgent,
                 output,
             })
         })
@@ -967,6 +1026,8 @@ fn read_workspaces_hypr() -> Vec<WorkspaceInfo> {
         .map(|(id, empty)| WorkspaceInfo {
             id,
             active: Some(id) == active_id,
+            // ----- hyprctl no expone urgencia: el punto queda del color del tema -----
+            urgent: false,
             empty,
             output: String::new(),
         })
@@ -1117,19 +1178,34 @@ fn playerctl(args: &[&str]) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
-fn read_media() -> Option<MediaInfo> {
-    let raw = playerctl(&[
+/// Lee el tema actual. `allow_network` deja bajar la caratula remota, que bloquea
+/// hasta 1 s: solo lo pasan los llamadores de fondo (`read_deferred` y
+/// `warm_media_art`). El hilo que dibuja pasa `false` y la caratula aparece en un
+/// frame posterior, cuando el watcher de media ya la bajo (A4 de AUDIT.md).
+fn read_media(allow_network: bool) -> Option<MediaInfo> {
+    read_media_checked(allow_network).0
+}
+
+/// Lo mismo, pero dice si la caratula se bajo en ESTA llamada: es lo que el watcher
+/// usa para saber si vale la pena avisar que hay algo nuevo que dibujar.
+fn read_media_checked(allow_network: bool) -> (Option<MediaInfo>, bool) {
+    let Some(raw) = playerctl(&[
         "-a",
         "metadata",
         "--format",
         "{{status}}\t{{title}}\t{{mpris:artUrl}}\t{{xesam:url}}",
-    ])?;
+    ]) else {
+        return (None, false);
+    };
 
     let has_title = |l: &&str| l.split('\t').nth(1).is_some_and(|t| !t.is_empty());
-    let line = raw
+    let Some(line) = raw
         .lines()
         .find(|l| l.starts_with("Playing\t") && has_title(l))
-        .or_else(|| raw.lines().find(has_title))?;
+        .or_else(|| raw.lines().find(has_title))
+    else {
+        return (None, false);
+    };
 
     let mut fields = line.split('\t');
     let playing = fields.next() == Some("Playing");
@@ -1137,14 +1213,29 @@ fn read_media() -> Option<MediaInfo> {
     let art_field = fields.next().unwrap_or_default();
     let page_url = fields.next().unwrap_or_default();
 
-    let art_path = resolve_art_path(art_field)
-        .or_else(|| cached_remote_art(&youtube_thumbnail_url(page_url)?));
+    let mut downloaded = false;
+    let art_path = resolve_art_path(art_field, allow_network, &mut downloaded).or_else(|| {
+        let url = youtube_thumbnail_url(page_url)?;
+        cached_remote_art(&url, allow_network, &mut downloaded)
+    });
 
-    Some(MediaInfo {
-        title,
-        playing,
-        art_path,
-    })
+    (
+        Some(MediaInfo {
+            title,
+            playing,
+            art_path,
+        }),
+        downloaded,
+    )
+}
+
+/// Deja en el cache la caratula del tema actual y dice si aprecio una nueva. Bloquea
+/// hasta ~1 s por la red, asi que es para un hilo de fondo —el watcher de media— y es
+/// justo lo que permite que el hilo que dibuja llame a `read_media(false)` sin
+/// esperar nunca por un `curl` (A4 de AUDIT.md).
+pub fn warm_media_art() -> bool {
+    let (info, downloaded) = read_media_checked(true);
+    downloaded && info.is_some_and(|m| m.art_path.is_some())
 }
 
 fn youtube_thumbnail_url(page_url: &str) -> Option<String> {
@@ -1167,12 +1258,12 @@ fn youtube_thumbnail_url(page_url: &str) -> Option<String> {
     valid.then(|| format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"))
 }
 
-fn resolve_art_path(url: &str) -> Option<String> {
+fn resolve_art_path(url: &str, allow_network: bool, downloaded: &mut bool) -> Option<String> {
     if let Some(p) = url.strip_prefix("file://") {
         return Some(percent_decode(p));
     }
     if url.starts_with("http://") || url.starts_with("https://") {
-        return cached_remote_art(url);
+        return cached_remote_art(url, allow_network, downloaded);
     }
     None
 }
@@ -1216,28 +1307,47 @@ fn art_cache_dir() -> PathBuf {
     dir
 }
 
-fn cached_remote_art(url: &str) -> Option<String> {
-    let dir = art_cache_dir();
-    std::fs::create_dir_all(&dir).ok()?;
+fn art_cache_path(url: &str) -> PathBuf {
+    let mut dir = art_cache_dir();
     let hash = url.bytes().fold(5381u64, |acc, b| {
         acc.wrapping_mul(33).wrapping_add(b as u64)
     });
     let ext = if url.contains(".png") { "png" } else { "jpg" };
-    let path = dir.join(format!("{hash:x}.{ext}"));
-    if path.exists() {
-        return Some(path.to_string_lossy().to_string());
+    dir.push(format!("{hash:x}.{ext}"));
+    dir
+}
+
+/// Caratula de una URL remota que ya este en el cache. Con `allow_network` la baja si
+/// falta; sin eso devuelve `None` y no toca la red, que es lo que necesita el hilo que
+/// dibuja (A4 de AUDIT.md). `downloaded` sale en `true` solo si esta llamada la bajo.
+fn cached_remote_art(url: &str, allow_network: bool, downloaded: &mut bool) -> Option<String> {
+    let path = art_cache_path(url);
+    if !path.exists() {
+        if !allow_network {
+            return None;
+        }
+        download_art(url, &path)?;
+        *downloaded = true;
     }
+    Some(path.to_string_lossy().to_string())
+}
+
+/// Baja la caratula. `--fail` para que un 404 no se guarde como `.jpg` y se sirva
+/// para siempre (D3 de AUDIT.md), y `--max-time 1`: quien llama ya es un hilo de fondo,
+/// pero no hay razon para esperar 3 s por una miniatura.
+fn download_art(url: &str, path: &std::path::Path) -> Option<()> {
+    std::fs::create_dir_all(art_cache_dir()).ok()?;
     let status = std::process::Command::new("curl")
-        .args(["-s", "-L", "--max-time", "3", "-o"])
-        .arg(&path)
+        .args(["-s", "-L", "--fail", "--max-time", "1", "-o"])
+        .arg(path)
         .arg(url)
         .status()
         .ok()?;
-    if !status.success() || std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) == 0 {
-        let _ = std::fs::remove_file(&path);
+    if !status.success() || std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) == 0 {
+        let _ = std::fs::remove_file(path);
         return None;
     }
-    Some(path.to_string_lossy().to_string())
+    Some(())
 }
 
 pub fn media_toggle() {
@@ -1247,9 +1357,12 @@ pub fn media_toggle() {
 }
 
 // ----- percent and muted -----
-pub fn read_volume() -> Option<(u8, bool)> {
+/// Volumen y mute de un nodo de PipeWire (`@DEFAULT_AUDIO_SINK@` o `SOURCE@`). Con
+/// PipeWire caído `wpctl get-volume` se cuelga, así que va con timeout: esto corre en
+/// el tick de 2 s y sin tope el dock se congelaba para siempre.
+fn read_wpctl(target: &str) -> Option<(u8, bool)> {
     let mut cmd = std::process::Command::new("wpctl");
-    cmd.args(["get-volume", "@DEFAULT_AUDIO_SINK@"]);
+    cmd.args(["get-volume", target]);
     // ----- con PipeWire caído `wpctl get-volume` se cuelga. Esto corre en el
     // tick de 2s, así que sin timeout el dock se congelaba para siempre y no
     // revivía ni con Escape. Mismo helper que el resto de las lecturas. -----
@@ -1261,6 +1374,43 @@ pub fn read_volume() -> Option<(u8, bool)> {
     let muted = text.contains("MUTED");
     let fraction: f32 = text.split_whitespace().nth(1)?.parse().ok()?;
     Some(((fraction * 100.0).round().clamp(0.0, 200.0) as u8, muted))
+}
+
+pub fn read_volume() -> Option<(u8, bool)> {
+    read_wpctl("@DEFAULT_AUDIO_SINK@")
+}
+
+/// Micrófono por defecto. Mismo parseo que la salida.
+pub fn read_mic() -> Option<(u8, bool)> {
+    read_wpctl("@DEFAULT_AUDIO_SOURCE@")
+}
+
+/// Segundos que lleva grabando `wf-recorder` (lo que escribe `record-toggle.sh`), o
+/// `None` si no hay grabación. El archivo vive en `~/.cache` y su `mtime` es el
+/// arranque.
+pub fn read_recording() -> Option<u64> {
+    let dir = dirs::cache_dir()?;
+    let meta = std::fs::metadata(dir.join("dockyrs-recording-path")).ok()?;
+    let started = meta.modified().ok()?;
+    Some(started.elapsed().ok()?.as_secs())
+}
+
+/// `MM:SS`, o `H:MM:SS` si pasa la hora. Una sola definición: la usan el widget de la
+/// barra y la isla (que dibujan el mismo widget).
+pub fn fmt_elapsed(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
+}
+
+/// Togglea el mute del micrófono (el click del widget).
+pub fn mic_toggle() {
+    let _ = std::process::Command::new("wpctl")
+        .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
+        .status();
 }
 
 pub fn backlight_dir() -> Option<PathBuf> {
@@ -1346,6 +1496,22 @@ mod volume_panel_tests {
 #[cfg(test)]
 mod percent_decode_tests {
     use super::*;
+
+    /// La hora de la isla: sin AM/PM y sin tocar el resto (el ancho que reserva
+    /// `len_clock` sale de esta misma cadena).
+    #[test]
+    fn la_hora_de_la_isla_no_lleva_ampm() {
+        assert_eq!(sin_ampm("11:30 PM"), "11:30");
+        assert_eq!(sin_ampm("11:30PM"), "11:30");
+        assert_eq!(sin_ampm("9:05 AM"), "9:05");
+        assert_eq!(
+            sin_ampm("9:05 Am"),
+            "9:05 Am",
+            "el sufijo es en mayúsculas: una minúscula no se toca"
+        );
+        assert_eq!(sin_ampm("23:30"), "23:30", "24h queda como está");
+        assert_eq!(sin_ampm(""), "");
+    }
 
     #[test]
     fn decodifica_lo_que_tiene_que_decodificar() {
@@ -1528,5 +1694,38 @@ mod clock_tests {
             !texto.chars().any(|c| c.is_alphabetic()),
             "el formato de 24 h no debería traer letras: {texto:?}"
         );
+    }
+
+    /// A4: el contrato del hilo que dibuja. Sin `allow_network` una carátula remota
+    /// que no está en el caché se queda sin resolver, pero sobre todo **no se baja
+    /// nada**: es lo que garantiza que el frame no espere por red. Si alguien le pasa
+    /// `true` desde el camino del dibujo, este test no lo ve (no puede espiar el
+    /// llamado), pero sí deja escrito el contrato y cubre el cache-hit.
+    #[test]
+    fn sin_red_la_caratula_no_se_baja_y_el_cache_hit_no_la_necesita() {
+        // ----- puerto 9 (discard): si algo intentara conectarse, rebota al toque,
+        // así el test es offline y rápido en cualquier caso -----
+        let url = "http://127.0.0.1:9/caratula-dockyrs-test.jpg";
+        let path = art_cache_path(url);
+        let _ = std::fs::remove_file(&path);
+
+        let mut downloaded = false;
+        assert_eq!(
+            cached_remote_art(url, false, &mut downloaded),
+            None,
+            "sin allow_network no hay descarga: se devuelve None"
+        );
+        assert!(!downloaded);
+        assert!(!path.exists(), "no se creó ningún archivo");
+
+        // ----- lo que ya está en el caché se devuelve igual, sin red -----
+        std::fs::create_dir_all(art_cache_dir()).expect("cache dir");
+        std::fs::write(&path, b"jpg").expect("escribir carátula de prueba");
+        assert!(
+            cached_remote_art(url, false, &mut downloaded).is_some(),
+            "el cache-hit no necesita red"
+        );
+        assert!(!downloaded, "cache-hit no es una descarga");
+        let _ = std::fs::remove_file(&path);
     }
 }

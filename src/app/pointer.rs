@@ -40,7 +40,13 @@ impl App {
             self.handle_ws_flash_pointer_event(event, qh);
             return;
         }
-        // ----- oculto: la franja superior del dock es el disparador -----
+        // ----- oculto: la franja del dock es el disparador del reveal. La isla NO
+        // recibe puntero, y no es un olvido: al entrar a la franja el `Enter` revela
+        // el dock en este mismo handler y `should_hide()` exige `pointer_pos` en
+        // `None`, así que la isla sólo se ve con el puntero lejos de la superficie.
+        // Para darle interacción habría que **achicar el disparador al blob** (perder
+        // el gesto de tirar el mouse al borde) o aceptar que scrollear revele: ver
+        // "Isla dinámica, lo que sigue" en AGENTS.md. -----
         if !self.dock_visible {
             match event.kind {
                 PointerEventKind::Enter { .. }
@@ -77,6 +83,10 @@ impl App {
         }
         if self.wallpaper_mode.is_some() {
             self.handle_wallpaper_pointer_event(event, qh);
+            return;
+        }
+        if self.notifications_mode.is_some() {
+            self.handle_notifications_pointer_event(event, qh);
             return;
         }
         if self.clipboard_mode.is_some() {
@@ -294,6 +304,18 @@ impl App {
         use crate::widget::WidgetAction as A;
         match action {
             A::MediaToggle => widgets::media_toggle(),
+            A::ToggleMic => widgets::mic_toggle(),
+            A::ToggleRecording => {
+                // ----- el script del repo: arranca o para wf-recorder y deja la ruta
+                // en ~/.cache/dockyrs-recording-path, que es lo que lee la isla -----
+                if let Some(script) = repo_dir()
+                    .join("record-toggle.sh")
+                    .to_str()
+                    .map(String::from)
+                {
+                    let _ = std::process::Command::new(script).spawn();
+                }
+            }
             A::OpenPowerMenu => self.open_power_menu(qh),
             A::OpenBluetoothManager => {
                 if let Some(bt) = &self.widgets.bluetooth {

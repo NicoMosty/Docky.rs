@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use zbus::blocking::fdo::PropertiesProxy;
 use zbus::blocking::{Connection, Proxy};
-
 const WATCHER_IFACE: &str = "org.kde.StatusNotifierWatcher";
 const WATCHER_PATH: &str = "/StatusNotifierWatcher";
 const ITEM_IFACE: &str = "org.kde.StatusNotifierItem";
@@ -27,6 +26,54 @@ pub struct TrayMenuItem {
 }
 
 pub type TrayState = Arc<Mutex<Vec<TrayIcon>>>;
+
+/// Una petición de menú del tray. Viaja al hilo de `spawn_menu_worker` en vez de
+/// resolverse en el hilo que dibuja: `GetLayout` es una llamada D-Bus bloqueante (el
+/// techo es `TRAY_CALL_TIMEOUT`, 500 ms; el default de zbus eran 25 s), y una app del
+/// tray colgada no puede congelar el dock (A3 de AUDIT.md).
+pub struct MenuRequest {
+    pub service: String,
+    pub menu_path: String,
+    /// Path del item StatusNotifier. Sólo lo usa el menú raíz: es el fallback
+    /// `Activate` cuando el menú vuelve vacío (`None` en los submenús, donde ese
+    /// fallback no existe).
+    pub item_path: Option<String>,
+    /// `0` = menú raíz; si no, el id del item cuyo submenú se pidió.
+    pub parent_id: i32,
+    pub center: Option<(f32, f32)>,
+}
+
+/// Lo que devuelve el hilo: el menú y la petición que lo pidió, para que quien
+/// aplica pueda descartarlo si el usuario ya cambió de idea.
+pub struct MenuResult {
+    pub req: MenuRequest,
+    pub items: Vec<TrayMenuItem>,
+}
+
+/// Hilo único que resuelve los menús del tray fuera del hilo que dibuja. Es uno solo
+/// (no un hilo por click) para que las peticiones se atiendan en orden: el último
+/// click pisa al anterior en vez de que gane el que conteste primero. Con el
+/// `method_timeout` de la conexión, una app colgada no puede tapar la cola.
+pub fn spawn_menu_worker(
+    rx: std::sync::mpsc::Receiver<MenuRequest>,
+    tx: std::sync::mpsc::Sender<crate::ipc::IpcMessage>,
+    wl_conn: wayland_client::Connection,
+    qh: wayland_client::QueueHandle<crate::app::App>,
+) {
+    std::thread::spawn(move || {
+        while let Ok(req) = rx.recv() {
+            let items = fetch_menu(&req.service, &req.menu_path, req.parent_id);
+            let result = Box::new(MenuResult { req, items });
+            if tx
+                .send(crate::ipc::IpcMessage::TrayMenuReady(result))
+                .is_ok()
+            {
+                wl_conn.display().sync(&qh, ());
+                let _ = wl_conn.flush();
+            }
+        }
+    });
+}
 
 // ----- el tray visible ignora wifi y bluetooth: ya tienen sus widgets propios
 // (Network/Bluetooth) y en el tray solo duplican ruido. Se mira icon_name
@@ -183,13 +230,26 @@ fn resolve_item(conn: &Connection, raw_svc: &str) -> Option<TrayIcon> {
 
 // ----- conexión compartida: antes cada llamada hacía Connection::session(),
 // o sea el handshake completo de D-Bus, y encima en el hilo que dibuja -----
+//
+// El `method_timeout` es el techo de CUALQUIER llamada del tray, y es lo que hace
+// que una app colgada no pueda frenar nada durante los 25 s del default de zbus.
+// Medido en esta máquina (`GetLayout` con gdbus, que incluye el spawn del proceso):
+// nm-applet 10,6-13,4 ms y blueman 17,5-20,2 ms, o sea que 500 ms es ~25-50x el
+// costo real y no hay riesgo de cortar una respuesta lenta pero legítima.
+const TRAY_CALL_TIMEOUT: Duration = Duration::from_millis(500);
+
 fn tray_conn() -> Option<&'static Connection> {
     static CONN: std::sync::OnceLock<Option<Connection>> = std::sync::OnceLock::new();
-    CONN.get_or_init(|| match Connection::session() {
-        Ok(c) => Some(c),
-        Err(e) => {
-            log::warn!("tray: no hay bus de sesión: {e}");
-            None
+    CONN.get_or_init(|| {
+        let built = zbus::blocking::connection::Builder::session()
+            .map(|b| b.method_timeout(TRAY_CALL_TIMEOUT))
+            .and_then(|b| b.build());
+        match built {
+            Ok(c) => Some(c),
+            Err(e) => {
+                log::warn!("tray: no hay bus de sesión: {e}");
+                None
+            }
         }
     })
     .as_ref()

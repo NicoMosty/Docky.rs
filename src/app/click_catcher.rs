@@ -267,6 +267,8 @@ impl App {
             self.close_dock_menu(qh);
         } else if self.app_search_mode.is_some() {
             self.close_app_search_mode(qh);
+        } else if self.notifications_mode.is_some() {
+            self.close_notifications_mode(qh);
         } else if self.clipboard_mode.is_some() {
             self.close_clipboard_mode(qh);
         } else if self.wallpaper_mode.is_some() {

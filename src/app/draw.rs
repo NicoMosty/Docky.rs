@@ -44,8 +44,7 @@ impl App {
         // ----- autohide: revelar si un modo necesita la superficie -----
         if self.dock.config.settings.autohide && !self.dock_visible && self.autohide_force_visible()
         {
-            self.dock_visible = true;
-            self.sync_autohide_surfaces();
+            self.set_dock_visible(true);
         }
         // ----- o si el workspace activo está vacío o el Overview está abierto (no
         // hay ventana que justifique ocultarlo): misma regla que aplica el refresco
@@ -53,18 +52,23 @@ impl App {
         self.reveal_dock_if_stays(qh);
         // ----- oculto: pinta transparente (sin desmapear; attach(NULL)
         // resetea el tamaño de la layer surface en niri y rompe el remapeo) -----
-        if self.dock.config.settings.autohide && !self.dock_visible && self.ws_flash_mode.is_none()
+        // Con el colapso animado a medias el transparente todavía no va: la cápsula
+        // que se encoge se sigue pintando hasta llegar a 0 y ahí pasa a la isla.
+        if self.dock.config.settings.autohide
+            && !self.dock_visible
+            && self.ws_flash_mode.is_none()
+            && self.reveal_anim <= 0.0
         {
-            self.draw_hidden();
+            self.draw_island(qh);
             return;
         }
         // ----- auto-armar ocultado una sola vez por episodio visible -----
         if self.dock.config.settings.autohide && self.should_hide() && !self.autohide_armed {
             self.arm_autohide();
         }
-        if self.notification_mode.is_some() {
-            self.draw_notification_mode(qh);
-        } else if self.osd_mode.is_some() {
+        // ----- el toast de notificaciones NO se dibuja acá: tiene superficie propia
+        // (arriba a la derecha), así que el dock sigue mostrando lo suyo -----
+        if self.osd_mode.is_some() {
             self.draw_osd_mode(qh);
         } else if self.ws_flash_mode.is_some() {
             self.draw_ws_flash_mode(qh);
@@ -74,6 +78,8 @@ impl App {
             self.draw_dock_menu_mode(qh);
         } else if self.wallpaper_mode.is_some() {
             self.draw_wallpaper_mode(qh);
+        } else if self.notifications_mode.is_some() {
+            self.draw_notifications_mode(qh);
         } else if self.clipboard_mode.is_some() {
             self.draw_clipboard_mode(qh);
         } else {
@@ -89,12 +95,156 @@ impl App {
         self.draw_ex(qh, false, true);
     }
 
+    /// Estado de la animación de aparición. Con el autohide apagado el dock queda
+    /// fijo, así que la isla va entera siempre: ningún ajuste puede dejarlo
+    /// colapsado a medias (apagar el autohide desde el panel pone `dock_visible` en
+    /// true sin pasar por la animación).
+    fn dock_reveal(&self) -> f32 {
+        if self.dock.config.settings.autohide {
+            self.reveal_anim
+        } else {
+            1.0
+        }
+    }
+
+    /// Paso del split de la isla: el indicador de workspaces abriéndose en el medio.
+    /// Mismo criterio que el reveal (el frame que se pide al dibujar es el reloj) y
+    /// mismo gate de `smooth_transitions`. Devuelve true si dibujó.
+    pub(super) fn tick_island_split_frame(&mut self, qh: &QueueHandle<Self>) -> bool {
+        if self.island_ws_split == self.island_ws_target {
+            return false;
+        }
+        self.island_ws_split = if !self.dock.config.settings.smooth_transitions {
+            self.island_ws_target
+        } else if self.island_ws_split < self.island_ws_target {
+            (self.island_ws_split + menu::ANIM_STEP_OPEN).min(self.island_ws_target)
+        } else {
+            (self.island_ws_split - menu::ANIM_STEP_CLOSE).max(self.island_ws_target)
+        };
+        if self.dock_visible {
+            self.draw(qh);
+        } else {
+            self.draw_island(qh);
+        }
+        true
+    }
+
+    /// Paso de la animación de aparición (estilo isla). La llama el callback de
+    /// frame de la superficie del dock: el frame que se pide al dibujar es el reloj
+    /// de la animación, igual que en los otros modos. Devuelve true si dibujó.
+    pub(super) fn tick_reveal_frame(&mut self, qh: &QueueHandle<Self>) -> bool {
+        if self.reveal_anim == self.reveal_target {
+            return false;
+        }
+        let smooth = self.dock.config.settings.smooth_transitions;
+        let antes = self.reveal_anim;
+        self.reveal_anim = if !smooth {
+            self.reveal_target
+        } else if self.reveal_anim < self.reveal_target {
+            (self.reveal_anim + menu::ANIM_STEP_OPEN).min(self.reveal_target)
+        } else {
+            (self.reveal_anim - menu::ANIM_STEP_CLOSE).max(self.reveal_target)
+        };
+        log::debug!(
+            "reveal:{} {:.2} -> {:.2} visible={}",
+            crate::app::hdbg_ms(),
+            antes,
+            self.reveal_anim,
+            self.dock_visible
+        );
+        // ----- el final del colapso es la isla compacta, no el buffer transparente:
+        // el dock no desaparece, se encoge al blob -----
+        if self.reveal_anim <= 0.0 {
+            self.draw_island(qh);
+        } else {
+            self.draw(qh);
+        }
+        true
+    }
+
     // ----- idle throttle -----
     pub(super) fn set_marquee_rate(&mut self, rate: u64) {
         if rate != self.marquee_rate {
             self.marquee_rate = rate;
             let _ = self.marquee_tick_tx.send(rate);
         }
+    }
+
+    /// La isla compacta: el estado que se ve MIENTRAS el dock está oculto (ver
+    /// `render::draw_island`). Reusa la superficie y el buffer del dock, así que no
+    /// agrega ni una superficie ni un wakeup: es el mismo `attach` que hacía
+    /// `draw_hidden` con el blob de una actividad adentro.
+    ///
+    /// Sin actividad (ni media sonando, ni volumen, ni batería) NO se inventa un
+    /// blob vacío: queda el buffer transparente de siempre.
+    pub(super) fn draw_island(&mut self, qh: &QueueHandle<Self>) {
+        if render::island_activities(&self.widgets, self.island_ws_split).is_empty() {
+            self.draw_hidden();
+            return;
+        }
+        let scale = self.output_scale.max(1) as f32;
+        let (base_w, base_h) = self.dock.base_size();
+        let width = (base_w as f32 * scale).round() as i32;
+        let height = (base_h as f32 * scale).round() as i32;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        let stride = width * 4;
+        let Ok((buffer, canvas)) =
+            self.pool
+                .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
+        else {
+            // ----- mismo criterio que `draw_hidden`: si falla, queda el buffer viejo
+            // puesto (la superficie sigue mapeada) en vez de morir -----
+            log::error!("no pude crear el buffer de la isla ({width}x{height})");
+            return;
+        };
+        // ----- mismo criterio que `draw_hidden`: nada de `unwrap` en un camino que
+        // corre en cada redibujado con el dock oculto (un panic mata el dock) -----
+        if self.frame_pixmap.as_ref().map(|p| (p.width(), p.height()))
+            != Some((width as u32, height as u32))
+        {
+            match tiny_skia::Pixmap::new(width as u32, height as u32) {
+                Some(p) => self.frame_pixmap = Some(p),
+                None => {
+                    log::error!("no pude crear el pixmap de la isla ({width}x{height})");
+                    return;
+                }
+            }
+        }
+        let Some(pixmap) = self.frame_pixmap.as_mut() else {
+            return;
+        };
+        let animando = {
+            let tray_icons = self.tray.lock().unwrap();
+            render::draw_island(
+                pixmap,
+                &self.dock,
+                &mut self.icon_cache,
+                &mut self.text_cache,
+                &self.widgets,
+                &tray_icons,
+                &mut self.marquee,
+                scale,
+                self.island_ws_split,
+            )
+        };
+        bgra_from_rgba(pixmap.data(), canvas);
+        // ----- si el título de Media está scrolleando, el tick del marquee es el reloj
+        // de la isla; si no, 0 y el reposo queda en el piso (mismo criterio que
+        // `draw_icons`). Va después de `bgra_from_rgba` porque ese consume el préstamo
+        // del pool. -----
+        self.set_marquee_rate(if animando { render::MARQUEE_TICK_MS } else { 0 });
+        let surface = self.layer.wl_surface();
+        surface.set_buffer_scale(self.output_scale.max(1));
+        if let Err(err) = buffer.attach_to(surface) {
+            log::error!("no pude mapear el buffer de la isla: {err}");
+            return;
+        }
+        surface.damage_buffer(0, 0, width, height);
+        surface.frame(qh, surface.clone());
+        self.awaiting_frame = true;
+        surface.commit();
     }
 
     // ----- buffer transparente del mismo tamaño: mantiene la superficie mapeada -----
@@ -149,6 +299,12 @@ impl App {
         if width <= 0 || height <= 0 {
             return;
         }
+        // ----- la animación de aparición se lee ANTES de pedir prestado `self.pool`
+        // (el préstamo mutable vive hasta el `bgra_from_rgba` del final y no deja
+        // llamar a un método &self en el medio) -----
+        let reveal = self.dock_reveal();
+        // ----- el split de la isla (indicador de workspaces) viaja con el dibujo -----
+        let ws_split = self.island_ws_split;
         let stride = width * 4;
 
         let (buffer, canvas) = self
@@ -176,6 +332,8 @@ impl App {
             advance_marquee,
             advance_ws,
             scale,
+            reveal,
+            ws_split,
         );
         drop(tray_icons);
         bgra_from_rgba(pixmap.data(), canvas);
@@ -207,9 +365,9 @@ impl App {
             || self.osd_mode.is_some()
             || self.ws_flash_mode.is_some()
             || self.wallpaper_mode.is_some()
-            || self.notification_mode.is_some()
             || self.app_search_mode.is_some()
             || self.clipboard_mode.is_some()
+            || self.notifications_mode.is_some()
     }
 
     pub(super) fn relayout_dock(&mut self, qh: &QueueHandle<Self>) {
@@ -247,9 +405,9 @@ impl App {
         self.dock_menu_mode.is_some()
             || self.osd_mode.is_some()
             || self.wallpaper_mode.is_some()
-            || self.notification_mode.is_some()
             || self.app_search_mode.is_some()
             || self.clipboard_mode.is_some()
+            || self.notifications_mode.is_some()
     }
 
     fn autohide_force_visible(&self) -> bool {
@@ -288,7 +446,7 @@ impl App {
         // ----- el HUD comparte la superficie: devolvérsela al dock, o el dock
         // entero se pinta dentro de la pastilla chica del HUD. -----
         self.close_ws_flash_for_dock(qh);
-        self.dock_visible = true;
+        self.set_dock_visible(true);
         self.sync_autohide_surfaces();
     }
 
@@ -316,6 +474,9 @@ impl App {
     /// `sync_autohide_surfaces` no toca el tamaño). Sin esto el dock se pinta dentro
     /// de la pastilla chica del HUD. No hace nada si el HUD no estaba abierto.
     fn close_ws_flash_for_dock(&mut self, qh: &QueueHandle<Self>) {
+        // ----- el split de la isla también se cierra al revelar el dock: ahí el
+        // indicador ya está en la barra -----
+        self.island_ws_target = 0.0;
         if self.ws_flash_mode.is_none() {
             return;
         }
@@ -416,7 +577,7 @@ impl App {
         // por dentro pero se sigue viendo sólo el indicador en lugar del dock
         // completo. -----
         self.close_ws_flash_for_dock(qh);
-        self.dock_visible = true;
+        self.set_dock_visible(true);
         self.autohide_armed = false;
         log::debug!("autohide:{} reveal", crate::app::hdbg_ms());
         self.sync_autohide_surfaces();
@@ -435,6 +596,12 @@ impl App {
             if visible { "show" } else { "hide" }
         );
         self.dock_visible = visible;
+        // ----- el destino de la animación de aparición. Con las transiciones
+        // apagadas no hay animación: el estado final ya es el destino. -----
+        self.reveal_target = if visible { 1.0 } else { 0.0 };
+        if !self.dock.config.settings.smooth_transitions {
+            self.reveal_anim = self.reveal_target;
+        }
         // ----- al soltar el buffer no llegará callback de frame -----
         // (si queda en true, request_redraw se vuelve un no-op y el dock no reaparece)
         self.awaiting_frame = false;
@@ -473,8 +640,15 @@ impl App {
         }
         if self.should_hide() {
             self.set_dock_visible(false);
-            // ----- el contenido visible sigue enganchado: sustituirlo por transparente -----
-            self.draw_hidden();
+            // ----- el contenido visible sigue enganchado: sustituirlo por
+            // transparente. Con el colapso animado corriendo, el frame siguiente ya
+            // lo dibuja y el transparente llega cuando la cápsula termina de
+            // encogerse (`tick_reveal_frame`). -----
+            if self.reveal_anim > 0.0 {
+                self.request_redraw(qh);
+            } else {
+                self.draw_island(qh);
+            }
         } else if self.dock_visible {
             // ----- re-verificar más tarde (el puntero puede seguir encima) -----
             self.arm_autohide();
@@ -501,9 +675,31 @@ impl App {
                 .set_margin(margin.0, margin.1, margin.2, margin.3);
             self.applied_geom = Some((anchor, margin));
         }
-        // ----- input region SIEMPRE activa: es el disparador del autohide y
-        // toglearla no surte efecto hasta que el puntero se mueve -----
-        self.layer.wl_surface().set_input_region(None);
+        // ----- el disparador del autohide: VISIBLE la superficie entera; OCULTO
+        // sólo el blob de la isla, que es lo único que se ve (pedido: "que aparezca
+        // solamente al hacer hover en la isla"). Fuera del blob el puntero le llega a
+        // la ventana de abajo, así que el dock ya no se come una franja de 26x610 en
+        // toda la altura de la pantalla. Sin isla (sin datos) queda la superficie
+        // entera, si no el dock no se podría revelar nunca. -----
+        let tray_count = self.tray.lock().unwrap().len();
+        let isla =
+            render::island_blob_region(&self.dock, &self.widgets, tray_count, self.island_ws_split);
+        let want: Option<(i32, i32, i32, i32)> = if self.dock_visible { None } else { isla };
+        // ----- idempotente: re-setear la región en cada frame es un `commit` de más -----
+        if self.applied_input != Some(want) {
+            match want {
+                None => self.layer.wl_surface().set_input_region(None),
+                Some((x, y, w, h)) => {
+                    if let Ok(region) = Region::new(&self.compositor) {
+                        region.add(x, y, w, h);
+                        self.layer
+                            .wl_surface()
+                            .set_input_region(Some(region.wl_region()));
+                    }
+                }
+            }
+            self.applied_input = Some(want);
+        }
         self.layer.commit();
     }
 
@@ -539,6 +735,12 @@ impl App {
     }
 
     pub(crate) fn refresh_clock(&mut self, qh: &QueueHandle<Self>) {
+        // ----- la grabación se refresca en el tick de 1 s: es un `stat` y el tiempo
+        // dibujado tiene que avanzar de a un segundo, no de a dos -----
+        if self.widgets.refresh_recording() {
+            self.sync_widget_bar_len();
+            self.relayout_dock(qh);
+        }
         if !self.dock.icons.is_empty() || !self.widget_placed(crate::config::WidgetKind::Clock) {
             return;
         }
@@ -666,7 +868,9 @@ impl App {
         let active = self.dock.config.settings.widgets.iter().any(|w| {
             matches!(
                 w.kind,
-                crate::config::WidgetKind::Volume | crate::config::WidgetKind::Network
+                crate::config::WidgetKind::Volume
+                    | crate::config::WidgetKind::Network
+                    | crate::config::WidgetKind::Mic
             )
         });
         if !active {
@@ -675,7 +879,12 @@ impl App {
         // ----- el panel de volumen relee sus streams aunque el widget no haya
         // cambiado: una app puede empezar o dejar de sonar sin que wpctl cambie -----
         self.refresh_volume_panel(qh);
-        if self.widgets.refresh_sys() {
+        let mut changed = self.widgets.refresh_sys();
+        // ----- el micrófono es otro `wpctl` (~19 ms): sólo si su widget está colocado -----
+        if self.widget_placed(crate::config::WidgetKind::Mic) {
+            changed |= self.widgets.refresh_mic();
+        }
+        if changed {
             self.sync_widget_bar_len();
             self.relayout_dock(qh);
         }

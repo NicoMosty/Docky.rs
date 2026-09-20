@@ -292,7 +292,7 @@ fn blit_preview(pixmap: &mut Pixmap, preview: &ScaledPreview, x: f32, y: f32) {
     );
 }
 
-fn fit(display: &str, _full: &str, size: f32, max_w: f32) -> String {
+pub(super) fn fit(display: &str, _full: &str, size: f32, max_w: f32) -> String {
     let approx = (max_w / (size * 0.55)) as usize;
     if display.chars().count() <= approx {
         return display.to_string();

@@ -21,6 +21,18 @@ pub(super) fn popup_input_region(
     Some(region)
 }
 
+// ----- ¿el menú que llegó sigue teniendo a quién contestarle? El `GetLayout` corre en
+// otro hilo, así que el resultado puede llegar cuando el usuario ya se fue a otra cosa
+// (abrió los ajustes, el panel de volumen, el de energía). Sin este corte, un tray
+// lento —el techo son 500 ms— pisaba el panel recién abierto (A3 de AUDIT.md).
+//
+// Un popup del tray abierto SÍ cuenta como "lo sigue queriendo": es el caso de
+// clickear otro icono sin cerrar el menú anterior, y ahí el de después reemplaza al de
+// antes (el hilo los atiende en orden).
+fn tray_menu_still_wanted(settings_open: bool, popup_screen: Option<menu::MenuScreen>) -> bool {
+    !settings_open && popup_screen.is_none_or(|s| s == menu::MenuScreen::TrayMenu)
+}
+
 impl App {
     pub(super) fn open_power_menu(&mut self, qh: &QueueHandle<Self>) {
         let (controls, content_height) = menu::build_controls(menu::MenuScreen::PowerMenu, 0, 0);
@@ -63,7 +75,7 @@ impl App {
         path: String,
         menu_path: Option<String>,
         center: Option<(f32, f32)>,
-        qh: &QueueHandle<Self>,
+        _qh: &QueueHandle<Self>,
     ) {
         let Some(menu_path) = menu_path else {
             // ----- sin menú D-Bus: que haga lo del click izquierdo, antes no
@@ -72,23 +84,79 @@ impl App {
             crate::tray::activate(service, path);
             return;
         };
-        let items = crate::tray::fetch_menu(&service, &menu_path, 0);
-        if items.is_empty() {
-            log::debug!("tray: {service} menú vacío, activate como izquierdo");
-            crate::tray::activate(service, path);
-            return;
-        }
-        let (controls, content_height) = menu::build_tray_menu_controls(&items, false);
-        self.create_popup_surface(
-            menu::MenuScreen::TrayMenu,
-            controls,
-            content_height,
-            items,
+        // ----- el `GetLayout` lo hace el hilo del tray y la respuesta vuelve por el
+        // canal de IPC (`TrayMenuReady` → `apply_tray_menu`): acá no se espera, así
+        // que una app del tray colgada ya no congela el dock (A3 de AUDIT.md) -----
+        let _ = self.tray_menu_tx.send(crate::tray::MenuRequest {
             service,
             menu_path,
+            item_path: Some(path),
+            parent_id: 0,
             center,
-            qh,
-        );
+        });
+    }
+
+    /// Aplica el menú que resolvió el hilo del tray. Nunca se llama desde el camino
+    /// del click: el `GetLayout` se pide y la respuesta llega después por el canal de
+    /// IPC, así que puede llegar tarde y hay que descartarla si el usuario ya cambió
+    /// de idea (A3 de AUDIT.md).
+    pub(crate) fn apply_tray_menu(&mut self, res: crate::tray::MenuResult, qh: &QueueHandle<Self>) {
+        let crate::tray::MenuResult { req, items } = res;
+        if req.parent_id == 0 {
+            // ----- si mientras el menú viajaba el usuario abrió otra cosa (el panel
+            // de volumen, el de energía, los ajustes), este resultado ya no tiene a
+            // quién contestarle. Sin este corte, un tray lento —el techo son 500 ms—
+            // pisaba el panel que el usuario acababa de abrir. -----
+            let sigue_pidiendo_menu = tray_menu_still_wanted(
+                self.menu.is_some(),
+                self.popup_mode.as_ref().map(|p| p.screen),
+            );
+            if !sigue_pidiendo_menu {
+                log::debug!("tray: menú de {} llegó tarde, se descarta", req.service);
+                return;
+            }
+            if items.is_empty() {
+                log::debug!("tray: {} menú vacío, activate como izquierdo", req.service);
+                if let Some(path) = req.item_path {
+                    crate::tray::activate(req.service, path);
+                }
+                return;
+            }
+            let (controls, content_height) = menu::build_tray_menu_controls(&items, false);
+            self.create_popup_surface(
+                menu::MenuScreen::TrayMenu,
+                controls,
+                content_height,
+                items,
+                req.service,
+                req.menu_path,
+                req.center,
+                qh,
+            );
+            return;
+        }
+        // ----- submenú: sólo vale si el popup sigue abierto, es el mismo menú y el
+        // item que lo pidió sigue siendo el que está esperando -----
+        let Some(p) = self.popup_mode.as_ref() else {
+            return;
+        };
+        if p.tray_menu_path != req.menu_path || p.pending_submenu != Some(req.parent_id) {
+            return;
+        }
+        if items.is_empty() {
+            // ----- el item decía tener submenú y vino vacío: antes el click no hacía
+            // nada, y sigue sin hacer nada pero deja de esperar -----
+            if let Some(p) = self.popup_mode.as_mut() {
+                p.pending_submenu = None;
+            }
+            return;
+        }
+        let Some(p) = self.popup_mode.as_mut() else {
+            return;
+        };
+        p.pending_submenu = None;
+        p.tray_stack.push(p.tray_items.clone());
+        self.set_tray_items(items, true, qh);
     }
 
     // ----- click derecho sobre un widget de la izquierda (Network/Bluetooth):
@@ -238,6 +306,7 @@ impl App {
             tray_service,
             tray_menu_path,
             tray_stack: Vec::new(),
+            pending_submenu: None,
             content: None,
             content_dirty: true,
             center,
@@ -622,6 +691,11 @@ impl App {
                     let Some(items) = p.tray_stack.pop() else {
                         return;
                     };
+                    // ----- volver desarma cualquier submenú pedido: si no, un
+                    // resultado que llega tarde encontraria el `pending_submenu`
+                    // armado y reabriria el submenú del que el usuario acaba de salir
+                    // (el hilo lo puede estar resolviendo todavia) -----
+                    p.pending_submenu = None;
                     let has_back = !p.tray_stack.is_empty();
                     self.set_tray_items(items, has_back, qh);
                 }
@@ -639,15 +713,20 @@ impl App {
                 }
                 if item.has_submenu {
                     let (service, menu_path) = (p.tray_service.clone(), p.tray_menu_path.clone());
-                    let submenu = crate::tray::fetch_menu(&service, &menu_path, item.id);
-                    if submenu.is_empty() {
-                        return;
+                    let id = item.id;
+                    // ----- el submenú se pide al hilo del tray: el resultado entra
+                    // por `apply_tray_menu`, y `pending_submenu` es lo que hace que
+                    // sólo se aplique si el item que espera sigue siendo éste -----
+                    if let Some(p) = self.popup_mode.as_mut() {
+                        p.pending_submenu = Some(id);
                     }
-                    let Some(p) = self.popup_mode.as_mut() else {
-                        return;
-                    };
-                    p.tray_stack.push(p.tray_items.clone());
-                    self.set_tray_items(submenu, true, qh);
+                    let _ = self.tray_menu_tx.send(crate::tray::MenuRequest {
+                        service,
+                        menu_path,
+                        item_path: None,
+                        parent_id: id,
+                        center: None,
+                    });
                 } else {
                     crate::tray::send_menu_event(
                         p.tray_service.clone(),
@@ -659,5 +738,37 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tray_menu_tarde_tests {
+    use super::*;
+
+    /// El `GetLayout` corre en otro hilo, así que el resultado puede llegar cuando el
+    /// usuario ya abrió otra cosa. Sin este corte, un tray lento (hasta 500 ms) le
+    /// pisaba el panel de volumen o los ajustes con un menú que ya nadie pidió.
+    #[test]
+    fn un_menu_que_llega_tarde_no_pisa_el_panel_que_el_usuario_abrio() {
+        use menu::MenuScreen;
+        // ----- nadie abrió nada todavía: es el caso normal (el popup se crea con el
+        // resultado, así que en ese momento está cerrado) -----
+        assert!(tray_menu_still_wanted(false, None));
+        // ----- ya hay un menú del tray abierto (clickearon otro icono sin cerrar el
+        // anterior): el de después reemplaza al de antes, el hilo los atiende en orden -----
+        assert!(tray_menu_still_wanted(false, Some(MenuScreen::TrayMenu)));
+        // ----- el usuario se fue a otra cosa -----
+        assert!(
+            !tray_menu_still_wanted(true, None),
+            "panel de ajustes abierto"
+        );
+        assert!(
+            !tray_menu_still_wanted(false, Some(MenuScreen::VolumePanel)),
+            "panel de volumen abierto"
+        );
+        assert!(
+            !tray_menu_still_wanted(true, Some(MenuScreen::VolumePanel)),
+            "los dos"
+        );
     }
 }

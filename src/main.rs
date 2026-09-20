@@ -181,6 +181,10 @@ fn main() -> anyhow::Result<()> {
             ipc::send_message("toggle-wallpaper", &cli.profile);
             return Ok(());
         }
+        Some("--toggle-notifications") => {
+            ipc::send_message("toggle-notifications", &cli.profile);
+            return Ok(());
+        }
         Some("--toggle-clipboard") => {
             ipc::send_message("toggle-clipboard", &cli.profile);
             return Ok(());
@@ -288,6 +292,10 @@ fn main() -> anyhow::Result<()> {
     let (notification_reset_tx, notification_reset_rx) = std::sync::mpsc::channel::<u64>();
     let (marquee_tick_tx, marquee_tick_rx) = std::sync::mpsc::channel::<u64>();
     let (autohide_hide_tx, autohide_hide_rx) = std::sync::mpsc::channel::<u64>();
+    // ----- los menús del tray se resuelven en un hilo propio: `GetLayout` es una
+    // llamada D-Bus bloqueante y hacerla acá congelaba el dock hasta 25 s con una app
+    // del tray colgada (A3 de AUDIT.md). -----
+    let (tray_menu_tx, tray_menu_rx) = std::sync::mpsc::channel::<tray::MenuRequest>();
 
     let tray_state: tray::TrayState = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let tray_tick_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -297,6 +305,7 @@ fn main() -> anyhow::Result<()> {
         conn.clone(),
         qh.clone(),
     );
+    tray::spawn_menu_worker(tray_menu_rx, ipc_tx.clone(), conn.clone(), qh.clone());
 
     let available_fonts = std::rc::Rc::new(dockyrs_canvas::list_font_families());
     let mut text_cache = TextCache::new();
@@ -326,13 +335,19 @@ fn main() -> anyhow::Result<()> {
         layer_shell,
         layer,
         dock_visible: true,
+        island_ws_split: 0.0,
+        island_ws_target: 0.0,
+        reveal_anim: 1.0,
+        reveal_target: 1.0,
         autohide_armed: false,
         applied_geom: None,
+        applied_input: None,
         applied_size: None,
         last_ptr_event: None,
         ptr_left_at: None,
         calendar_hover_at: None,
         autohide_hide_tx,
+        tray_menu_tx,
         pointer: None,
         keyboard: None,
         dock,
@@ -360,6 +375,7 @@ fn main() -> anyhow::Result<()> {
         ws_flash_mode: None,
         ws_reset_tx,
         notification_mode: None,
+        toast_layer: None,
         notification_reset_tx,
         media_wanted: media_wanted.clone(),
         widgets: initial_widgets,
@@ -388,6 +404,8 @@ fn main() -> anyhow::Result<()> {
         clipboard_history: clipboard::ClipboardHistory::new(),
         clipboard_ready_at: std::time::Instant::now() + std::time::Duration::from_millis(500),
         clipboard_mode: None,
+        notifications: Vec::new(),
+        notifications_mode: None,
         clip_tx,
         paste_tx,
     };
@@ -555,6 +573,8 @@ fn main() -> anyhow::Result<()> {
                 ipc::IpcMessage::OverviewChanged(open) => app.set_overview_open(open, &qh),
                 ipc::IpcMessage::ToggleWallpaper => app.toggle_wallpaper_picker(&qh),
                 ipc::IpcMessage::ToggleClipboard => app.toggle_clipboard(&qh),
+                ipc::IpcMessage::ToggleNotifications => app.toggle_notifications(&qh),
+                ipc::IpcMessage::TrayMenuReady(result) => app.apply_tray_menu(*result, &qh),
                 ipc::IpcMessage::ScreenshotFull => app.start_full_screenshot(&qh),
                 ipc::IpcMessage::ScreenshotRegion => app.start_region_screenshot(&qh),
                 ipc::IpcMessage::ToggleDockMenu => app.toggle_dock_menu(&qh),
@@ -615,7 +635,10 @@ fn spawn_clock_ticker(
 ) {
     std::thread::spawn(move || {
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(20));
+            // ----- 1 s, no 20: este tick es el reloj Y la grabación, y el tiempo
+            // grabado se dibuja en MM:SS. Con 20 s, la isla tardaba ese tiempo en
+            // ver el archivo y el contador saltaba de a 20 (ver trampa 17). -----
+            std::thread::sleep(std::time::Duration::from_secs(1));
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
             conn.display().sync(&qh, ());
             let _ = conn.flush();

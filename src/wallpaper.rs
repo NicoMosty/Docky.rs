@@ -328,21 +328,23 @@ pub fn extract_color_scheme(
     scheme: &str,
     mode: &str,
 ) -> Option<ColorScheme> {
-    let output = std::process::Command::new("matugen")
-        .args([
-            "--type",
-            scheme,
-            "image",
-            &path.to_string_lossy(),
-            "--source-color-index",
-            "0",
-            "--json",
-            "hex",
-            "--mode",
-            mode,
-        ])
-        .output()
-        .ok()?;
+    // ----- CON TIMEOUT: matugen tarda 1-2 s de verdad (de ahí el tope holgado), pero
+    // colgado dejaba al dock sin dibujar para siempre, porque esto corre en el hilo
+    // principal al elegir un fondo (AUDIT.md A2) -----
+    let mut cmd = std::process::Command::new("matugen");
+    cmd.args([
+        "--type",
+        scheme,
+        "image",
+        &path.to_string_lossy(),
+        "--source-color-index",
+        "0",
+        "--json",
+        "hex",
+        "--mode",
+        mode,
+    ]);
+    let output = crate::widgets::run_with_timeout(cmd, std::time::Duration::from_secs(10))?;
     if !output.status.success() {
         return None;
     }

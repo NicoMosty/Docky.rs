@@ -207,6 +207,8 @@ pub(super) fn widget_natural_len(
         is_vertical,
         cross_len,
         tray_count,
+        // ----- mide para la barra: la isla arma su propio `Ctx` con `compact` -----
+        compact: false,
     };
     let Some(spec) = spec_for(kind) else {
         // ----- si el enum crece sin entrada en la tabla, `WIDGETS` deja de estar
@@ -239,6 +241,21 @@ pub(crate) fn percentage_widget_len(
     let Some(pct) = pct else { return 0.0 };
     text_widget_len(&format!("{pct}%"), is_vertical, render_scale, text_px)
 }
+/// Sincroniza la clave del marquee con el título de Media: cuando el tema cambia, la
+/// pista arranca de cero. Lo usan el dibujo de la barra y el de la isla, así que la
+/// regla de "cuándo se resetea" es una sola.
+pub(super) fn sync_marquee_key(marquee: &mut MarqueeState, widgets: &WidgetSnapshot) {
+    let key = widgets
+        .media
+        .as_ref()
+        .map(|m| m.title.clone())
+        .unwrap_or_else(|| "Nothing is playing".to_string());
+    if marquee.key != key {
+        marquee.key = key;
+        marquee.title = MarqueeLane::default();
+    }
+}
+
 pub(super) fn draw_widgets(
     pixmap: &mut Pixmap,
     dock: &Dock,
@@ -264,16 +281,7 @@ pub(super) fn draw_widgets(
         text_color: &palette.text_color,
     };
 
-    let key = widgets
-        .media
-        .as_ref()
-        .map(|m| m.title.clone())
-        .unwrap_or_else(|| "Nothing is playing".to_string());
-    if marquee.key != key {
-        marquee.key = key;
-        marquee.title = MarqueeLane::default();
-    }
-
+    sync_marquee_key(marquee, widgets);
     let is_vertical = dock.is_vertical();
     let tray_count = tray.len();
     let cross_len = if is_vertical { w } else { h };
@@ -289,6 +297,8 @@ pub(super) fn draw_widgets(
             is_vertical,
             cross_len,
             tray_count,
+            // ----- la barra va completa: el modo compacto es de la isla -----
+            compact: false,
         };
         // ----- la tabla es la unica lista: si un widget del enum no esta ahi,
         // `WIDGETS` quedo incompleto y conviene que paniquee con el nombre -----
@@ -381,6 +391,225 @@ pub(super) fn draw_widgets(
         );
     }
     animating
+}
+
+/// Dibuja UN widget centrado en `area` (píxeles físicos) y recortado a lo que entre.
+///
+/// Lo usa la isla compacta: así el estado mínimo muestra el MISMO dibujo del widget
+/// —mismo icono, mismo número, misma paleta— y no una segunda versión que se pueda
+/// desincronizar (trampa 12). El `WidgetRect` se arma acá con la medida que pide el
+/// propio widget (`natural_len`), centrada en la cápsula.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_one_widget(
+    pixmap: &mut Pixmap,
+    dock: &Dock,
+    icon_cache: &mut IconCache,
+    text_cache: &mut TextCache,
+    widgets: &WidgetSnapshot,
+    tray: &[crate::tray::TrayIcon],
+    marquee: &mut MarqueeState,
+    kind: crate::config::WidgetKind,
+    area: (f32, f32, f32, f32),
+    render_scale: f32,
+) -> bool {
+    let s = &dock.config.settings;
+    let render_scale = render_scale * s.widget_scale;
+    let palette = widget_palette(s);
+    let colors = WidgetColors {
+        accent: palette.accent,
+        text_rgb: palette.text_rgb,
+        text_color: &palette.text_color,
+    };
+    let is_vertical = dock.is_vertical();
+    let tray_count = tray.len();
+    let (ax, ay, aw, ah) = area;
+    let ctx = Ctx {
+        kind,
+        widgets,
+        settings: s,
+        render_scale,
+        is_vertical,
+        cross_len: if is_vertical { aw } else { ah },
+        tray_count,
+        // ----- el dibujo de una sola actividad en la isla es SIEMPRE compacto -----
+        compact: true,
+    };
+    let Some(spec) = spec_for(kind) else {
+        return false;
+    };
+    // ----- largo que pide el widget, recortado a la cápsula -----
+    let natural = (spec.natural_len)(&ctx);
+    let rect = if is_vertical {
+        let len = natural.min(ah);
+        WidgetRect {
+            kind,
+            slot: crate::config::WidgetSlot::Middle,
+            x: ax,
+            y: ay + (ah - len) / 2.0,
+            w: aw,
+            h: len,
+        }
+    } else {
+        let len = natural.min(aw);
+        WidgetRect {
+            kind,
+            slot: crate::config::WidgetSlot::Middle,
+            x: ax + (aw - len) / 2.0,
+            y: ay,
+            w: len,
+            h: ah,
+        }
+    };
+    let mut canvas = Canvas {
+        pixmap,
+        text_cache,
+        icon_cache,
+        marquee,
+        tray,
+        colors: &colors,
+        // ----- la isla NO se resalta al hover como el dock: el puntero sobre ella
+        // dispara el reveal, no un hover de widget -----
+        hovered: None,
+        // ----- el marquee de Media (el único que anima acá) es por tiempo: `marquee_step`
+        // mide con su propio reloj, así que avanzar en cada redibujado es correcto y no
+        // adelanta de más (el tick de 33 ms lo agenda el que dibuja) -----
+        advance: true,
+        // ----- la animación de Workspaces SÍ avanza en la isla (el split la muestra):
+        // con `false` los puntos pedían frames para siempre y el tick no terminaba
+        // nunca — medido: 74% de un core en reposo, un bucle de 30 fps -----
+        advance_ws: true,
+        // ----- el largo de la BARRA, no el del recorte: el widget decide con él si
+        // le entra el texto largo (Media pide 65 px en una barra ancha y 22 en una
+        // angosta). Pasándole el largo de la isla se creería en una barra angosta y
+        // dejaría el hueco del texto vacío al lado de la carátula -----
+        bar_len: if dock.is_vertical() {
+            dock.base_size().1 as f32 * render_scale / s.widget_scale
+        } else {
+            dock.base_size().0 as f32 * render_scale / s.widget_scale
+        },
+    };
+    (spec.draw)(&mut canvas, &rect, &ctx)
+}
+
+/// Qué va a mostrar la isla compacta y cuánto mide: las actividades con su largo (en
+/// orden, pegadas a lo largo de la cápsula) y el largo total del blob.
+///
+/// Es la ÚNICA cuenta del estado compacto —la usan `draw_island` para dibujar y el
+/// reveal para saber hasta dónde encogerse—, así que el fondo, el recorte y el
+/// contenido no se pueden despegar (trampa 10).
+#[derive(Default)]
+pub(super) struct IslandPlan {
+    pub(super) items: Vec<(crate::config::WidgetKind, f32)>,
+    /// Largo del blob (el piso de la animación). 0 = no hay isla.
+    pub(super) compact: f32,
+    /// Relleno en cada extremo del blob y separación entre actividades. Es el radio
+    /// con el que el borde se curva: adentro de esa franja el blob se angosta, así
+    /// que el contenido tiene que arrancar después (si no, la máscara le corta el
+    /// borde — se veía en la batería, que es el icono más ancho).
+    pub(super) pad: f32,
+    pub(super) gap: f32,
+}
+
+/// Separación entre dos actividades pegadas en la isla.
+const ISLAND_GAP: f32 = 5.0;
+
+/// Arma el plan: la medida natural de cada actividad de `island_activities`, el
+/// relleno de los extremos (el radio) y el techo del dock (lo que no entre se cae).
+///
+/// El piso no es por actividad: la isla crece para que entren como se dibujan en la
+/// barra (Media ~104 px con su carátula y su texto, el volumen ~28, la batería ~29),
+/// porque con un largo fijo al título de Media le cortaba las letras a la mitad.
+/// Cuánto hay que correr el blob de la isla (eje largo, píxeles LÓGICOS) para que
+/// quede centrado donde el dock tiene el **indicador de workspaces**. Es lo que hace
+/// que al revelarse el dock el indicador no salte: la isla ya se movió a su lugar.
+///
+/// Sale del MISMO reparto que el dock (`layout_widgets`), así que no hay una segunda
+/// cuenta de dónde vive el widget (trampa 10). 0 = ya está centrado, o el widget no
+/// está colocado.
+pub(super) fn island_ws_shift(dock: &Dock, widgets: &WidgetSnapshot, tray_count: usize) -> f32 {
+    let s = &dock.config.settings;
+    let (bw, bh) = dock.base_size();
+    let (w, h) = (bw as f32, bh as f32);
+    let vertical = dock.is_vertical();
+    let Some(r) = layout_widgets(s, widgets, tray_count, vertical, w, h, 1.0)
+        .into_iter()
+        .find(|r| r.kind == crate::config::WidgetKind::Workspaces)
+    else {
+        return 0.0;
+    };
+    let (centro_widget, centro_barra) = if vertical {
+        (r.y + r.h / 2.0, h / 2.0)
+    } else {
+        (r.x + r.w / 2.0, w / 2.0)
+    };
+    centro_widget - centro_barra
+}
+
+pub(super) fn island_plan(
+    dock: &Dock,
+    widgets: &WidgetSnapshot,
+    tray_count: usize,
+    render_scale: f32,
+    ws_split: f32,
+) -> IslandPlan {
+    let s = &dock.config.settings;
+    let (base_w, base_h) = dock.base_size();
+    let (w, h) = (base_w as f32 * render_scale, base_h as f32 * render_scale);
+    let is_vertical = dock.is_vertical();
+    let (cross, max_len) = if is_vertical { (w, h) } else { (h, w) };
+    // ----- el mismo radio que va a usar la máscara (`edge_rounded_rect_path` lo
+    // clampa a la mitad del eje corto): adentro de esa franja el blob se angosta -----
+    let mut plan = IslandPlan {
+        pad: (s.corner_radius * render_scale).min(cross / 2.0),
+        gap: ISLAND_GAP * render_scale,
+        ..Default::default()
+    };
+    // ----- el indicador de workspaces (si está) es el que lleva el split -----
+    let es_ws = |k: crate::config::WidgetKind| k == crate::config::WidgetKind::Workspaces;
+    let mut prev_ws = false;
+    for kind in super::island_activities(widgets, ws_split) {
+        let ctx = Ctx {
+            kind,
+            widgets,
+            settings: s,
+            render_scale: render_scale * s.widget_scale,
+            is_vertical,
+            cross_len: cross,
+            tray_count,
+            // ----- la MEDIDA tiene que salir del mismo modo que el dibujo: si el reloj
+            // se dibuja sin la fecha, el ancho reservado tampoco la puede contar
+            // (trampa 12) -----
+            compact: true,
+        };
+        let len = spec_for(kind)
+            .map(|spec| (spec.natural_len)(&ctx))
+            .unwrap_or(0.0);
+        // ----- el techo es el dock entero y se va sumando (con el relleno y el gap):
+        // si una actividad no entra, se cae ella y las que seguían (van por prioridad) -----
+        let extra = if plan.items.is_empty() {
+            2.0 * plan.pad
+        } else if es_ws(kind) || prev_ws {
+            // ----- los dos gaps que abren alrededor del indicador también crecen con
+            // el split: en 0 no aportan nada y la isla no da un salto al abrirse -----
+            plan.gap * ws_split
+        } else {
+            plan.gap
+        };
+        let len = if es_ws(kind) { len * ws_split } else { len };
+        if plan.compact + extra + len > max_len {
+            break;
+        }
+        plan.items.push((kind, len));
+        plan.compact += extra + len;
+        prev_ws = es_ws(kind);
+    }
+    // ----- el piso: un blob, aunque las actividades midan menos. Sin actividades NO
+    // se aplica: `compact = 0` es "no hay isla" y el dock colapsa a nada (si no, el
+    // reveal terminaría en un blob que `draw_island` no dibuja) -----
+    if !plan.items.is_empty() {
+        plan.compact = plan.compact.max(cross * super::ISLAND_COMPACT).min(max_len);
+    }
+    plan
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -561,6 +790,8 @@ mod hit_layout_tests {
             ram: None,
             ram_gb: None,
             volume: Some((50, false)),
+            mic: None,
+            recording: None,
             network: NetworkInfo {
                 label: "wifi".into(),
                 online: true,
@@ -782,11 +1013,14 @@ mod hit_layout_tests {
             );
             let _ = widget_natural_len(kind, &s, &w, 1, false, CROSS, SCALE_DEL_BUG);
         }
-        assert_eq!(WIDGETS.len(), 13, "la tabla cambio de tamano");
-        // ----- Ajustes sigue ofreciendo sólo los 12 fijos: el índice de un
-        // `Custom` se escribe a mano en el JSON -----
+        // ----- 14 fijos + la entrada `Custom`. Cambiar estos números es la señal de
+        // que se agregó un widget: hay que tocar la tabla (y nada más: el orden y las
+        // etiquetas de Ajustes salen de ella) -----
+        assert_eq!(WIDGETS.len(), 15, "la tabla cambio de tamano");
+        // ----- Ajustes ofrece los 14 fijos: el índice de un `Custom` se escribe a
+        // mano en el JSON -----
         let orden = crate::widget::widget_kind_order();
-        assert_eq!(orden.len(), 12, "Ajustes cambio de tamano");
+        assert_eq!(orden.len(), 14, "Ajustes cambio de tamano");
         assert!(
             !orden
                 .iter()

@@ -15,11 +15,12 @@ use crate::config::WidgetKind;
 // solo bloque: la tabla vive en la raiz, pero el dibujo sigue siendo de `render/` -----
 use crate::render::{
     MarqueeState, WidgetColors, WidgetRect, draw_battery_widget, draw_bluetooth_icon,
-    draw_clock_widget, draw_cpu_widget, draw_kblayout_widget, draw_media_widget,
-    draw_network_widget, draw_power_widget, draw_ram_widget, draw_text_widget, draw_tray_widget,
-    draw_volume_widget, draw_widget_button_bg, draw_workspaces_widget, media_ideal_len,
-    percentage_widget_len, text_widget_len, text_width_estimate_render, tray_geometry,
-    volume_content_len, volume_icon_r, widget_text_px, workspaces_geometry,
+    draw_clock_widget, draw_cpu_widget, draw_kblayout_widget, draw_media_widget, draw_mic_widget,
+    draw_network_widget, draw_power_widget, draw_ram_widget, draw_recording_widget,
+    draw_text_widget, draw_tray_widget, draw_volume_widget, draw_widget_button_bg,
+    draw_workspaces_widget, media_ideal_len, percentage_widget_len, text_widget_len,
+    text_width_estimate_render, tray_geometry, volume_content_len, volume_icon_r, widget_text_px,
+    workspaces_geometry,
 };
 use crate::widgets::WidgetSnapshot;
 use dockyrs_canvas::{IconCache, TextCache};
@@ -77,6 +78,10 @@ pub(crate) enum WidgetAction {
     VolumeStep {
         up: bool,
     },
+    /// Toggle del mute del micrófono (click del widget `Mic`).
+    ToggleMic,
+    /// Arranca/para la grabación corriendo `record-toggle.sh` (click del widget).
+    ToggleRecording,
     NextKbdLayout,
     OpenDockMenu,
     /// Menu del SNI del widget (nm-applet / blueman). El ejecutor sabe el
@@ -102,6 +107,11 @@ pub(crate) struct Ctx<'a> {
     /// Largo del eje corto: `w` en horizontal, `h` en vertical.
     pub(super) cross_len: f32,
     pub(super) tray_count: usize,
+    /// Modo **compacto** de la isla: 26 px de grosor y una sola actividad por vez, así
+    /// que el widget muestra lo mínimo. Hoy sólo lo mira el reloj (hora sin AM/PM y sin
+    /// fecha); el resto de los widgets lo ignoran. La MEDIDA y el DIBUJO leen el mismo
+    /// flag, así que no se pueden despegar (trampa 12).
+    pub(super) compact: bool,
 }
 
 /// Donde se pinta un frame. Se arma una vez por frame y lo reciben todos los
@@ -264,6 +274,25 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
         click: Some(click_volume),
     },
     WidgetSpec {
+        kind: WidgetKind::Mic,
+
+        text: true,
+        label: "Mic",
+        natural_len: len_mic,
+        draw: draw_mic,
+        click: Some(click_mic),
+    },
+    WidgetSpec {
+        kind: WidgetKind::Recording,
+
+        text: true,
+        label: "Recording",
+        natural_len: len_recording,
+        draw: draw_recording,
+        // ----- el click corre `record-toggle.sh` (arranca/para la grabación) -----
+        click: Some(click_recording),
+    },
+    WidgetSpec {
         kind: WidgetKind::KbdLayout,
 
         text: true,
@@ -399,6 +428,16 @@ fn click_volume(cx: &ClickCtx) -> Option<WidgetAction> {
     }
 }
 
+/// El micrófono es un indicador de dos estados: el click togglea el mute (rueda y
+/// click derecho no hacen nada).
+fn click_mic(cx: &ClickCtx) -> Option<WidgetAction> {
+    (cx.click == WidgetClick::Left).then_some(WidgetAction::ToggleMic)
+}
+
+fn click_recording(cx: &ClickCtx) -> Option<WidgetAction> {
+    (cx.click == WidgetClick::Left).then_some(WidgetAction::ToggleRecording)
+}
+
 fn click_kblayout(cx: &ClickCtx) -> Option<WidgetAction> {
     (cx.click == WidgetClick::Left).then_some(WidgetAction::NextKbdLayout)
 }
@@ -408,6 +447,11 @@ fn click_kblayout(cx: &ClickCtx) -> Option<WidgetAction> {
 fn len_clock(cx: &Ctx) -> f32 {
     let s = cx.render_scale;
     let tp = widget_text_px(cx.settings, cx.kind, s);
+    // ----- en la isla va SÓLO la hora (sin AM/PM ni fecha): el ancho sale de la misma
+    // cadena que dibuja `draw_clock_widget` con `compact` (trampa 12) -----
+    if cx.compact {
+        return text_width_estimate_render(cx.widgets.time_short(), tp);
+    }
     // ----- hora y fecha en UNA línea (horizontal) o en UNA columna rotada
     // (vertical): el vertical medía `max` porque las dibujaba en dos columnas
     // lado a lado, y esas dos columnas no entran en el grosor de la barra -----
@@ -429,6 +473,7 @@ fn draw_clock(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         canvas.colors,
         cx.is_vertical,
         widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        cx.compact,
     );
     false
 }
@@ -542,6 +587,86 @@ fn len_volume(cx: &Ctx) -> f32 {
 
 fn draw_volume(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
     draw_volume_widget(
+        canvas.pixmap,
+        canvas.text_cache,
+        cx.widgets,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+        canvas.is_hovered(r),
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    );
+    false
+}
+
+// ----- micrófono -----
+
+/// Etiqueta del micrófono: el estado (el nivel de una entrada no dice nada útil). Con
+/// "" el widget no se dibuja.
+fn mic_label(mic: Option<(u8, bool)>) -> &'static str {
+    match mic {
+        Some((_, true)) => "MUTE",
+        Some(_) => "ON",
+        None => "",
+    }
+}
+
+fn len_mic(cx: &Ctx) -> f32 {
+    let label = mic_label(cx.widgets.mic);
+    if label.is_empty() {
+        return 0.0;
+    }
+    // ----- misma geometría de pastilla que el volumen (icono + etiqueta) -----
+    volume_content_len(
+        label,
+        cx.render_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    )
+}
+
+// ----- grabación -----
+
+fn len_recording(cx: &Ctx) -> f32 {
+    let Some(secs) = cx.widgets.recording else {
+        return 0.0;
+    };
+    let label = crate::widgets::fmt_elapsed(secs);
+    // ----- misma pastilla que el volumen/mic (punto + etiqueta) -----
+    volume_content_len(
+        &label,
+        cx.render_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    )
+}
+
+fn draw_recording(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_recording_widget(
+        canvas.pixmap,
+        canvas.text_cache,
+        cx.widgets,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+        canvas.is_hovered(r),
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    );
+    false
+}
+
+fn draw_mic(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_mic_widget(
         canvas.pixmap,
         canvas.text_cache,
         cx.widgets,
@@ -973,6 +1098,8 @@ mod clock_vertical_tests {
             ram: None,
             ram_gb: None,
             volume: Some((50, false)),
+            mic: None,
+            recording: None,
             network: NetworkInfo {
                 label: "wifi".into(),
                 online: true,
@@ -1001,6 +1128,24 @@ mod clock_vertical_tests {
             is_vertical: true,
             cross_len: CROSS,
             tray_count: 0,
+            // ----- mide como la barra; el compacto tiene su propio test -----
+            compact: false,
+        };
+        (spec_for(WidgetKind::Clock)
+            .expect("reloj en la tabla")
+            .natural_len)(&cx)
+    }
+
+    fn largo_compacto(s: &crate::config::DockSettings, w: &WidgetSnapshot) -> f32 {
+        let cx = Ctx {
+            kind: WidgetKind::Clock,
+            widgets: w,
+            settings: s,
+            render_scale: s.widget_scale,
+            is_vertical: true,
+            cross_len: CROSS,
+            tray_count: 0,
+            compact: true,
         };
         (spec_for(WidgetKind::Clock)
             .expect("reloj en la tabla")
@@ -1026,6 +1171,27 @@ mod clock_vertical_tests {
             tp * 1.5 <= CROSS,
             "una columna de texto ({}) no entra en el grosor de la barra ({CROSS})",
             tp * 1.5
+        );
+    }
+
+    /// La isla muestra SÓLO la hora (sin AM/PM ni fecha): el ancho reservado tiene que
+    /// salir de esa misma cadena, o el blob queda largo de más y el texto no queda
+    /// centrado (el caso real: `11:30 PM 19-Sept` contra `11:30`).
+    #[test]
+    fn el_reloj_compacto_mide_solo_la_hora_sin_ampm() {
+        let s = settings();
+        let w = snapshot();
+        let tp = widget_text_px(&s, WidgetKind::Clock, s.widget_scale);
+        let esperado = text_width_estimate_render(w.time_short(), tp);
+        let compacto = largo_compacto(&s, &w);
+        assert!(
+            (compacto - esperado).abs() < 0.01,
+            "el reloj de la isla mide la hora sin AM/PM: {compacto} vs {esperado}"
+        );
+        assert!(
+            compacto < largo_vertical(&s, &w),
+            "y menos que el de la barra (que lleva la fecha): {compacto} vs {}",
+            largo_vertical(&s, &w)
         );
     }
 }

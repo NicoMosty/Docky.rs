@@ -297,6 +297,160 @@ pub(crate) fn draw_volume_widget(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Micrófono: cápsula + horquilla + pie. **Rojo cuando está muteado** — el `active`
+/// que manda `draw_icon_label` es "hay señal", así que con el mic muteado el ojo lo ve
+/// a primera vista (misma idea que el borde rojo de niri en una ventana urgente).
+fn draw_mic_icon(
+    pixmap: &mut Pixmap,
+    icon_r: f32,
+    cx: f32,
+    cy: f32,
+    colors: &WidgetColors,
+    active: bool,
+) {
+    let s = icon_r;
+    let (rgb, alpha) = if active {
+        (colors.text_rgb, 235)
+    } else {
+        ((255u8, 69u8, 58u8), 255)
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(rgb.0, rgb.1, rgb.2, alpha);
+    paint.anti_alias = true;
+
+    let body = rounded_rect_path(cx - s * 0.34, cy - s * 0.95, s * 0.68, s * 1.30, s * 0.34);
+    pixmap.fill_path(
+        &body,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+
+    // ----- horquilla y pie en un solo trazo -----
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(cx - s * 0.78, cy - s * 0.02);
+    pb.quad_to(cx, cy + s * 0.66, cx + s * 0.78, cy - s * 0.02);
+    pb.move_to(cx, cy + s * 0.60);
+    pb.line_to(cx, cy + s * 0.98);
+    pb.move_to(cx - s * 0.42, cy + s * 0.98);
+    pb.line_to(cx + s * 0.42, cy + s * 0.98);
+    if let Some(path) = pb.finish() {
+        let stroke = tiny_skia::Stroke {
+            width: s * 0.20,
+            ..Default::default()
+        };
+        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+    }
+}
+
+/// Micrófono por defecto: la misma pastilla y el mismo `draw_icon_label` que el
+/// volumen, así la geometría del contenido no se duplica (trampa 12).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_mic_widget(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    widgets: &WidgetSnapshot,
+    zx: f32,
+    zy: f32,
+    zw: f32,
+    zh: f32,
+    render_scale: f32,
+    colors: &WidgetColors,
+    is_vertical: bool,
+    hovered: bool,
+    text_px: f32,
+    icon_r: f32,
+) {
+    let Some((_, muted)) = widgets.mic else {
+        return;
+    };
+    let label = if muted { "MUTE" } else { "ON" };
+    draw_widget_button_bg(pixmap, zx, zy, zw, zh, render_scale, colors, hovered);
+    draw_icon_label(
+        pixmap,
+        text_cache,
+        draw_mic_icon,
+        icon_r,
+        !muted,
+        label,
+        zx,
+        zy,
+        zw,
+        zh,
+        render_scale,
+        colors,
+        is_vertical,
+        text_px,
+    );
+}
+
+/// El "icono" de la grabación es un punto rojo (el mismo rojo que la urgencia y el
+/// mute): va dentro de la misma pastilla, con el tiempo al lado.
+fn draw_rec_dot(
+    pixmap: &mut Pixmap,
+    icon_r: f32,
+    cx: f32,
+    cy: f32,
+    _colors: &WidgetColors,
+    _active: bool,
+) {
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(255, 69, 58, 255);
+    paint.anti_alias = true;
+    let d = icon_r;
+    let path = rounded_rect_path(cx - d / 2.0, cy - d / 2.0, d, d, d / 2.0);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+}
+
+/// Grabación en curso: punto rojo + `MM:SS`. Es el mismo reparto de pastilla que el
+/// volumen y el mic (`draw_icon_label`), así que en la isla se ve igual que en la barra.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_recording_widget(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    widgets: &WidgetSnapshot,
+    zx: f32,
+    zy: f32,
+    zw: f32,
+    zh: f32,
+    render_scale: f32,
+    colors: &WidgetColors,
+    is_vertical: bool,
+    hovered: bool,
+    text_px: f32,
+    icon_r: f32,
+) {
+    let Some(secs) = widgets.recording else {
+        return;
+    };
+    let label = crate::widgets::fmt_elapsed(secs);
+    draw_widget_button_bg(pixmap, zx, zy, zw, zh, render_scale, colors, hovered);
+    draw_icon_label(
+        pixmap,
+        text_cache,
+        draw_rec_dot,
+        icon_r,
+        true,
+        &label,
+        zx,
+        zy,
+        zw,
+        zh,
+        render_scale,
+        colors,
+        is_vertical,
+        text_px,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_network_widget(
     pixmap: &mut Pixmap,
     _text_cache: &mut TextCache,

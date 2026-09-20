@@ -45,6 +45,13 @@ pub enum WidgetKind {
     Ram,
     Network,
     Volume,
+    /// Micrófono por defecto (`@DEFAULT_AUDIO_SOURCE@`): icono + MUTE/ON, y el click
+    /// togglea el mute.
+    Mic,
+    /// Grabación de pantalla en curso (`record-toggle.sh` deja la ruta en
+    /// `~/.cache/dockyrs-recording-path`): punto rojo + tiempo. En la isla aparece
+    /// sola, como actividad viva, aunque no esté colocada en la barra.
+    Recording,
     KbdLayout,
     /// Widget con script, direccionado por su posición en
     /// `DockSettings.custom_widgets`. El payload es un índice, no una

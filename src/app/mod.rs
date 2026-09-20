@@ -53,6 +53,7 @@ mod dock_popup;
 mod draw;
 mod fonts;
 mod notification;
+mod notifications_ui;
 mod osd;
 mod pointer;
 mod popup_menu;
@@ -170,6 +171,9 @@ pub(crate) struct DockPopupMode {
     tray_service: String,
     tray_menu_path: String,
     tray_stack: Vec<Vec<crate::tray::TrayMenuItem>>,
+    /// Id del item cuyo submenú se pidió y todavía no llegó: sin esto, un resultado
+    /// que llega tarde (o el de otro item) abriría el menú equivocado (A3).
+    pending_submenu: Option<i32>,
     // ----- contenido renderizado, reusado entre frames de la animación -----
     content: Option<tiny_skia::Pixmap>,
     content_dirty: bool,
@@ -294,13 +298,15 @@ pub(crate) enum SearchList {
 pub(crate) enum OverlayMode {
     Apps,
     Clipboard,
+    Notifs,
     Wallpaper,
     Windows,
 }
 
-pub(crate) const OVERLAY_ORDER: [OverlayMode; 4] = [
+pub(crate) const OVERLAY_ORDER: [OverlayMode; 5] = [
     OverlayMode::Apps,
     OverlayMode::Clipboard,
+    OverlayMode::Notifs,
     OverlayMode::Wallpaper,
     OverlayMode::Windows,
 ];
@@ -346,6 +352,9 @@ impl App {
         if self.clipboard_mode.is_some() {
             return Some(OverlayMode::Clipboard);
         }
+        if self.notifications_mode.is_some() {
+            return Some(OverlayMode::Notifs);
+        }
         if self.wallpaper_mode.is_some() {
             return Some(OverlayMode::Wallpaper);
         }
@@ -370,11 +379,13 @@ impl App {
         match current {
             OverlayMode::Apps | OverlayMode::Windows => self.close_app_search_mode(qh),
             OverlayMode::Clipboard => self.close_clipboard_mode(qh),
+            OverlayMode::Notifs => self.close_notifications_mode(qh),
             OverlayMode::Wallpaper => self.close_wallpaper_mode(qh),
         }
         match next {
             OverlayMode::Apps => self.open_app_search(qh),
             OverlayMode::Clipboard => self.open_clipboard(qh),
+            OverlayMode::Notifs => self.open_notifications(qh),
             OverlayMode::Wallpaper => self.open_wallpaper_picker(qh),
             OverlayMode::Windows => self.open_windows_mode(qh),
         }
@@ -450,6 +461,15 @@ pub(crate) struct OsdMode {
     panel_h: f32,
 }
 
+/// Panel de notificaciones: el historial y el scroll. Sin selección ni animación —
+/// es el panel más simple del overlay.
+pub(crate) struct NotificationsMode {
+    scroll: f32,
+    hovered: Option<usize>,
+    frame: menu::PanelFrame,
+    is_vertical: bool,
+}
+
 /// HUD que aparece al cambiar de workspace: sólo el indicador de workspaces.
 pub(crate) struct WsFlashMode {
     anim: f32,
@@ -479,11 +499,24 @@ pub struct App {
     pub layer_shell: LayerShell,
     pub layer: LayerSurface,
     pub dock_visible: bool,
+    /// Animación de aparición estilo isla: 0 = colapsado (invisible), 1 = el dock
+    /// entero. El destino lo fija `set_dock_visible`; el paso por frame lo da
+    /// `tick_reveal_frame` desde el callback de frame de la superficie del dock.
+    /// Split de la isla (0 = cerrada, 1 = abierta en dos con el indicador de
+    /// workspaces en el medio). El destino lo fija `show_ws_flash` (al cambiar de
+    /// workspace) y el paso por frame `tick_island_split_frame`.
+    pub island_ws_split: f32,
+    pub island_ws_target: f32,
+    pub reveal_anim: f32,
+    pub reveal_target: f32,
     /// El Overview de niri está abierto. Mientras dure, el dock se queda visible
     /// (`dock_stays_visible`). Lo mantiene el event-stream de niri.
     pub overview_open: bool,
     pub autohide_armed: bool,
     pub applied_geom: Option<(Anchor, (i32, i32, i32, i32))>,
+    /// Última input region aplicada del dock: `None` afuera = todavía no se aplicó,
+    /// `Some(None)` = superficie entera, `Some(Some(rect))` = sólo el blob de la isla.
+    pub applied_input: Option<Option<(i32, i32, i32, i32)>>,
     pub applied_size: Option<(u32, u32)>,
     pub last_ptr_event: Option<std::time::Instant>,
     /// Instante en que el puntero salió de la franja. Sirve para ocultar el dock
@@ -496,6 +529,10 @@ pub struct App {
     /// Enter/Motion que caiga fuera del reloj.
     pub calendar_hover_at: Option<std::time::Instant>,
     pub autohide_hide_tx: std::sync::mpsc::Sender<u64>,
+    /// Peticiones de menú del tray: las resuelve el hilo de `tray::spawn_menu_worker`
+    /// porque `GetLayout` es bloqueante (A3 de AUDIT.md). El resultado vuelve por el
+    /// canal de IPC como `IpcMessage::TrayMenuReady`.
+    pub tray_menu_tx: std::sync::mpsc::Sender<crate::tray::MenuRequest>,
     pub pointer: Option<wl_pointer::WlPointer>,
     pub keyboard: Option<wl_keyboard::WlKeyboard>,
     pub dock: Dock,
@@ -525,6 +562,10 @@ pub struct App {
     pub ws_flash_mode: Option<WsFlashMode>,
     pub ws_reset_tx: std::sync::mpsc::Sender<()>,
     pub notification_mode: Option<NotificationMode>,
+    /// Superficie PROPIA del toast de notificaciones (arriba a la derecha). Se crea al
+    /// primer aviso y se suelta al cerrarse, como el popup: no tiene por qué vivir en
+    /// la superficie del dock, que es una franja de 26 px pegada al borde izquierdo.
+    pub toast_layer: Option<LayerSurface>,
     pub notification_reset_tx: std::sync::mpsc::Sender<u64>,
     /// El watcher de media (`playerctl --follow`) sólo corre con un widget Media
     /// colocado. Ver `App::publish_watcher_wants`.
@@ -560,6 +601,9 @@ pub struct App {
     pub clipboard_history: crate::clipboard::ClipboardHistory,
     pub clipboard_ready_at: std::time::Instant,
     pub clipboard_mode: Option<ClipboardMode>,
+    /// Historial de avisos (el más nuevo primero, tope `NOTIF_HISTORY_CAP`).
+    pub notifications: Vec<menu::NotifyEntry>,
+    pub notifications_mode: Option<NotificationsMode>,
     pub clip_tx: std::sync::mpsc::Sender<(String, Vec<u8>)>,
     pub paste_tx: std::sync::mpsc::Sender<(crate::clipboard::PasteTarget, String)>,
 }
@@ -630,8 +674,11 @@ mod overlay_tabs_tests {
     /// etiquetas, queda mintiendo (pestaña "Clipboard" con el launcher abierto).
     #[test]
     fn la_barra_sigue_el_orden_de_los_modos() {
-        assert_eq!(OVERLAY_ORDER.map(|m| m.tab_index()), [0, 1, 2, 3]);
-        assert_eq!(OVERLAY_TABS, ["Apps", "Clipboard", "Wallpapers", "Windows"]);
+        assert_eq!(OVERLAY_ORDER.map(|m| m.tab_index()), [0, 1, 2, 3, 4]);
+        assert_eq!(
+            OVERLAY_TABS,
+            ["Apps", "Clipboard", "Notifs", "Wallpapers", "Windows"]
+        );
     }
 
     /// En el panel vertical la banda es una columna, así que Shift+↓ tiene que ir a

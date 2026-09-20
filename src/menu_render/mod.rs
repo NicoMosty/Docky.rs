@@ -15,6 +15,8 @@ mod controls;
 mod dock_menu;
 mod dropdowns;
 mod notification;
+mod notifications;
+pub use notifications::*;
 mod osd;
 mod tabs;
 mod theme_picker;

@@ -79,19 +79,31 @@ pub(crate) fn draw_clock_widget(
     colors: &WidgetColors,
     is_vertical: bool,
     text_px: f32,
+    // ----- modo compacto (la isla): sólo la hora, sin AM/PM ni fecha. El ancho que
+    // reserva `len_clock` sale de la MISMA cadena que se dibuja acá (trampa 12) -----
+    compact: bool,
 ) {
+    let time = if compact {
+        widgets.time_short()
+    } else {
+        widgets.time.as_str()
+    };
+    let date = if compact { "" } else { widgets.date.as_str() };
     if is_vertical {
         let time_size = text_px;
         let date_size = text_px;
-        let clock_gap = 3.5 * render_scale;
-        let time_px = text_cache.get(&widgets.time, time_size, colors.text_color, 700);
-        let date_px = text_cache.get_with_family(
-            &widgets.date,
-            date_size,
-            colors.text_color,
-            500,
-            DATE_FONT_FAMILY,
-        );
+        // ----- sin fecha no hay hueco que reservar entre las dos -----
+        let clock_gap = if date.is_empty() {
+            0.0
+        } else {
+            3.5 * render_scale
+        };
+        let time_px = text_cache.get(time, time_size, colors.text_color, 700);
+        let date_px = if date.is_empty() {
+            None
+        } else {
+            text_cache.get_with_family(date, date_size, colors.text_color, 500, DATE_FONT_FAMILY)
+        };
         // ----- UNA columna rotada: hora y fecha una detrás de la otra. Con dos
         // columnas lado a lado cada línea pide 1.5*font en el eje corto (~22px)
         // y el grosor de la barra ronda los 25: el reloj se veía cortado en los
@@ -106,7 +118,7 @@ pub(crate) fn draw_clock_widget(
         draw_text_rotated(
             pixmap,
             text_cache,
-            &widgets.time,
+            time,
             cx,
             cy - time_w / 2.0,
             time_size,
@@ -114,29 +126,33 @@ pub(crate) fn draw_clock_widget(
             700,
         );
         cy -= time_w + clock_gap;
-        draw_text_rotated_family(
-            pixmap,
-            text_cache,
-            &widgets.date,
-            cx,
-            cy - date_w / 2.0,
-            date_size,
-            colors.text_color,
-            500,
-            DATE_FONT_FAMILY,
-        );
+        if !date.is_empty() {
+            draw_text_rotated_family(
+                pixmap,
+                text_cache,
+                date,
+                cx,
+                cy - date_w / 2.0,
+                date_size,
+                colors.text_color,
+                500,
+                DATE_FONT_FAMILY,
+            );
+        }
     } else {
         let time_size = text_px;
         let date_size = text_px;
-        let clock_gap = 3.5 * render_scale;
-        let time_px = text_cache.get(&widgets.time, time_size, colors.text_color, 700);
-        let date_px = text_cache.get_with_family(
-            &widgets.date,
-            date_size,
-            colors.text_color,
-            500,
-            DATE_FONT_FAMILY,
-        );
+        let clock_gap = if date.is_empty() {
+            0.0
+        } else {
+            3.5 * render_scale
+        };
+        let time_px = text_cache.get(time, time_size, colors.text_color, 700);
+        let date_px = if date.is_empty() {
+            None
+        } else {
+            text_cache.get_with_family(date, date_size, colors.text_color, 500, DATE_FONT_FAMILY)
+        };
         let cx = zx + zw / 2.0;
         let cy = zy + zh / 2.0;
         // ----- una sola línea: hora + fecha lado a lado -----
