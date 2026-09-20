@@ -1490,7 +1490,9 @@ sigue **abierto** vive en `AUDIT.md`, no acá.
 
 Se movieron en dos tandas el 2026-09-20: **13** en la limpieza (A1, A2, A3, A4, A6, A7,
 B3, C4, C8, D1, D2, D3, D11) y **9** al cerrar la Ronda 1 (B1, B2, B10, C3, C6, D9, D10,
-D12, D13) y 6 más en la Ronda 2 (B4, D4, D5, D6, D7, D8).
+D12, D13), 6 más en la Ronda 2 (B4, D4, D5, D6, D7, D8) y 6 en la Ronda 3
+(B7, B8, B11, B12, C2, C7).
+
 ### A1 — `wpctl` sin timeout: cuelgue indefinido (AUDIT §4.1)
 
 > **Resuelto** (§3): `read_volume()` pasó a `run_with_timeout(cmd, 500ms)`, el
@@ -1922,6 +1924,68 @@ líneas `wsflash: refresh before=… after=…`. Test: el filtro extraído a una
 pura (`fn niri_event_is_relevant(line: &str) -> bool`) con 4-5 líneas JSON reales de
 `niri msg --json event-stream` como fixture literal, incluidas dos de ventana.
 
+### B7 — `configure` no reconcilia el tamaño con lo dibujado (AUDIT §5.7)
+
+> **Cerrado.** `accion_del_configure()` (pura, con guard) decide entre adoptar el
+> primer configure, **re-aplicar el reparto una vez** cuando el tamaño del compositor no es
+> el que pedimos, y dibujar como vino si el compositor insiste (sin girar en bucle de
+> `set_size` → `configure` → `set_size`). Verificado en vivo: en uso normal la
+> reconciliación no se dispara ni una vez (0 en el log) y los `configure` siguen
+> coincidiendo. Guard: `app::handlers::configure_accion_tests`.
+
+**Archivo:** `src/app/handlers.rs:150-170`
+
+```rust
+log::debug!("dock: configure new_size={:?} base={:?} applied={:?}", …);
+if self.first_configure { self.first_configure = false; }
+self.draw(qh);
+```
+
+El repo conoce el peligro —está en el comentario: *"si no coinciden, el buffer se
+estira y los clicks caen corridos"*— pero sólo lo **loguea**. Si el compositor impone
+un `new_size` distinto del `base_size()` (layer-shell permite que el compositor
+ajuste el tamaño), el buffer se estira y los hit tests —que trabajan en coordenadas
+lógicas del layout— quedan corridos. Mismo síntoma que el bug histórico de
+`hit_scale`, por otra causa.
+
+**Fix mínimo:** si `configure.new_size != (0,0)` y difiere de `applied_size`,
+loguearlo como `warn` y forzar `relayout_dock`. Como mínimo, dejar de ser silencioso.
+
+**Verificación:** parcial — en el log, `configure new_size` y `base` deben coincidir
+en operación normal; si alguna vez no coinciden, el fix tiene que actuar.
+
+### B8 — Carátula: metadata MPRIS no confiable (AUDIT §5.8)
+
+> **Cerrado.** El `curl` de la carátula lleva `--max-filesize` de 8 MB y, después, un
+> chequeo del tamaño real del archivo (el flag de curl sólo actúa si el servidor manda
+> `Content-Length`): si se pasó, se borra y no se usa. El resto del hallazgo ya estaba
+> cubierto: `resolve_art_path` sólo acepta http(s) o `file://` (el resto se ignora sin
+> salir a la red) y el nombre en el caché es un HASH de la URL, así que no puede escribir
+> fuera de `~/.cache/dockyrs/art`. Guard: `widgets::art_url_tests`.
+
+**Archivo:** `src/widgets.rs:896-954`
+
+Cualquier aplicación con MPRIS (o cualquier proceso que pueda publicar un bus name
+`org.mpris.MediaPlayer2.*`) puede hacer que dockyrs:
+
+1. haga una request HTTP saliente a una URL arbitraria (fuga de que hay una sesión
+   con este dock a un host atacante), y
+2. escriba el cuerpo de la respuesta en `~/.cache/dockyrs/art/` y después lo
+   **decodifique** (`image`, superficie de ataque de parsers).
+
+**Severidad real: baja** (mismo usuario, mismo privilegio, no hay escalada), pero es
+la única entrada de datos remotos no confiables del programa y merece constar. Lo
+bueno: `--max-time 3`, extensión derivada de la URL (no del contenido → sin path
+traversal) y hash de la URL como nombre (sin path injection).
+
+**Fix mínimo:** aceptar sólo `http`/`https`, ignorar `file://` inexistente, y limitar
+el tamaño descargado (`--max-filesize`). El `--fail` de este hallazgo ya está puesto;
+lo que falta es el tope.
+
+**Verificación:** unit tests de `resolve_art_path`/`youtube_thumbnail_url` con URLs
+hostiles (`file:///etc/passwd`, `http://x/../../y.png`, URLs de 10 KB,
+`http://x/%`).
+
 ### B10 — Elegir fuente pisa la config del usuario sin escritura atómica (AUDIT §5.16)
 
 > **Resuelto.** Las escrituras de `gtk-3.0/settings.ini`, `gtk-4.0/settings.ini`,
@@ -1969,6 +2033,98 @@ Y conservar el original si el parseo falla (no reconstruir desde cero cuando
 renombrar deja el original intacto); manual: elegir una fuente y verificar que
 `kitty.conf` conserva el resto de las líneas. `git diff --no-index` contra una copia
 previa sirve de evidencia.
+
+### B11 — `dockyrs-notifyd` ignora el perfil: no entrega notificaciones (AUDIT §5.17)
+
+> **Cerrado.** El notifyd acepta `--profile` (y `--profile=<x>`) y, si no hay perfil ni
+> `dockyrs.sock`, le habla a **todas** las instancias que estén escuchando (con `warn` si
+> no hay ninguna): antes mandaba el aviso a `dockyrs.sock`, donde con una instancia por
+> monitor no escucha nadie, y se perdía en silencio. Verificado en vivo: con
+> `--profile pruebas` el log dice `no hay dock escuchando en …/dockyrs-pruebas.sock` (antes
+> habría ido al default). Guards: `destinos_tests`.
+
+**Archivo:** `src/bin/dockyrs-notifyd.rs:13-16`
+
+```rust
+fn socket_path() -> std::path::PathBuf {
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    std::path::PathBuf::from(dir).join("dockyrs.sock")
+}
+```
+
+El socket está **hardcodeado sin perfil**, mientras que el dock lo deriva del perfil
+(`ipc.rs:26-33`: `dockyrs-<perfil>.sock`). El README y `niri-config.kdl.example`
+documentan explícitamente el setup multi-monitor con `--profile dp` / `--profile hdmi`:
+con ese setup el notifyd escribe en `dockyrs.sock`, que **no existe** (o pertenece a la
+instancia sin perfil, que puede no estar corriendo). Resultado: las notificaciones del
+sistema se pierden en silencio y sin log.
+
+Además `forward()` (línea 18-26) arma `notify<US>título<cuerpo>` y lo manda de una:
+el lado receptor corta a 1024 bytes (C6), así que un cuerpo real de una notificación de
+chat (que suele pasar de 1 KB) **llega truncado**. Acá el truncado no es un caso de
+borde del IPC: es el camino normal, porque `dockyrs-notifyd` es el productor.
+
+**Fix:** aceptar `--profile` (mismo `parse_cli` que `main.rs:50-71`) y
+derivar el nombre del socket igual que `ipc::socket_path` — mejor todavía: exponer
+`ipc::socket_path` como `pub` y usarlo desde el binario, para que no haya dos
+implementaciones de lo mismo. Y que `forward` registre un warn si el socket no está.
+
+**Verificación:** `dockyrs-notifyd --profile dp` + `notify-send hola` con el dock
+corriendo con `--profile dp`: tiene que aparecer. Antes del fix, no aparece nunca.
+
+### B12 — Pegar del portapapeles lee sin tope (AUDIT §5.18)
+
+> **Cerrado.** La lectura del pipe pasa por `leer_pegado()`, con tope de 64 KB y `warn` al
+> cortar (el pegado se usa para 6 caracteres de hex o 24 de nombre). Era el único hallazgo
+> de la lista que podía tumbar el proceso por una entrada de datos. Guard:
+> `clipboard::paste::paste_tope_tests`.
+
+**Archivo:** `src/clipboard/paste.rs:52-62`
+
+```rust
+std::thread::spawn(move || {
+    use std::io::Read;
+    let mut file = std::fs::File::from(r);
+    let mut buf = Vec::new();
+    if file.read_to_end(&mut buf).is_ok() {
+```
+
+`read_to_end` sobre el pipe del portapapeles **sin límite**: si el dueño del
+portapapeles ofrece un `text/plain` de varios GB (un log, un dump — cualquier app
+puede setearlo), el `Vec` crece hasta agotar la memoria. Es el camino de
+"pegar en el campo de hex o de nombre del panel" (un click del usuario), así que no es
+remoto, pero el límite ya existe en el resto del módulo (`TEXT_LIMIT = 256 * 1024`,
+`clipboard/mod.rs:22`) y acá no se aplica. Ojo: `TEXT_LIMIT` es privado del módulo
+`clipboard`, así que el fix usa `super::TEXT_LIMIT`:
+
+**Fix mínimo:**
+
+```rust
+let mut file = std::fs::File::from(r);
+let mut buf = Vec::new();
+if file.take(super::TEXT_LIMIT as u64).read_to_end(&mut buf).is_ok() {
+```
+
+**Verificación:** test que sirve un pipe con 1 MB y verifica que `buf` queda en
+`TEXT_LIMIT`. La sanitización posterior ya está bien (`apply_pending_paste` filtra a
+hexdigits / no-control con `take(6)` / `take(24)`): no la toques.
+
+### C2 — `DockMenuMode.closing` es código muerto (AUDIT §6.2)
+
+> **Cerrado.** `DockMenuMode.closing` nunca se ponía en `true`, así que la rama que lo leía
+> en `tick_dock_menu_frame` era código muerto (el cierre va por `close_dock_menu`). Se
+> borraron el campo y la rama, y quedó anotado que la ruta de cierre es UNA. Verificado en
+> vivo: el panel de ajustes abre (555x584) y cierra (26x584) igual que antes.
+
+El campo se declara en `src/app/mod.rs:199` (dentro de `DockMenuMode`, `:190`) y se
+inicializa en `src/app/dock_menu.rs:130`; `dock_menu.rs:401` lo lee. Nunca se pone en
+`true`: `close_dock_menu` (`dock_menu.rs:184`) anula el modo de una, así que la rama
+`if closing && anim <= 0.0` (`dock_menu.rs:405`) es inalcanzable.
+
+**Precisión sobre `AGENTS.md`:** dice que el campo muerto está en *"`WsFlashMode`/
+`DockMenuMode`"*. En `WsFlashMode` **sí** se usa (`ws_flash.rs:81` lo pone en `true`,
+`:205` lo lee). El muerto es sólo `DockMenuMode.closing`. Corregir el texto junto con
+el código: borrar el campo y la rama inalcanzable.
 
 ### C3 — `Config::load` descarta apps y ajustes si el JSON no parsea (AUDIT §6.3)
 
@@ -2026,6 +2182,41 @@ del tray y el selector de screenshot".
 cuerpo separados por `\u{1f}` en ese buffer. Un cuerpo largo se corta **en silencio**
 (no hay bucle de lectura ni longitudes). **Fix mínimo:** leer hasta EOF acumulando en
 un `Vec`, o truncar con `…` visible en vez de cortar en seco.
+
+### C7 — `dockyrs-notifyd` detiene los otros daemons de notificaciones (AUDIT §6.12)
+
+> **Cerrado.** El notifyd ya no apaga dunst/mako/swaync/fnott/wired cuando el nombre está
+> tomado: avisa quién lo tiene (con el pid) y sale con código 1. Apagar la app del usuario
+> por detrás no es decisión de ese binario. Verificado en vivo: el notifyd nuevo tomó el
+> nombre y un `notify-send` real llegó al dock (toast), sin un solo `pkill`.
+
+**Archivo:** `src/bin/dockyrs-notifyd.rs:68-76`
+
+```rust
+let flags = RequestNameFlags::ReplaceExisting | RequestNameFlags::AllowReplacement;
+if conn.request_name_with_flags("org.freedesktop.Notifications", flags)? != RequestNameReply::PrimaryOwner {
+    let hush = || std::process::Stdio::null();
+    for daemon in ["dunst", "mako", "swaync", "fnott", "wired"] {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "stop", &format!("{daemon}.service")])
+            …
+        let _ = std::process::Command::new("pkill").args(["-x", daemon])…
+```
+
+Si no obtiene el nombre, el daemon **mata** dunst/mako/swaync/fnott/wired por systemd
+y por `pkill`, en cada arranque. `AGENTS.md` avisa "no arranques `dockyrs-notifyd` si
+ya hay otro daemon", pero el binario ya lo resuelve solo y por la fuerza: matar el
+daemon que el usuario eligió es una decisión que no le corresponde al dock. Si además
+el usuario lo tiene como dependencia de otra cosa (p. ej. swaync para el centro de
+notificaciones), le rompe algo más.
+
+**Fix mínimo:** no matar nada. Si el nombre está tomado, loguear `warn` con quién lo
+tiene (`GetNameOwner`) y salir con código de error, dejando que decida el usuario. Si
+se quiere conservar el comportamiento, hacerlo opt-in por env
+(`DOCKYRS_NOTIFYD_TAKE_OVER=1`).
+
+**Verificación:** con dunst corriendo, arrancar `dockyrs-notifyd` y comprobar con
+`systemctl --user is-active dunst` que sigue activo.
 
 ### C8 — HECHO: AGENTS trampa 2 ya corregida en el árbol (AUDIT §6.13)
 
@@ -2496,16 +2687,15 @@ requeriría cambiar la key a algo tipo `Arc<str>`. **Verificación:** test con
   - Lo que **no** conviene: swipe para descartar (no hay detección de gestos y el
     mouse-out ya cierra), squish/stretch (la forma es un rounded-rect en un eje) y
     badges/Face ID/AirDrop (no hay fuente de dato).
-  - **Prioridad honesta**: `AUDIT.md` quedó con **11 hallazgos abiertos** (A5 a medias,
-    6 MEDIA y 4 BAJA) después de cerrar la Ronda 2 el 2026-09-20; los 28 cerrados viven
-    en “Cerrado de AUDIT.md”, arriba. Lo que queda, por orden: **B12** (pegar del
-    portapapeles lee sin tope — el único que puede tumbar el proceso), después
-    **B5/B6/B7/B8/B11/C7** (reconexión D-Bus, `repo_dir`, `configure`, URLs de la
-    carátula, `--profile` del notifyd, y que el notifyd deje de matar otros daemons) y
-    al final **A5/C1/C2/C5** (el resto del guard, `DrawArgs`, `closing` muerto y huecos
-    de tests). **A5** sigue a medias: el `catch_unwind` no cubre los drenajes de IPC
-    posteriores al `match`, y ahí la decisión documentada en `main.rs` es arreglar en la
-    fuente, no envolver más código.
+  - **Prioridad honesta**: `AUDIT.md` quedó con **2 hallazgos abiertos** después de cerrar
+    la Ronda 3 el 2026-09-20: **B5** (la conexión D-Bus del tray se cachea sin reconexión:
+    importa si reiniciás el bus de sesión) y **C5** (los tests de `Dock::drag_to`/`icon_at`,
+    que piden un fixture con iconos). Los **34 cerrados** están en “Cerrado de AUDIT.md”,
+    arriba, con la evidencia de cada uno. Y hay **tres decisiones** documentadas en la §3
+    del audit, que no son deuda: **A5** en parte (los drenajes de IPC se arreglan en la
+    fuente, y los `.lock().unwrap()` no son alcanzables porque el `reexec` ya pasó),
+    **B6** (`repo_dir` sólo afecta a los `sync-*.sh`, que acá no se usan) y **C1**
+    (`DrawArgs` a todo `render/`: 57 sitios sin prevención real).
   - **Verificado 2026-09-20 en una pasada por los pendientes**: de los dos puntos
     marcados "sin verificar a ojo" quedó **cero**. La grabación andaba pero tarde
     (trampa 17: el tick dormía 20 s, no 1) y el widget `Mic` quedó confirmado

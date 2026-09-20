@@ -10,10 +10,10 @@
 >
 > **Este documento lista SÓLO lo que sigue abierto.** Los hallazgos ya cerrados
 > (A1, A2, A3, A4, A6, A7, B1, B2, B3, B10, C3, C4, C6, C8, D1, D2, D3, D9, D10, D11,
-> D12 y D13) más los de la Ronda 2 (B4, D4, D5, D6, D7, D8) se movieron a `AGENTS.md` →
-> “Cerrado de AUDIT.md”, con lo que se hizo y cómo se verificó; los números de sección
-> que faltan abajo son justamente esos. A5 y C5 quedaron a medias: lo pendiente sigue en
-> su sección, con una nota arriba.
+> D12 y D13), los de la Ronda 2 (B4, D4, D5, D6, D7, D8) y los de la Ronda 3 (B7, B8,
+> B11, B12, C2, C7) se movieron a `AGENTS.md` → “Cerrado de AUDIT.md”, con lo que se hizo
+> y cómo se verificó; los números de sección que faltan abajo son justamente esos. Queda
+> **C5** a medias y las **decisiones** de §3 (A5 en parte, B6, C1).
 
 ---
 
@@ -33,7 +33,9 @@
 6. **Un hallazgo cerrado SE MUDA**: se borra de este documento y va a `AGENTS.md` →
    “Cerrado de AUDIT.md”, con lo que se hizo, la evidencia y el commit. Este documento
    lista **sólo lo abierto**: si algo queda acá, es que falta. (Así se hizo el 2026-09-20,
-   que movió 13 hallazgos en la limpieza, 9 al cerrar la Ronda 1 y 6 en la Ronda 2.)
+   que movió 13 hallazgos en la limpieza, 9 al cerrar la Ronda 1, 6 en la Ronda 2 y 6 en
+   la Ronda 3.) Si un hallazgo queda abierto **a propósito**, no se borra: pasa a
+   “Decisiones” en §3 con el porqué, para que se lea como elección y no como deuda.
 7. **Estado del árbol de trabajo** (ver §2): limpio y pusheado. Si encontrás algo sin
    commitear, primero mirá si `AGENTS.md` lo describe: puede ser trabajo a medias de
    otra sesión. No lo reviertas sin leerlo.
@@ -91,26 +93,25 @@ antes de tocarlo).
 
 ## 3. Resumen ejecutivo
 
-**Pendientes: 11 hallazgos** (1 ALTA a medias, 6 MEDIA y 4 BAJA). Lo ya cerrado está en
-`AGENTS.md` → “Cerrado de AUDIT.md” (28 hallazgos, con la evidencia de cómo se verificó
-cada uno). Lo que quedó a medias (A5 y C5) tiene una nota al principio de su sección.
+**Pendientes: 2 hallazgos** (B5, MEDIA, y C5, BAJA y a medias con los tests de
+`Dock::drag_to`/`icon_at`). Lo cerrado está en `AGENTS.md` → “Cerrado de AUDIT.md”,
+**34 hallazgos** con la evidencia de cómo se verificó cada uno.
 
 | ID | Sev. | Título | Archivo |
 | --- | --- | --- | --- |
-| **A5** | ALTA | Cualquier panic mata el dock; no hay recuperación ni supervisión | varios (§4.7) |
 | **B5** | MEDIA | Conexión D-Bus del tray cacheada sin reconexión → tray muerto permanente | `tray.rs:187` |
-| **B6** | MEDIA | `repo_dir()` depende de la ruta del binario: theming se pierde sin aviso | `app/mod.rs:494` |
-| **B7** | MEDIA | `configure` no reconcilia `new_size` con lo dibujado → clicks corridos | `handlers.rs:154` |
-| **B8** | MEDIA | Carátula: metadata MPRIS no confiable → request saliente + escritura en caché | `widgets.rs:932` |
-| **B11** | MEDIA | `dockyrs-notifyd` ignora `--profile`: con instancias por perfil no llega ninguna notificación | `bin/dockyrs-notifyd.rs:13` |
-| **B12** | MEDIA | Pegar del portapapeles lee con `read_to_end` sin tope → OOM con texto enorme | `clipboard/paste.rs:56` |
-| **C1** | BAJA | 12 funciones con 8-11 argumentos (síntoma: `DrawArgs` a medio migrar) | §6.1 |
-| **C2** | BAJA | `DockMenuMode.closing` es código muerto | `app/dock_menu.rs:349` |
-| **C5** | BAJA | Huecos de tests (watchers/timers) — el resto ya está cubierto | §6.5 |
-| **C7** | BAJA | `dockyrs-notifyd` detiene dunst/mako/swaync/fnott/wired en cada arranque | `bin/dockyrs-notifyd.rs:78` |
+| **C5** | BAJA | Huecos de tests: quedan los de drag/`icon_at` | §6.5 |
 
-Prioridad de ejecución: **B12 (lectura sin tope del paste) → B5/B6/B7/B11/C7 (E/S) →
-A5 (el resto del guard) → C1/C2/C5.** El detalle, en §8.
+### Decisiones (no se hace, con el porqué)
+
+Estos tres quedan **abiertos a propósito**: no son trabajo pendiente, son el estado que
+eligió el repo. Si algún día cambia el supuesto, se retoman.
+
+| ID | Por qué no se hace |
+| --- | --- |
+| **A5** (parte) | El `catch_unwind` cubre el dispatch y no los drenajes de IPC posteriores al `match`: `main.rs` documenta que ahí se arregla **en la fuente**, no envolviendo más código. Y los ~60 `.lock().unwrap()` no son alcanzables: un panic mientras se tiene el lock ya disparó el `reexec` (o mató el proceso), así que el veneno no sobrevive. |
+| **B6** | `repo_dir()` sale de la ruta del binario y sólo afecta a los `sync-*.sh` de theming, que en este setup no se usan (el dock corre desde el repo). El fix real sería un `warn` cuando no encuentra los scripts. |
+| **C1** | Pasar `DrawArgs` a todo `render/` son ~57 sitios para no prevenir ningún fallo: la invariante ya vive en el adaptador (`hit_layout`). Medido y descartado. |
 
 ---
 
@@ -165,10 +166,11 @@ debe devolver sólo sitios del arranque (donde fallar es correcto) y tests.
 
 ## 5. Severidad MEDIA — robustez, corrección y E/S
 
-Faltan 5.1 (B1), 5.2 (B2), 5.3 (B3), 5.4 (B4), 5.9 (D2), 5.10 (D3), 5.11 (D4), 5.12 (D5),
-5.13 (D6), 5.14 (D7), 5.15 (D8) y 5.16 (B10): ya cerrados, ver `AGENTS.md` → “Cerrado de
-AUDIT.md”. El resto sigue abierto, y los números se conservan para no romper las
-referencias del §10 y del anexo.
+Faltan 5.1 (B1), 5.2 (B2), 5.3 (B3), 5.4 (B4), 5.7 (B7), 5.8 (B8), 5.9 (D2), 5.10 (D3),
+5.11 (D4), 5.12 (D5), 5.13 (D6), 5.14 (D7), 5.15 (D8), 5.16 (B10), 5.17 (B11) y 5.18
+(B12): ya cerrados, ver `AGENTS.md` → “Cerrado de AUDIT.md”. Lo que queda de esta
+severidad es **B5** (reconexión D-Bus del tray) y **B6** (decisión, ver §3); los números se
+conservan para no romper las referencias del §10 y del anexo.
 
 ---
 
@@ -235,133 +237,17 @@ fondo con `accent_from_wallpaper` debe aparecer el warn en el log.
 
 ---
 
-### 5.7 — `configure` no reconcilia el tamaño con lo dibujado {#b7}
-
-**Archivo:** `src/app/handlers.rs:150-170`
-
-```rust
-log::debug!("dock: configure new_size={:?} base={:?} applied={:?}", …);
-if self.first_configure { self.first_configure = false; }
-self.draw(qh);
-```
-
-El repo conoce el peligro —está en el comentario: *"si no coinciden, el buffer se
-estira y los clicks caen corridos"*— pero sólo lo **loguea**. Si el compositor impone
-un `new_size` distinto del `base_size()` (layer-shell permite que el compositor
-ajuste el tamaño), el buffer se estira y los hit tests —que trabajan en coordenadas
-lógicas del layout— quedan corridos. Mismo síntoma que el bug histórico de
-`hit_scale`, por otra causa.
-
-**Fix mínimo:** si `configure.new_size != (0,0)` y difiere de `applied_size`,
-loguearlo como `warn` y forzar `relayout_dock`. Como mínimo, dejar de ser silencioso.
-
-**Verificación:** parcial — en el log, `configure new_size` y `base` deben coincidir
-en operación normal; si alguna vez no coinciden, el fix tiene que actuar.
-
----
-
-### 5.8 — Carátula: metadata MPRIS no confiable {#b8}
-
-**Archivo:** `src/widgets.rs:896-954`
-
-Cualquier aplicación con MPRIS (o cualquier proceso que pueda publicar un bus name
-`org.mpris.MediaPlayer2.*`) puede hacer que dockyrs:
-
-1. haga una request HTTP saliente a una URL arbitraria (fuga de que hay una sesión
-   con este dock a un host atacante), y
-2. escriba el cuerpo de la respuesta en `~/.cache/dockyrs/art/` y después lo
-   **decodifique** (`image`, superficie de ataque de parsers).
-
-**Severidad real: baja** (mismo usuario, mismo privilegio, no hay escalada), pero es
-la única entrada de datos remotos no confiables del programa y merece constar. Lo
-bueno: `--max-time 3`, extensión derivada de la URL (no del contenido → sin path
-traversal) y hash de la URL como nombre (sin path injection).
-
-**Fix mínimo:** aceptar sólo `http`/`https`, ignorar `file://` inexistente, y limitar
-el tamaño descargado (`--max-filesize`). El `--fail` de este hallazgo ya está puesto;
-lo que falta es el tope.
-
-**Verificación:** unit tests de `resolve_art_path`/`youtube_thumbnail_url` con URLs
-hostiles (`file:///etc/passwd`, `http://x/../../y.png`, URLs de 10 KB,
-`http://x/%`).
-
 ---
 
 ---
-
----
-
-### 5.17 — `dockyrs-notifyd` ignora el perfil: no entrega notificaciones {#b11}
-
-**Archivo:** `src/bin/dockyrs-notifyd.rs:13-16`
-
-```rust
-fn socket_path() -> std::path::PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    std::path::PathBuf::from(dir).join("dockyrs.sock")
-}
-```
-
-El socket está **hardcodeado sin perfil**, mientras que el dock lo deriva del perfil
-(`ipc.rs:26-33`: `dockyrs-<perfil>.sock`). El README y `niri-config.kdl.example`
-documentan explícitamente el setup multi-monitor con `--profile dp` / `--profile hdmi`:
-con ese setup el notifyd escribe en `dockyrs.sock`, que **no existe** (o pertenece a la
-instancia sin perfil, que puede no estar corriendo). Resultado: las notificaciones del
-sistema se pierden en silencio y sin log.
-
-Además `forward()` (línea 18-26) arma `notify<US>título<cuerpo>` y lo manda de una:
-el lado receptor corta a 1024 bytes (C6), así que un cuerpo real de una notificación de
-chat (que suele pasar de 1 KB) **llega truncado**. Acá el truncado no es un caso de
-borde del IPC: es el camino normal, porque `dockyrs-notifyd` es el productor.
-
-**Fix:** aceptar `--profile` (mismo `parse_cli` que `main.rs:50-71`) y
-derivar el nombre del socket igual que `ipc::socket_path` — mejor todavía: exponer
-`ipc::socket_path` como `pub` y usarlo desde el binario, para que no haya dos
-implementaciones de lo mismo. Y que `forward` registre un warn si el socket no está.
-
-**Verificación:** `dockyrs-notifyd --profile dp` + `notify-send hola` con el dock
-corriendo con `--profile dp`: tiene que aparecer. Antes del fix, no aparece nunca.
-
----
-
-### 5.18 — Pegar del portapapeles lee sin tope {#b12}
-
-**Archivo:** `src/clipboard/paste.rs:52-62`
-
-```rust
-std::thread::spawn(move || {
-    use std::io::Read;
-    let mut file = std::fs::File::from(r);
-    let mut buf = Vec::new();
-    if file.read_to_end(&mut buf).is_ok() {
-```
-
-`read_to_end` sobre el pipe del portapapeles **sin límite**: si el dueño del
-portapapeles ofrece un `text/plain` de varios GB (un log, un dump — cualquier app
-puede setearlo), el `Vec` crece hasta agotar la memoria. Es el camino de
-"pegar en el campo de hex o de nombre del panel" (un click del usuario), así que no es
-remoto, pero el límite ya existe en el resto del módulo (`TEXT_LIMIT = 256 * 1024`,
-`clipboard/mod.rs:22`) y acá no se aplica. Ojo: `TEXT_LIMIT` es privado del módulo
-`clipboard`, así que el fix usa `super::TEXT_LIMIT`:
-
-**Fix mínimo:**
-
-```rust
-let mut file = std::fs::File::from(r);
-let mut buf = Vec::new();
-if file.take(super::TEXT_LIMIT as u64).read_to_end(&mut buf).is_ok() {
-```
-
-**Verificación:** test que sirve un pipe con 1 MB y verifica que `buf` queda en
-`TEXT_LIMIT`. La sanitización posterior ya está bien (`apply_pending_paste` filtra a
-hexdigits / no-control con `take(6)` / `take(24)`): no la toques.
 
 ---
 
 ## 6. Severidad BAJA
 
-Faltan 6.3 (C3), 6.4 (C4), 6.6 (C6), 6.7 (D9), 6.8 (D10), 6.10 (D12), 6.11 (D13) y 6.13
-(C8): ya cerrados. 6.5 (C5) quedó a medias: en su sección está dicho qué falta.
+Faltan 6.2 (C2), 6.3 (C3), 6.4 (C4), 6.6 (C6), 6.7 (D9), 6.8 (D10), 6.10 (D12), 6.11 (D13),
+6.12 (C7) y 6.13 (C8): ya cerrados. 6.1 (C1) y 6.5 (C5) están en §3: C1 es decisión y C5
+quedó a medias (en su sección está dicho qué falta).
 
 ### 6.1 — 12 funciones con 8-11 argumentos (clippy `too_many_arguments`) {#c1}
 
@@ -394,27 +280,16 @@ Además hay 5 lints fuera de esta lista (verificados con
 build de tests `items_after_test_module` (`wallpaper.rs`) y `field_reassign_with_default`
 (`menu/widget_chips.rs:236`, código de test).
 
-### 6.2 — `DockMenuMode.closing` es código muerto {#c2}
-
-El campo se declara en `src/app/mod.rs:199` (dentro de `DockMenuMode`, `:190`) y se
-inicializa en `src/app/dock_menu.rs:130`; `dock_menu.rs:401` lo lee. Nunca se pone en
-`true`: `close_dock_menu` (`dock_menu.rs:184`) anula el modo de una, así que la rama
-`if closing && anim <= 0.0` (`dock_menu.rs:405`) es inalcanzable.
-
-**Precisión sobre `AGENTS.md`:** dice que el campo muerto está en *"`WsFlashMode`/
-`DockMenuMode`"*. En `WsFlashMode` **sí** se usa (`ws_flash.rs:81` lo pone en `true`,
-`:205` lo lee). El muerto es sólo `DockMenuMode.closing`. Corregir el texto junto con
-el código: borrar el campo y la rama inalcanzable.
-
 ### 6.5 — Huecos de tests {#c5}
 
-> **Parcialmente resuelto.** De la lista de abajo ya están cubiertos: 1 (el reparto de
-> `workspaces.rs` tiene `workspace_hit_tests`), 2 en la parte de `percent_decode`
-> (`percent_decode_tests`), 3 (`ipc.rs` tiene 3 tests, incluido el filtro del
-> `event-stream`) y 5 en parte (los timers siguen sin test propio). **Lo que falta:**
-> los timers (`spawn_*_timer`), `wallpaper_program()`, `resolve_art_path` (B8),
-> `tray_geometry` con `widget_scale ≠ 1` y `Dock::drag_to`/`icon_at`. Con eso los tests
-> pasaron de 37 a **147**.
+> **Casi cerrado.** De la lista de abajo están cubiertos: 1 (el reparto de `workspaces.rs`
+> tiene `workspace_hit_tests`), 2 (`percent_decode_tests` y, para `resolve_art_path`, el
+> guard de B8), 3 (`ipc.rs` tiene 3 tests, incluido el filtro del `event-stream`), 4 (el
+> filtro de niri, en el mismo test) y 5 (`timers_tests`, con el borde de plazo 0). También
+> `wallpaper_program()` (`wallpaper_program_tests`). **Lo que queda:** los tests de
+> `Dock::drag_to`/`icon_at` (hacen falta fixtures con iconos) y, si algún día se quiere
+> más, `tray_geometry` con `widget_scale ≠ 1` propio. Con todo esto los tests pasaron de 37
+> a **172** (162 en el paquete raíz, 3 del notifyd y 7 del crate del raster).
 
 37 tests cuando se escribió esto, y los que hay son buenos: geometría y hit tests con
 escala
@@ -441,36 +316,6 @@ Sin cobertura, ordenado por riesgo:
 7. `tray_geometry`/`tray_icon_hit` con `widget_scale ≠ 1` (hoy sólo se testea
    `nearest_tray_index`).
 8. `Dock::drag_to`/`end_drag`/`icon_at` a nivel de `Dock`.
-
-### 6.12 — `dockyrs-notifyd` detiene los otros daemons de notificaciones {#c7}
-
-**Archivo:** `src/bin/dockyrs-notifyd.rs:68-76`
-
-```rust
-let flags = RequestNameFlags::ReplaceExisting | RequestNameFlags::AllowReplacement;
-if conn.request_name_with_flags("org.freedesktop.Notifications", flags)? != RequestNameReply::PrimaryOwner {
-    let hush = || std::process::Stdio::null();
-    for daemon in ["dunst", "mako", "swaync", "fnott", "wired"] {
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", "stop", &format!("{daemon}.service")])
-            …
-        let _ = std::process::Command::new("pkill").args(["-x", daemon])…
-```
-
-Si no obtiene el nombre, el daemon **mata** dunst/mako/swaync/fnott/wired por systemd
-y por `pkill`, en cada arranque. `AGENTS.md` avisa "no arranques `dockyrs-notifyd` si
-ya hay otro daemon", pero el binario ya lo resuelve solo y por la fuerza: matar el
-daemon que el usuario eligió es una decisión que no le corresponde al dock. Si además
-el usuario lo tiene como dependencia de otra cosa (p. ej. swaync para el centro de
-notificaciones), le rompe algo más.
-
-**Fix mínimo:** no matar nada. Si el nombre está tomado, loguear `warn` con quién lo
-tiene (`GetNameOwner`) y salir con código de error, dejando que decida el usuario. Si
-se quiere conservar el comportamiento, hacerlo opt-in por env
-(`DOCKYRS_NOTIFYD_TAKE_OVER=1`).
-
-**Verificación:** con dunst corriendo, arrancar `dockyrs-notifyd` y comprobar con
-`systemctl --user is-active dunst` que sigue activo.
 
 ---
 
@@ -501,26 +346,15 @@ se quiere conservar el comportamiento, hacerlo opt-in por env
 ## 8. Plan de implementación sugerido
 
 Cada etapa es verificable por sí sola, en orden de impacto para el usuario. Las etapas de
-congelamientos, geometría, panics chicos y churn **ya están hechas** (ver `AGENTS.md` →
-“Cerrado de AUDIT.md”, con las mediciones): lo que queda es E/S y limpieza.
+congelamientos, geometría, panics chicos, churn y E/S **ya están hechas** (ver `AGENTS.md`
+→ “Cerrado de AUDIT.md”, con las mediciones). Queda **una** cosa:
 
-### Etapa pendiente — E/S y seguridad (B12, B5, B6, B7, B8, B11, C7)
+### Etapa pendiente — tests de drag (C5)
 
-Lectura acotada del paste (B12, el único que puede tumbar el proceso por una entrada
-grande), reconexión D-Bus del tray, no fallar en silencio con los `sync-*.sh`,
-`warn` en el desajuste de `configure`, validación de URLs de la carátula, perfil en
-`dockyrs-notifyd` y que deje de matar otros daemons.
-
-**Guard:** test del tope de paste, de la reconexión y de `repo_dir` sin repo.
-
-### Etapa pendiente — Limpieza y el resto (A5, C1, C2, C5)
-
-El resto del guard de A5 (los drenajes de IPC después del `match` y el helper de lock del
-tray), `DrawArgs` extendido a `render/` (C1), `DockMenuMode.closing` (C2) y los huecos de
-tests que quedan (C5).
-
-**No empezar por acá.** La etapa de E/S cambia lo que el usuario siente; esta sola no
-arregla nada visible.
+`Dock::drag_to` y `Dock::icon_at` no tienen test propio: hace falta un fixture de `Dock`
+con dos o tres iconos y verificar que el centro de cada uno devuelve su índice (el mismo
+contrato que `hit_layout_tests` para los widgets, trampa 10). Es lo único que queda del
+documento; lo demás son las **decisiones** de §3 (A5 en parte, B6 y C1).
 
 ---
 
