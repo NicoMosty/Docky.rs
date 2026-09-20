@@ -99,6 +99,23 @@ pub const NOTIFICATION_BODY_MAX_LINES: usize = 8;
 /// filas (6*92 + 5*10 = 602 contra los 620 disponibles).
 pub const OVERLAY_PANEL_W: f32 = 640.0;
 
+/// Largo de esos mismos paneles cuando el dock es vertical (`Left`/`Right`), donde
+/// el "largo" es el ALTO. Es el mismo para los cuatro por el mismo motivo que
+/// `OVERLAY_PANEL_W` en el horizontal: con el alto común el borde de arriba y el de
+/// abajo no se mueven al ciclar con Shift+←/→. Medido antes del cambio: apps 556,
+/// portapapeles 434, notifs 434 y fondos 640, así que el panel saltaba 206 px al
+/// pasar de una pestaña a otra.
+///
+/// El ancho (cross) NO se toca: cada panel pide el suyo segun el contenido (los
+/// fondos 196 por la miniatura de 150, el resto 356 por las dos columnas de tarjeta
+/// y los titulos largos).
+///
+/// 640 es el que ya usaba el selector de fondos, así que su filmstrip no pierde
+/// miniaturas; las listas (portapapeles, notifs) y la grilla del launcher sacan de
+/// acá cuantas filas entran (ver `clip_visible_rows`, `notif_visible_rows` y
+/// `app_search_strip_h`).
+pub const OVERLAY_PANEL_H: f32 = 640.0;
+
 /// Cross de esos mismos tres paneles cuando el dock es vertical (`Left`/`Right`):
 /// una columna al lado del dock. Es el MISMO para los tres, por la misma razón
 /// que `OVERLAY_PANEL_W` en el horizontal: el borde no se mueve al ciclar con

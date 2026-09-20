@@ -84,7 +84,7 @@ pub(crate) fn draw_app_search_strip(
     let settings = &args.dock.config.settings;
     let is_vertical = args.dock.is_vertical();
     let (ox0, oy0) = app_search_strip_origin(frame);
-    let strip_h = app_search_strip_h(is_vertical);
+    let strip_h = app_search_strip_h(frame, is_vertical);
     // ----- el viewport del strip es el ancho del frame: las tarjetas van insetadas
     // por MENU_PADDING igual que la caja de búsqueda, y en el horizontal lo que
     // scrollea es la página entera (`app_search_viewport_along`) -----

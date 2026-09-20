@@ -33,9 +33,10 @@ impl App {
         let is_vertical = self.dock.is_vertical();
         // ----- los avisos son frases cortas: en el vertical alcanza el cross angosto
         // (el mismo del selector de fondos) y en el ancho, el ancho del overlay -----
-        // ----- mismo tamaño que el portapapeles (pedido: "parecido al UI del
-        // clipboard en tamaño"): el cross ancho en vertical y su alto de contenido, no
-        // un panel propio que crecía con la cantidad de avisos -----
+        // ----- mismo ancho que el portapapeles (pedido: "parecido al UI del
+        // clipboard en tamaño") y, en el vertical, el ALTO común del overlay: así el
+        // panel no cambia de tamaño al ciclar con Shift+←/→ (las filas que entran
+        // salen de ahí, `menu::notif_visible_rows`) -----
         let content_w = if is_vertical {
             menu::OVERLAY_PANEL_VERTICAL_WIDE.max(self.dock.thickness() as f32)
         } else {
@@ -43,7 +44,11 @@ impl App {
         };
         let frame = menu::frame_for(
             content_w,
-            menu_render::clip_content_h(),
+            if is_vertical {
+                menu::OVERLAY_PANEL_H
+            } else {
+                menu_render::clip_content_h()
+            },
             is_vertical,
             self.dock.band_left(),
         );
@@ -95,7 +100,13 @@ impl App {
 
     pub(super) fn handle_notifications_key(&mut self, event: KeyEvent, qh: &QueueHandle<Self>) {
         let row = menu::NOTIF_ROW_H;
-        let page = row * menu::NOTIF_VISIBLE_ROWS as f32;
+        // ----- una página es lo que se ve: sale del frame, no de una constante, si
+        // no con el panel alto PageDown saltaba cinco filas en un viewport de doce -----
+        let page = self
+            .notifications_mode
+            .as_ref()
+            .map(|m| row * menu::notif_visible_rows(m.frame) as f32)
+            .unwrap_or(row);
         match event.keysym {
             Keysym::Escape => self.close_notifications_mode(qh),
             // ----- sin selección: no hay nada que activar, así que las flechas sólo

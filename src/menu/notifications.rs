@@ -10,9 +10,6 @@ use super::PanelFrame;
 /// Alto de una fila. Igual que las del portapapeles: los dos paneles de lista se leen
 /// con el mismo ritmo.
 pub const NOTIF_ROW_H: f32 = 34.0;
-/// Filas visibles: el panel no crece más allá de esto (el resto se alcanza con la
-/// rueda o las flechas).
-pub const NOTIF_VISIBLE_ROWS: usize = 5;
 /// Cuántos avisos guarda el historial. Es un tope, no una cola que crece sola: el más
 /// viejo se cae. 50 avisos de dos líneas son ~5 KB.
 pub const NOTIF_HISTORY_CAP: usize = 50;
@@ -48,8 +45,15 @@ pub fn notif_row_at(frame: PanelFrame, scroll: f32, x: f32, y: f32, count: usize
 
 /// Scroll máximo: lo que sobra de las filas por debajo del área visible.
 pub fn notif_max_scroll(frame: PanelFrame, count: usize) -> f32 {
-    let viewport = (frame.h - 2.0 * super::MENU_PADDING).max(0.0);
+    let viewport = notif_visible_rows(frame) as f32 * NOTIF_ROW_H;
     (count as f32 * NOTIF_ROW_H - viewport).max(0.0)
+}
+
+/// Filas que entran en el panel, del mismo alto del frame que el clamp del scroll:
+/// una sola cuenta para el dibujo, el hit test y la página de PageUp/PageDown (si se
+/// despegan, el scroll deja filas cortadas o clicleables de más).
+pub fn notif_visible_rows(frame: PanelFrame) -> usize {
+    (((frame.h - 2.0 * super::MENU_PADDING) / NOTIF_ROW_H).floor()).max(1.0) as usize
 }
 
 #[cfg(test)]

@@ -23,8 +23,6 @@ pub const APP_SEARCH_ROWS: usize = 2;
 /// caen en el panel ancho.
 pub const APP_CARD_W_VERTICAL: f32 = 150.0;
 pub const APP_SEARCH_COLS_VERTICAL: usize = 2;
-/// Filas que se ven a la vez en el panel vertical (el resto scrollea).
-pub const APP_SEARCH_VERTICAL_VISIBLE: f32 = 5.0;
 
 /// Ancho de una tarjeta según la orientación. Es la única definición: el reparto
 /// de la grilla, el ancho del panel vertical y el dibujo salen de acá.
@@ -62,7 +60,7 @@ pub fn build_app_search_controls(frame: PanelFrame, is_vertical: bool) -> (Vec<C
     // a la caja: el panel del launcher usa MENU_PADDING de punta a punta. El alto
     // que devuelve es el del CONTENIDO (el frame), no el del panel. -----
     let fixed_h =
-        (app_search_strip_y(frame) - frame.y) + app_search_strip_h(is_vertical) + MENU_PADDING;
+        (app_search_strip_y(frame) - frame.y) + app_search_strip_h(frame, is_vertical) + MENU_PADDING;
     (controls, fixed_h)
 }
 
@@ -82,14 +80,20 @@ pub fn app_search_strip_origin(frame: PanelFrame) -> (f32, f32) {
 /// Alto del strip: la grilla entera en el horizontal (no scrollea en el cross), el
 /// tramo visible de la grilla en el vertical. No depende del frame: son las filas
 /// que se ven.
-pub fn app_search_strip_h(is_vertical: bool) -> f32 {
+/// Filas que entran a la vez en la grilla. En el panel ancho son dos filas fijas
+/// (`APP_SEARCH_ROWS`); en el vertical el strip ocupa TODO el alto que le queda al
+/// frame debajo de la caja de busqueda (el alto comun `OVERLAY_PANEL_H`), asi que
+/// las filas que entran salen de ahi y la que no entra queda asomando: es la pista
+/// de que hay mas, igual que la fila +1 del portapapeles.
+pub fn app_search_strip_h(frame: PanelFrame, is_vertical: bool) -> f32 {
+    if is_vertical {
+        // ----- el padding de abajo queda como aire del panel, igual que en las
+        // listas (`clip_visible_rows` tambien lo descuenta) -----
+        return (frame.h - (app_search_strip_y(frame) - frame.y) - MENU_PADDING)
+            .max(app_search_row_h(true));
+    }
     let row_h = app_search_row_h(is_vertical);
-    let rows = if is_vertical {
-        APP_SEARCH_VERTICAL_VISIBLE
-    } else {
-        APP_SEARCH_ROWS as f32
-    };
-    rows * (row_h + APP_CARD_GAP) - APP_CARD_GAP
+    APP_SEARCH_ROWS as f32 * (row_h + APP_CARD_GAP) - APP_CARD_GAP
 }
 
 /// Columnas que entran en el ancho útil del frame. `OVERLAY_PANEL_W` (640) está
@@ -218,18 +222,18 @@ pub fn app_search_max_scroll(count: usize, frame: PanelFrame, is_vertical: bool)
 /// `MENU_PADDING` como la caja de búsqueda, así que el viewport es el ancho menos
 /// los dos insets (si no, al final del scroll la última tarjeta se corta contra el
 /// borde del panel). En el vertical el inset va en el cross y el tramo visible es
-/// el alto que le queda al frame debajo de la caja de búsqueda.
+/// el mismo que mide el strip (`app_search_strip_h`): el scroll se clampa contra lo
+/// que se ve, y así la última fila no queda cortada por el padding de abajo.
 pub fn app_search_viewport_along(frame: PanelFrame, is_vertical: bool) -> f32 {
     if is_vertical {
-        frame.h - (app_search_strip_y(frame) - frame.y)
+        app_search_strip_h(frame, true)
     } else {
         app_search_page_w(frame)
     }
 }
 
-/// El alto del frame no entra acá: el borde de abajo del strip ya lo fija
-/// `app_search_strip_h`, y para el panel vertical ese alto es el tramo visible
-/// (no el alto total, que incluye el padding de abajo).
+/// El alto del frame entra en el borde de abajo del strip (`app_search_strip_h`,
+/// que en el vertical sale justamente del alto del frame).
 pub fn app_search_strip_hit_test(
     count: usize,
     frame: PanelFrame,
@@ -239,7 +243,7 @@ pub fn app_search_strip_hit_test(
     y: f32,
 ) -> Option<usize> {
     let (sx, sy) = app_search_strip_origin(frame);
-    let strip_h = app_search_strip_h(is_vertical);
+    let strip_h = app_search_strip_h(frame, is_vertical);
     let x1 = frame.x + frame.w - MENU_PADDING;
     if x < sx || x > x1 || y < sy || y > sy + strip_h {
         return None;
@@ -270,11 +274,13 @@ mod strip_tests {
         frame_for(OVERLAY_PANEL_W, 210.0, false, true)
     }
 
-    /// Frame del panel vertical: dos columnas de tarjeta y la banda al costado.
+    /// Frame del panel vertical: dos columnas de tarjeta y la banda al costado. El
+    /// alto es el común del overlay (`OVERLAY_PANEL_H`), que es el que manda las
+    /// filas que entran.
     fn vertical(band_left: bool) -> PanelFrame {
         frame_for(
             app_search_vertical_content_w(),
-            app_search_strip_h(true) + 46.0 + MENU_PADDING,
+            crate::menu::OVERLAY_PANEL_H,
             true,
             band_left,
         )
@@ -347,6 +353,13 @@ mod strip_tests {
         // ----- y el scroll del vertical es por fila, no por página -----
         assert_eq!(app_search_card_along(2, f, true), APP_CARD_W + APP_CARD_GAP);
         assert_eq!(app_search_along_len(f, true), APP_CARD_W);
+        // ----- el strip llena el alto del frame (no las 5 filas fijas de antes):
+        // 640 menos el encabezado (10 + 26 + 10) y el padding de abajo -----
+        assert_eq!(
+            app_search_strip_h(f, true),
+            crate::menu::OVERLAY_PANEL_H - 46.0 - MENU_PADDING,
+            "el strip del vertical sale del alto del frame, no de una constante"
+        );
     }
 
     /// El hit test y el dibujo salen de la misma función: el centro de cada

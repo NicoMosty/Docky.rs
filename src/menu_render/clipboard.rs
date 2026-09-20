@@ -19,10 +19,23 @@ const ROW_INSET: f32 = 6.0;
 /// búsqueda (la misma altura que en el launcher) y el de abajo.
 pub const CLIP_HEADER_H: f32 = crate::menu::MENU_PADDING * 2.0 + crate::menu::SEARCH_BOX_HEIGHT;
 pub const CLIP_PAD: f32 = 10.0;
+/// Filas del panel ANCHO (dock arriba/abajo), que es el que mide `clip_content_h`.
+/// En el vertical las filas que entran salen del alto del frame
+/// (`clip_visible_rows`), porque ahí manda el alto común del overlay.
 pub const CLIP_VISIBLE_ROWS: usize = 7;
 
-/// Alto del CONTENIDO del portapapeles: el encabezado (caja de búsqueda) más las
-/// filas visibles. La banda de pestañas no entra: vive fuera del frame.
+/// Filas que entran en el panel. En el horizontal da `CLIP_VISIBLE_ROWS` (el frame
+/// mide justo el encabezado más esas filas); en el vertical, donde el frame mide
+/// `menu::OVERLAY_PANEL_H`, salen las que quepan. Es la única cuenta: el rango que
+/// dibuja, el scrollbar y el clamp del scroll salen de acá (si se despegan, el
+/// scroll deja filas cortadas o clicleables de más).
+pub fn clip_visible_rows(frame: crate::menu::PanelFrame) -> usize {
+    (((frame.h - CLIP_HEADER_H - CLIP_PAD) / CLIP_ROW_H).floor()).max(1.0) as usize
+}
+
+/// Alto del CONTENIDO del portapapeles en el panel ancho: el encabezado (caja de
+/// búsqueda) más las filas visibles. La banda de pestañas no entra: vive fuera del
+/// frame. En el vertical el frame es `menu::OVERLAY_PANEL_H`.
 pub fn clip_content_h() -> f32 {
     CLIP_HEADER_H + CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32 + CLIP_PAD
 }
@@ -146,7 +159,9 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
         let on_accent = super::on_accent_hex(settings);
 
         let start = (args.scroll_y / CLIP_ROW_H).floor().max(0.0) as usize;
-        let end = (start + CLIP_VISIBLE_ROWS + 1).min(args.filtered.len());
+        let rows = clip_visible_rows(args.frame);
+        // ----- +1: la fila que no entra queda asomando como pista de que hay más -----
+        let end = (start + rows + 1).min(args.filtered.len());
         for pos in start..end {
             let entry_index = args.filtered[pos];
             let Some(entry) = args.entries.get(entry_index) else {
@@ -250,7 +265,7 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
 
     // ----- scrollbar -----
     let total = args.filtered.len() as f32 * CLIP_ROW_H;
-    let viewport = CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32;
+    let viewport = CLIP_ROW_H * clip_visible_rows(args.frame) as f32;
     if total > viewport {
         let track_x = (frame.x + frame.w - 4.0) * s;
         let track_h = h - top * s - CLIP_PAD * s;
@@ -306,33 +321,48 @@ pub(super) fn fit(display: &str, _full: &str, size: f32, max_w: f32) -> String {
 mod clip_vertical_tests {
     use super::*;
 
-    /// En el dock vertical (`Left`/`Right`) la banda de pestañas va apilada y el
-    /// El alto del contenido no depende de la orientación (son las mismas filas y
-    /// el mismo encabezado) y la banda de pestañas queda FUERA del frame: en el
-    /// panel ancho es una fila arriba y en el vertical una columna al costado del
-    /// dock, así que ya no le come alto al panel.
+    /// Las filas que entran salen del ALTO DEL FRAME, y la banda de pestañas queda
+    /// FUERA del frame en las dos orientaciones (fila arriba en el panel ancho,
+    /// columna al costado del dock en el vertical).
     #[test]
-    fn el_contenido_mide_lo_mismo_en_las_dos_orientaciones() {
+    fn las_filas_salen_del_alto_del_frame() {
+        // ----- el frame del panel ancho da exactamente las filas de siempre -----
         assert_eq!(
             clip_content_h(),
             CLIP_HEADER_H + CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32 + CLIP_PAD
+        );
+        let ancho =
+            crate::menu::frame_for(crate::menu::OVERLAY_PANEL_W, clip_content_h(), false, true);
+        assert_eq!(clip_visible_rows(ancho), CLIP_VISIBLE_ROWS);
+        assert_eq!(
+            clip_content_y(ancho),
+            crate::menu::OVERLAY_TABS_H + CLIP_HEADER_H
+        );
+        // ----- el vertical usa el alto común del overlay, así que entran MÁS filas
+        // (el panel ya no cambia de alto al pasar del launcher a las notifs) -----
+        let vert = crate::menu::frame_for(
+            crate::menu::OVERLAY_PANEL_VERTICAL_WIDE,
+            crate::menu::OVERLAY_PANEL_H,
+            true,
+            true,
+        );
+        assert_eq!(vert.h, crate::menu::OVERLAY_PANEL_H);
+        assert_eq!(
+            clip_visible_rows(vert),
+            10,
+            "640 de alto dan 10 filas de 54 (el panel ancho, 7): si esto cambia, el \
+             alto común y las filas se despegaron"
         );
         // ----- la primera fila arranca en el frame, no en la banda -----
         for (band_left, esperado) in [(true, crate::menu::OVERLAY_TABS_W), (false, 0.0)] {
             let frame = crate::menu::frame_for(
                 crate::menu::OVERLAY_PANEL_VERTICAL_W,
-                clip_content_h(),
+                crate::menu::OVERLAY_PANEL_H,
                 true,
                 band_left,
             );
             assert_eq!(frame.x, esperado);
             assert_eq!(clip_content_y(frame), frame.y + CLIP_HEADER_H);
         }
-        let ancho =
-            crate::menu::frame_for(crate::menu::OVERLAY_PANEL_W, clip_content_h(), false, true);
-        assert_eq!(
-            clip_content_y(ancho),
-            crate::menu::OVERLAY_TABS_H + CLIP_HEADER_H
-        );
     }
 }

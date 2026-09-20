@@ -49,7 +49,14 @@ impl App {
         let base = menu::frame_for(content_w, 0.0, is_vertical, band_left);
         let (controls, content_h) = menu::build_app_search_controls(base, is_vertical);
         let frame = menu::PanelFrame {
-            h: content_h,
+            // ----- en el vertical el alto es el COMÚN del overlay (640) y la grilla
+            // scrollea dentro: el borde no se mueve al ciclar con Shift←/→. En el
+            // horizontal el alto sigue saliendo de las dos filas de tarjetas. -----
+            h: if is_vertical {
+                menu::OVERLAY_PANEL_H
+            } else {
+                content_h
+            },
             ..base
         };
         let (panel_w, panel_h) = menu::panel_size(frame, is_vertical);

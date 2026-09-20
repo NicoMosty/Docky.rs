@@ -20,21 +20,17 @@ impl App {
         self.menu = None;
         let wallpapers = wallpaper::scan_wallpapers(&self.dock.config.settings.wallpaper_dir);
         let is_vertical = self.dock.is_vertical();
-        let dock_along = (if is_vertical {
-            self.dock.base_size().1
-        } else {
-            self.dock.base_size().0
-        }) as f32;
-        let along = dock_along.max(WALLPAPER_PANEL_MIN_W);
         // ----- el frame es la caja del CONTENIDO: la banda de pestañas vive fuera
         // (fila arriba en el panel ancho, columna al costado del dock en el
         // vertical), así que el filmstrip ya no la cuenta -----
         let (content_w, content_h) = if is_vertical {
             // ----- en el panel vertical el "ancho" es el cross: queda el de
-            // siempre (una columna angosta junto al dock) -----
+            // siempre (una columna angosta junto al dock) y el largo es el ALTO
+            // COMÚN del overlay, para que el panel no cambie de tamaño al ciclar
+            // con Shift+←/→ (el filmstrip scrollea dentro) -----
             (
                 menu::overlay_vertical_cross(self.dock.thickness() as f32),
-                along,
+                menu::OVERLAY_PANEL_H,
             )
         } else {
             // ----- mismo ancho que el launcher y el portapapeles -----

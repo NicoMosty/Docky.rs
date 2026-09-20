@@ -70,7 +70,6 @@ const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 const MENU_GAP: i32 = 0;
 const WALLPAPER_PANEL_H: f32 = menu::OVERLAY_PANEL_VERTICAL_W;
-const WALLPAPER_PANEL_MIN_W: f32 = menu::OVERLAY_PANEL_W;
 const EMPTY_CUSTOM_HEX: [String; 5] = [
     String::new(),
     String::new(),

@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::menu_render::{CLIP_ROW_H, CLIP_VISIBLE_ROWS, ClipArgs, clip_content_h, clip_content_y};
+use crate::menu_render::{CLIP_ROW_H, ClipArgs, clip_content_h, clip_content_y, clip_visible_rows};
 
 impl App {
     pub(crate) fn toggle_clipboard(&mut self, qh: &QueueHandle<Self>) {
@@ -35,7 +35,14 @@ impl App {
         };
         let frame = menu::frame_for(
             content_w,
-            clip_content_h(),
+            // ----- en el vertical el alto es el COMÚN del overlay (640) y el panel
+            // muestra las filas que entren: así el borde no se mueve al ciclar. En
+            // el horizontal siguen siendo las siete filas de siempre. -----
+            if is_vertical {
+                menu::OVERLAY_PANEL_H
+            } else {
+                clip_content_h()
+            },
             is_vertical,
             self.dock.band_left(),
         );
@@ -102,7 +109,7 @@ impl App {
             return;
         };
         let row_top = cm.selected as f32 * CLIP_ROW_H;
-        let viewport = CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32;
+        let viewport = CLIP_ROW_H * clip_visible_rows(cm.frame) as f32;
         let mut target = cm.scroll_target;
         if row_top < target {
             target = row_top;
@@ -241,7 +248,7 @@ impl App {
                     horizontal.absolute
                 };
                 if let Some(cm) = self.clipboard_mode.as_mut() {
-                    let viewport = CLIP_ROW_H * CLIP_VISIBLE_ROWS as f32;
+                    let viewport = CLIP_ROW_H * clip_visible_rows(cm.frame) as f32;
                     let max_scroll = (cm.filtered.len() as f32 * CLIP_ROW_H - viewport).max(0.0);
                     cm.scroll_target =
                         (cm.scroll_target + delta as f32 * 0.6).clamp(0.0, max_scroll);
