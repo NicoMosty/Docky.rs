@@ -99,16 +99,22 @@ fn tray_ignored(icon: &TrayIcon) -> bool {
 // Devuelve (service, path, menu_path). -----
 pub fn find_menu(matches: impl Fn(&str) -> bool) -> Option<(String, String, String)> {
     let conn = tray_conn()?;
-    let proxy = zbus::blocking::proxy::Builder::<Proxy>::new(conn)
+    let proxy = zbus::blocking::proxy::Builder::<Proxy>::new(&conn)
         .destination(WATCHER_IFACE)
         .and_then(|b| b.path(WATCHER_PATH))
         .and_then(|b| b.interface(WATCHER_IFACE))
         .map(|b| b.cache_properties(zbus::proxy::CacheProperties::No))
         .and_then(|b| b.build())
         .ok()?;
-    let raw: Vec<String> = proxy.get_property("RegisteredStatusNotifierItems").ok()?;
+    let raw: Vec<String> = match proxy.get_property("RegisteredStatusNotifierItems") {
+        Ok(v) => v,
+        Err(_) => {
+            tray_conn_invalidar();
+            return None;
+        }
+    };
     let raw_svc = raw.iter().find(|s| matches(s))?;
-    let icon = resolve_item(conn, raw_svc)?;
+    let icon = resolve_item(&conn, raw_svc)?;
     let menu_path = icon.menu_path?;
     Some((icon.service, icon.path, menu_path))
 }
@@ -271,21 +277,63 @@ fn resolve_item(conn: &Connection, raw_svc: &str) -> Option<TrayIcon> {
 // costo real y no hay riesgo de cortar una respuesta lenta pero legítima.
 const TRAY_CALL_TIMEOUT: Duration = Duration::from_millis(500);
 
-fn tray_conn() -> Option<&'static Connection> {
-    static CONN: std::sync::OnceLock<Option<Connection>> = std::sync::OnceLock::new();
-    CONN.get_or_init(|| {
+/// Caché de una conexión con invalidación explícita. El estado vive acá, sin D-Bus, para
+/// poder probarlo: `obtener` construye una sola vez y reusa, `invalidar` obliga a
+/// reconstruir en la próxima. Es lo que hace que el tray se recupere cuando el bus de
+/// sesión se reinicia (AUDIT.md B5).
+#[derive(Default)]
+struct CacheConexion<T> {
+    valor: Mutex<Option<T>>,
+}
+
+impl<T: Clone> CacheConexion<T> {
+    fn obtener(&self, construir: impl FnOnce() -> Option<T>) -> Option<T> {
+        let mut slot = self.valor.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(v) = slot.as_ref() {
+            return Some(v.clone());
+        }
+        let v = construir()?;
+        *slot = Some(v.clone());
+        Some(v)
+    }
+
+    fn invalidar(&self) {
+        *self.valor.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// Conexión al bus de sesión para el tray. Antes era un `OnceLock` que se quedaba con la
+/// primera conexión **para siempre**: si el bus se reiniciaba (o el socket se cortaba),
+/// todas las llamadas del tray fallaban y no se recuperaba hasta reiniciar el dock
+/// (AUDIT.md B5). Ahora, cuando una llamada falla, se invalida la caché
+/// (`tray_conn_invalidar`) y la próxima reconecta.
+fn tray_conn_cache() -> &'static CacheConexion<Arc<Connection>> {
+    static CONN: std::sync::OnceLock<CacheConexion<Arc<Connection>>> = std::sync::OnceLock::new();
+    CONN.get_or_init(|| CacheConexion {
+        valor: Mutex::new(None),
+    })
+}
+
+fn tray_conn() -> Option<Arc<Connection>> {
+    tray_conn_cache().obtener(|| {
         let built = zbus::blocking::connection::Builder::session()
             .map(|b| b.method_timeout(TRAY_CALL_TIMEOUT))
             .and_then(|b| b.build());
         match built {
-            Ok(c) => Some(c),
+            Ok(c) => Some(Arc::new(c)),
             Err(e) => {
                 log::warn!("tray: no hay bus de sesión: {e}");
                 None
             }
         }
     })
-    .as_ref()
+}
+
+/// Tira la conexión cacheada: la próxima llamada reconecta. Se llama donde una operación
+/// del tray falla, que es el único síntoma de que el bus se reinició.
+fn tray_conn_invalidar() {
+    log::debug!("tray: la conexión al bus falló; la próxima reconecta");
+    tray_conn_cache().invalidar();
 }
 
 // ----- one level -----
@@ -295,11 +343,12 @@ pub fn fetch_menu(service: &str, menu_path: &str, parent_id: i32) -> Vec<TrayMen
         return Vec::new();
     };
     let Ok(proxy) = Proxy::new(
-        conn,
+        &conn,
         service.to_string(),
         menu_path.to_string(),
         "com.canonical.dbusmenu",
     ) else {
+        tray_conn_invalidar();
         return Vec::new();
     };
     let names: Vec<&str> = vec!["type", "label", "enabled", "visible", "children-display"];
@@ -312,6 +361,9 @@ pub fn fetch_menu(service: &str, menu_path: &str, parent_id: i32) -> Vec<TrayMen
     let Ok((_, (_, _, children))) =
         proxy.call::<_, _, (u32, Layout)>("GetLayout", &(parent_id, 1i32, names))
     else {
+        // ----- si el bus se reinició, esto falla al instante: invalidar la caché es lo que
+        // hace que la próxima apertura del menú reconecte (B5) -----
+        tray_conn_invalidar();
         return Vec::new();
     };
     // ----- desglose de latencia (visible con RUST_LOG=debug) -----
@@ -366,21 +418,32 @@ pub fn fetch_menu(service: &str, menu_path: &str, parent_id: i32) -> Vec<TrayMen
 
 pub fn send_menu_event(service: String, menu_path: String, id: i32) {
     std::thread::spawn(move || {
-        if let Some(conn) = tray_conn()
-            && let Ok(proxy) = Proxy::new(conn, service, menu_path, "com.canonical.dbusmenu")
+        let Some(conn) = tray_conn() else {
+            return;
+        };
+        let Ok(proxy) = Proxy::new(&conn, service, menu_path, "com.canonical.dbusmenu") else {
+            return;
+        };
+        let data = zbus::zvariant::Value::from(0i32);
+        if proxy
+            .call::<_, _, ()>("Event", &(id, "clicked", data, 0u32))
+            .is_err()
         {
-            let data = zbus::zvariant::Value::from(0i32);
-            let _: zbus::Result<()> = proxy.call("Event", &(id, "clicked", data, 0u32));
+            tray_conn_invalidar();
         }
     });
 }
 
 pub fn activate(service: String, path: String) {
     std::thread::spawn(move || {
-        if let Some(conn) = tray_conn()
-            && let Ok(proxy) = item_proxy(conn, &service, &path)
-        {
-            let _: zbus::Result<()> = proxy.call("Activate", &(0i32, 0i32));
+        let Some(conn) = tray_conn() else {
+            return;
+        };
+        let Ok(proxy) = item_proxy(&conn, &service, &path) else {
+            return;
+        };
+        if proxy.call::<_, _, ()>("Activate", &(0i32, 0i32)).is_err() {
+            tray_conn_invalidar();
         }
     });
 }
@@ -403,6 +466,120 @@ fn fingerprint_icons(icons: &[TrayIcon]) -> u64 {
 }
 
 /// polls state simpler than signals
+/// Cada cuánto reintenta el watcher cuando el bus no está (o se cayó): el dock se relanza
+/// cuando el bus se reinicia y puede llegar **antes** que el bus nuevo.
+const RECONEXION_MS: u64 = 2000;
+
+/// Corre el watcher del tray: se conecta al bus de sesión, se registra como host de SNI y
+/// pollea los items cada 2 s.
+///
+/// Está en un lazo de reconexión por B5: si el bus de sesión se reinicia, la conexión (y el
+/// nombre de `StatusNotifierWatcher`) se pierden, así que hay que rehacer las dos cosas. En
+/// ese caso el dock además se relanza (`relanzar_por_bus_caido`), porque las llamadas del
+/// tray del resto del dock comparten conexiones cacheadas; y este lazo se encarga de que el
+/// relanzado, si llega antes que el bus, se conecte igual.
+fn correr_watcher_tray(
+    state: TrayState,
+    flag: Arc<std::sync::atomic::AtomicBool>,
+    wl_conn: wayland_client::Connection,
+    qh: wayland_client::QueueHandle<crate::app::App>,
+) {
+    // ----- el Watcher y el poll comparten la lista de items: el poll purga -----
+    let items: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut last_fingerprint = 0u64;
+    loop {
+        // ----- conexión + registro como host -----
+        let owned = zbus::blocking::connection::Builder::session()
+            .and_then(|b| b.name(WATCHER_IFACE))
+            .and_then(|b| {
+                b.serve_at(
+                    WATCHER_PATH,
+                    Watcher {
+                        items: items.clone(),
+                    },
+                )
+            })
+            .and_then(|b| b.build());
+        let conn = match owned {
+            Ok(c) => c,
+            Err(_) => match Connection::session() {
+                Ok(c) => c,
+                Err(e) => {
+                    // ----- sin bus (todavía): se reintenta, no se sale -----
+                    log::debug!("tray: no hay bus de sesión: {e}");
+                    std::thread::sleep(Duration::from_millis(RECONEXION_MS));
+                    continue;
+                }
+            },
+        };
+        let watcher_proxy = zbus::blocking::proxy::Builder::<Proxy>::new(&conn)
+            .destination(WATCHER_IFACE)
+            .and_then(|b| b.path(WATCHER_PATH))
+            .and_then(|b| b.interface(WATCHER_IFACE))
+            .map(|b| b.cache_properties(zbus::proxy::CacheProperties::No))
+            .and_then(|b| b.build())
+            .ok();
+        if let Some(p) = &watcher_proxy {
+            let _: zbus::Result<()> = p.call("RegisterStatusNotifierHost", &("dockyrs",));
+        }
+        log::debug!("tray: conectado al bus de sesión");
+
+        // ----- poll -----
+        let mut fallos_seguidos = 0u32;
+        loop {
+            let Some(proxy) = watcher_proxy.as_ref() else {
+                std::thread::sleep(Duration::from_millis(RECONEXION_MS));
+                continue;
+            };
+            let crudos: Vec<String> =
+                match proxy.get_property::<Vec<String>>("RegisteredStatusNotifierItems") {
+                    Ok(v) => {
+                        fallos_seguidos = 0;
+                        v
+                    }
+                    Err(err) => {
+                        fallos_seguidos += 1;
+                        log::debug!("tray: no pude leer el bus ({fallos_seguidos}): {err}");
+                        // ----- 3 vueltas seguidas sin poder leer = el bus se reinició: se
+                        // reconecta Y se relanza el dock (las conexiones cacheadas del
+                        // resto del tray quedaron muertas). El tope de `reexec` corta el
+                        // bucle si el problema es determinista. -----
+                        if fallos_seguidos >= 3 {
+                            crate::relanzar_por_bus_caido();
+                        }
+                        std::thread::sleep(Duration::from_millis(RECONEXION_MS));
+                        continue;
+                    }
+                };
+            // ----- purga: un item de un servicio que ya no está en el bus no se puede
+            // resolver (`GetAll` falla) y si se queda en la lista se acumula para
+            // siempre, costando un round-trip cada 2 s (AUDIT.md D5) -----
+            let vivos = items_vivos(&crudos, |svc| nombre_tiene_dueno(&conn, svc));
+            if vivos.len() != crudos.len() {
+                log::debug!(
+                    "tray: purgo {} item(s) de servicios que ya no estan",
+                    crudos.len() - vivos.len()
+                );
+                *items.lock().unwrap() = vivos.clone();
+            }
+            let icons: Vec<TrayIcon> = vivos
+                .iter()
+                .filter_map(|raw_svc| resolve_item(&conn, raw_svc))
+                .filter(|icon| !tray_ignored(icon))
+                .collect();
+            let fingerprint = fingerprint_icons(&icons);
+            *state.lock().unwrap() = icons;
+            if fingerprint != last_fingerprint {
+                last_fingerprint = fingerprint;
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                wl_conn.display().sync(&qh, ());
+                let _ = wl_conn.flush();
+            }
+            std::thread::sleep(Duration::from_millis(2000));
+        }
+    }
+}
+
 pub fn spawn(
     state: TrayState,
     flag: Arc<std::sync::atomic::AtomicBool>,
@@ -411,79 +588,7 @@ pub fn spawn(
 ) {
     let _ = std::thread::Builder::new()
         .name("tray".into())
-        .spawn(move || {
-            // ----- el Watcher y el poll comparten la lista de items: el poll purga -----
-            let items = Arc::new(Mutex::new(Vec::new()));
-            let owned = zbus::blocking::connection::Builder::session()
-                .and_then(|b| b.name(WATCHER_IFACE))
-                .and_then(|b| {
-                    b.serve_at(
-                        WATCHER_PATH,
-                        Watcher {
-                            items: items.clone(),
-                        },
-                    )
-                })
-                .and_then(|b| b.build());
-            let conn = match owned {
-                Ok(c) => c,
-                Err(_) => match Connection::session() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        log::warn!("tray: session bus unavailable: {e}");
-                        return;
-                    }
-                },
-            };
-
-            let watcher_proxy = zbus::blocking::proxy::Builder::<Proxy>::new(&conn)
-                .destination(WATCHER_IFACE)
-                .and_then(|b| b.path(WATCHER_PATH))
-                .and_then(|b| b.interface(WATCHER_IFACE))
-                .map(|b| b.cache_properties(zbus::proxy::CacheProperties::No))
-                .and_then(|b| b.build())
-                .ok();
-
-            if let Some(p) = &watcher_proxy {
-                let _: zbus::Result<()> = p.call("RegisterStatusNotifierHost", &("dockyrs",));
-            }
-
-            let mut last_fingerprint = 0u64;
-            loop {
-                let crudos: Vec<String> = watcher_proxy
-                    .as_ref()
-                    .and_then(|p| {
-                        p.get_property::<Vec<String>>("RegisteredStatusNotifierItems")
-                            .ok()
-                    })
-                    .unwrap_or_default();
-                // ----- purga: un item de un servicio que ya no está en el bus no se puede
-                // resolver (`GetAll` falla) y si se queda en la lista se acumula para
-                // siempre, costando un round-trip cada 2 s (AUDIT.md D5) -----
-                let vivos = items_vivos(&crudos, |svc| nombre_tiene_dueno(&conn, svc));
-                if vivos.len() != crudos.len() {
-                    log::debug!(
-                        "tray: purgo {} item(s) de servicios que ya no estan",
-                        crudos.len() - vivos.len()
-                    );
-                    *items.lock().unwrap() = vivos.clone();
-                }
-                let icons: Vec<TrayIcon> = vivos
-                    .iter()
-                    .filter_map(|raw_svc| resolve_item(&conn, raw_svc))
-                    .filter(|icon| !tray_ignored(icon))
-                    .collect();
-                let fingerprint = fingerprint_icons(&icons);
-                *state.lock().unwrap() = icons;
-                if fingerprint != last_fingerprint {
-                    last_fingerprint = fingerprint;
-                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                    wl_conn.display().sync(&qh, ());
-                    let _ = wl_conn.flush();
-                }
-                std::thread::sleep(Duration::from_millis(2000));
-            }
-        });
+        .spawn(move || correr_watcher_tray(state, flag, wl_conn, qh));
 }
 
 #[cfg(test)]
@@ -553,5 +658,50 @@ mod tray_purga_tests {
         assert_eq!(items_vivos(&raw, |_| true).len(), 3);
         // ----- todos muertos: lista vacía (y el tray no dibuja nada) -----
         assert!(items_vivos(&raw, |_| false).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tray_conexion_tests {
+    use super::CacheConexion;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// B5: la conexión se cachea (se construye una sola vez y se reusa) y `invalidar()`
+    /// obliga a reconstruir en la próxima. Es lo que hace que el tray se recupere cuando el
+    /// bus de sesión se reinicia: antes era un `OnceLock` con la primera conexión para
+    /// siempre, así que todas las llamadas del tray fallaban hasta reiniciar el dock.
+    #[test]
+    fn la_conexion_se_reusa_y_se_reconstruye_al_invalidar() {
+        let cache: CacheConexion<u32> = CacheConexion::default();
+        let construcciones = AtomicUsize::new(0);
+        let construir = |valor: u32, n: &AtomicUsize| {
+            n.fetch_add(1, Ordering::SeqCst);
+            Some(valor)
+        };
+        // ----- primera: construye; segunda: reusa lo cacheado -----
+        assert_eq!(cache.obtener(|| construir(1, &construcciones)), Some(1));
+        assert_eq!(
+            cache.obtener(|| construir(2, &construcciones)),
+            Some(1),
+            "reusa la conexión que ya estaba"
+        );
+        assert_eq!(construcciones.load(Ordering::SeqCst), 1);
+        // ----- el bus se reinició: se invalida y la próxima reconecta -----
+        cache.invalidar();
+        assert_eq!(cache.obtener(|| construir(3, &construcciones)), Some(3));
+        assert_eq!(construcciones.load(Ordering::SeqCst), 2);
+        // ----- si no se puede construir (no hay bus), devuelve None y NO cachea nada -----
+        cache.invalidar();
+        assert_eq!(cache.obtener(|| None), None);
+        assert_eq!(
+            construcciones.load(Ordering::SeqCst),
+            2,
+            "el fallo no cuenta como construcción"
+        );
+        assert_eq!(
+            cache.obtener(|| construir(4, &construcciones)),
+            Some(4),
+            "y el próximo intento sí construye"
+        );
     }
 }

@@ -159,6 +159,22 @@ fn reexec(argv: &[String], previos: u32) -> ! {
     }
 }
 
+/// Relanza el dock cuando el **bus de sesión se reinició**: la conexión del watcher del
+/// tray (y su nombre de `StatusNotifierWatcher`) no se pueden reconstruir sin
+/// re-registrarse, y el dock ya sabe relanzarse —es la misma red de seguridad de A6— así
+/// que el tray se recupera solo en vez de quedar muerto hasta reiniciar el dock a mano
+/// (AUDIT.md B5). El tope de relanzamientos de `reexec` evita el bucle si el problema es
+/// determinista.
+pub(crate) fn relanzar_por_bus_caido() -> ! {
+    let argv: Vec<String> = std::env::args().collect();
+    let previos: u32 = std::env::var(REEXEC_ENV)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    log::warn!("el bus de sesión se reinició: relanzo el dock para re-registrar el tray");
+    reexec(&argv, previos)
+}
+
 fn main() -> anyhow::Result<()> {
     unsafe { libc::mallopt(libc::M_ARENA_MAX, 1) };
     env_logger::init();
