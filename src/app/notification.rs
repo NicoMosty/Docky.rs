@@ -135,9 +135,10 @@ impl App {
     /// dependía de los frame callbacks de la superficie, y si esos no llegaban el aviso
     /// se quedaba pegado en pantalla para siempre. El aviso dura su timeout y se suelta.
     pub(crate) fn close_notification_mode(&mut self, _qh: &QueueHandle<Self>) {
-        if self.notification_mode.is_none() {
-            return;
-        }
+        // ----- sin corte temprano: si el modo ya no está pero la superficie quedó
+        // (otro camino la pudo pisar), hay que soltarla igual. Con el `return` de
+        // antes, un `notification_mode = None` de otro panel dejaba el toast mapeado
+        // para siempre, con su input region comiéndose los clicks de la esquina -----
         self.notification_mode = None;
         // ----- soltar la superficie la desmapea (es descartable, como el popup) -----
         self.toast_layer = None;

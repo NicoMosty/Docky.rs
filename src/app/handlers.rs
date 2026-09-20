@@ -48,9 +48,11 @@ impl CompositorHandler for App {
         }
         if surface == self.layer.wl_surface() {
             self.awaiting_frame = false;
-            if self.notification_mode.is_some() {
-                self.tick_notification_frame(qh);
-            } else if self.osd_mode.is_some() {
+            // ----- el toast ya no pasa por acá: tiene su propia superficie y su propio
+            // frame (`is_toast`, arriba). Con la rama vieja, cualquier redibujado del
+            // dock mientras el aviso estaba arriba consumía el frame del dock y
+            // frenaba la animación del reveal/de la isla. -----
+            if self.osd_mode.is_some() {
                 self.tick_osd_frame(qh);
             } else if self.ws_flash_mode.is_some() {
                 self.tick_ws_flash_frame(qh);

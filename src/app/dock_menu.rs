@@ -317,7 +317,6 @@ impl App {
         self.clipboard_mode = None;
         self.app_search_mode = None;
         self.osd_mode = None;
-        self.notification_mode = None;
         self.popup_mode = None;
         self.held_key = None;
         self.layer.set_layer(Layer::Top);

@@ -61,12 +61,6 @@ impl App {
             }
             return;
         }
-        if self.notification_mode.is_some() {
-            if let PointerEventKind::Press { .. } = event.kind {
-                self.close_notification_mode(qh);
-            }
-            return;
-        }
         if self.osd_mode.is_some() {
             if let PointerEventKind::Press { .. } = event.kind {
                 self.close_osd_mode(qh);

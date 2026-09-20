@@ -16,7 +16,6 @@ impl App {
         self.dock_menu_mode = None;
         self.app_search_mode = None;
         self.osd_mode = None;
-        self.notification_mode = None;
         self.popup_mode = None;
         self.menu = None;
         self.held_key = None;

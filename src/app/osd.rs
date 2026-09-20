@@ -2,11 +2,13 @@ use super::*;
 
 impl App {
     pub(crate) fn show_osd(&mut self, kind: menu::OsdKind, qh: &QueueHandle<Self>) {
+        // ----- el toast de notificaciones NO está en esta lista: vive en su propia
+        // superficie, así que no le pelea la del dock al OSD (con el check, una tecla
+        // de volumen dentro de los 4 s de un aviso no mostraba nada) -----
         if self.wallpaper_mode.is_some()
             || self.dock_menu_mode.is_some()
             || self.app_search_mode.is_some()
             || self.menu.is_some()
-            || self.notification_mode.is_some()
             || self.clipboard_mode.is_some()
         {
             return;
