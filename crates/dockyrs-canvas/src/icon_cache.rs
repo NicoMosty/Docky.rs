@@ -45,11 +45,7 @@ impl IconCache {
     }
 
     pub fn get_rounded(&mut self, icon_name: &str, size: u32) -> Option<Rc<Pixmap>> {
-        if let Some(hit) = self
-            .rounded_cache
-            .get(&size)
-            .and_then(|m| m.get(icon_name))
-        {
+        if let Some(hit) = self.rounded_cache.get(&size).and_then(|m| m.get(icon_name)) {
             return hit.clone();
         }
         let base = self.get(icon_name, size);
@@ -172,7 +168,11 @@ mod icon_cache_tests {
         let primero = cache.get("no-existe-dockyrs", 16);
         let segundo = cache.get("no-existe-dockyrs", 16);
         assert!(primero.is_none() && segundo.is_none());
-        assert_eq!(cache.cache.get(&16).map(|m| m.len()), Some(1), "no se duplicó");
+        assert_eq!(
+            cache.cache.get(&16).map(|m| m.len()),
+            Some(1),
+            "no se duplicó"
+        );
         // ----- y un tamaño distinto va a su propio mapa -----
         let _ = cache.get("no-existe-dockyrs", 22);
         assert_eq!(cache.cache.get(&22).map(|m| m.len()), Some(1));

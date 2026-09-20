@@ -184,7 +184,10 @@ mod font_write_tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
         merge_ini_key(&path, "General", "font", "JetBrainsMono Nerd Font,11");
         let out = std::fs::read_to_string(&path).expect("leer");
-        assert!(out.contains("JetBrainsMono Nerd Font,11"), "escribió: {out:?}");
+        assert!(
+            out.contains("JetBrainsMono Nerd Font,11"),
+            "escribió: {out:?}"
+        );
         assert!(!out.contains("Ubuntu"), "reemplaza la clave vieja: {out:?}");
         let modo = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(modo, 0o600, "los permisos del original se conservan");

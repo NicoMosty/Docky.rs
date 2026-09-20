@@ -569,7 +569,11 @@ mod config_backup_tests {
         std::fs::write(&path, roto).expect("escribir el roto");
 
         let bak = respaldar_ilegible(&path, roto).expect("el backup tiene que salir");
-        assert_eq!(std::fs::read_to_string(&bak).unwrap(), roto, "la copia es igual");
+        assert_eq!(
+            std::fs::read_to_string(&bak).unwrap(),
+            roto,
+            "la copia es igual"
+        );
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             roto,

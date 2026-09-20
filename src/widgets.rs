@@ -1750,7 +1750,14 @@ mod cpu_totales_tests {
         assert_eq!(idle, 450, "idle + iowait");
         // 100+20+30+400+50+6+7+8 = 621, SIN los 9 y 10 de guest/guest_nice
         assert_eq!(total, 621);
-        assert_eq!(total, linea[5..].split_whitespace().take(8).filter_map(|s| s.parse::<u64>().ok()).sum::<u64>());
+        assert_eq!(
+            total,
+            linea[5..]
+                .split_whitespace()
+                .take(8)
+                .filter_map(|s| s.parse::<u64>().ok())
+                .sum::<u64>()
+        );
     }
 
     /// Y sigue funcionando con una línea corta (sólo los cuatro campos viejos) y

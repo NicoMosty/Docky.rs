@@ -793,9 +793,15 @@ mod overlay_tabs_tests {
         // ----- primera pulsación de cada flecha: cicla -----
         assert_eq!(accion_de_la_banda(None, Keysym::Right, true), Ciclar);
         assert_eq!(accion_de_la_banda(None, Keysym::Right, false), Ciclar);
-        assert_eq!(accion_de_la_banda(Some(Keysym::Left), Keysym::Right, true), Ciclar);
+        assert_eq!(
+            accion_de_la_banda(Some(Keysym::Left), Keysym::Right, true),
+            Ciclar
+        );
         // ----- repetición de la misma flecha, con el overlay abierto: se traga -----
-        assert_eq!(accion_de_la_banda(Some(Keysym::Right), Keysym::Right, true), Tragar);
+        assert_eq!(
+            accion_de_la_banda(Some(Keysym::Right), Keysym::Right, true),
+            Tragar
+        );
         // ----- y sin overlay abierto sigue de largo (no se come la flecha) -----
         assert_eq!(
             accion_de_la_banda(Some(Keysym::Right), Keysym::Right, false),

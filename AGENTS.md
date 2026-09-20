@@ -1491,6 +1491,7 @@ sigue **abierto** vive en `AUDIT.md`, no acá.
 Se movieron en dos tandas el 2026-09-20: **13** en la limpieza (A1, A2, A3, A4, A6, A7,
 B3, C4, C8, D1, D2, D3, D11) y **9** al cerrar la Ronda 1 (B1, B2, B10, C3, C6, D9, D10,
 D12, D13).
+
 ### A1 — `wpctl` sin timeout: cuelgue indefinido (AUDIT §4.1)
 
 > **Resuelto** (§3): `read_volume()` pasó a `run_with_timeout(cmd, 500ms)`, el
@@ -2214,6 +2215,7 @@ parsea `/proc/meminfo` dos veces); (b) `total - avail` en `u64` sin chequeo: si
 `MemAvailable > MemTotal` (kernels/containers con contabilidad rara) es underflow.
 **Fix:** `if let Some((pct, gb)) = read_ram() { self.ram = Some(pct); self.ram_gb = Some(gb); }`
 (patrón que ya usa `refresh_cpu_ram`) y `total.saturating_sub(avail)`.
+
 ### D12 — Código muerto / no-op en render (AUDIT §6.10)
 
 > **Resuelto del todo.** Además del `bg_margin` y el `let _ = label_len` (que ya no

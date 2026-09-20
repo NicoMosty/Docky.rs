@@ -704,8 +704,7 @@ fn draw_full(
         );
     }
 
-    let cache_size =
-        (s.icon_size * s.dock_scale * s.magnify_scale * render_scale).ceil() as u32;
+    let cache_size = (s.icon_size * s.dock_scale * s.magnify_scale * render_scale).ceil() as u32;
     let dragging = dock.dragging_index;
     let layout = dock.layout();
     let (edx, edy) = dock.elevate_dir();
