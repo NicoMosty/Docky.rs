@@ -44,9 +44,31 @@ pub enum IpcMessage {
 
 const NOTIFY_SEP: char = '\u{1f}';
 
+/// Tope de un comando de IPC. 1024 quedaba corto para un `notify` con cuerpo largo: se
+/// truncaba en silencio y llegaba a medias (AUDIT.md C6). 16 KB es holgado para un
+/// título + cuerpo y sigue siendo un tope duro contra un cliente que manda basura.
+const IPC_MAX_BYTES: usize = 16 * 1024;
+
 fn socket_path(profile: &str) -> std::path::PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(dir).join(if profile.is_empty() {
+    // ----- con `XDG_RUNTIME_DIR` (que en una sesión Wayland siempre está) el socket ya
+    // es del usuario. Si falta NO se cae a `/tmp` pelado: un socket con nombre
+    // predecible ahí lo puede abrir cualquier usuario de la máquina y mandarle comandos
+    // al dock (AUDIT.md B2). Se usa un subdirectorio por uid con 0700. -----
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            use std::os::unix::fs::PermissionsExt;
+            let d = std::env::temp_dir().join(format!("dockyrs-{}", unsafe { libc::getuid() }));
+            if let Err(err) = std::fs::create_dir_all(&d) {
+                log::warn!("no pude crear {d:?} para el socket: {err}");
+            } else {
+                let _ = std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700));
+            }
+            d
+        });
+    dir.join(if profile.is_empty() {
         "dockyrs.sock".to_string()
     } else {
         format!("dockyrs-{profile}.sock")
@@ -112,17 +134,33 @@ pub fn spawn_listener(
     });
 }
 
+/// Comando de un cliente: el texto (recortado al tope) y si hubo que recortarlo.
+/// Separado de `handle_client` para poder probarlo con un `UnixStream::pair()` real,
+/// sin fabricar un `App` ni una conexión Wayland.
+fn leer_comando(stream: &UnixStream) -> Option<(String, bool)> {
+    let mut buf = Vec::with_capacity(256);
+    let mut rd = stream.take(IPC_MAX_BYTES as u64 + 1);
+    rd.read_to_end(&mut buf).ok()?;
+    if buf.is_empty() {
+        return None;
+    }
+    let truncado = buf.len() > IPC_MAX_BYTES;
+    if truncado {
+        buf.truncate(IPC_MAX_BYTES);
+        log::warn!("comando de IPC de más de {IPC_MAX_BYTES} bytes: lo corto");
+    }
+    Some((String::from_utf8_lossy(&buf).to_string(), truncado))
+}
+
 fn handle_client(
-    mut stream: UnixStream,
+    stream: UnixStream,
     tx: &Sender<IpcMessage>,
     conn: &Connection,
     qh: &QueueHandle<crate::app::App>,
 ) {
-    let mut buf = [0u8; 1024];
-    let Ok(n) = stream.read(&mut buf) else {
+    let Some((text, _)) = leer_comando(&stream) else {
         return;
     };
-    let text = String::from_utf8_lossy(&buf[..n]);
     let msg = match text.as_ref() {
         "toggle-search" => Some(IpcMessage::ToggleSearch),
         "osd-volume" => Some(IpcMessage::OsdVolume),
@@ -607,5 +645,70 @@ mod ipc_timeout_tests {
             "tardó {:?} en volver",
             start.elapsed()
         );
+    }
+}
+
+#[cfg(test)]
+mod ipc_socket_y_comando_tests {
+    use super::*;
+
+    /// B2: el socket vive en `XDG_RUNTIME_DIR` y, si falta, en un subdirectorio por uid
+    /// (0700), NO en `/tmp` pelado. Y el nombre lleva el perfil.
+    #[test]
+    fn el_socket_no_cae_en_tmp_pelado_y_lleva_el_perfil() {
+        let con_perfil = socket_path("dp");
+        assert_eq!(
+            con_perfil.file_name().unwrap().to_string_lossy(),
+            "dockyrs-dp.sock"
+        );
+        assert_eq!(
+            socket_path("").file_name().unwrap().to_string_lossy(),
+            "dockyrs.sock"
+        );
+        if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
+            assert_eq!(con_perfil.parent().unwrap(), std::path::Path::new(&dir));
+        } else {
+            let padre = con_perfil.parent().unwrap().to_string_lossy().to_string();
+            assert!(
+                padre.contains(&format!("dockyrs-{}", unsafe { libc::getuid() })),
+                "sin XDG_RUNTIME_DIR tiene que ser un dir por uid: {padre}"
+            );
+            assert!(!padre.ends_with("/tmp"), "no /tmp pelado: {padre}");
+        }
+    }
+
+    /// C6: un `notify` largo ya no se corta en 1024 bytes.
+    #[test]
+    fn un_comando_largo_se_lee_entero() {
+        let (mut cliente, servidor) = UnixStream::pair().expect("socketpair AF_UNIX");
+        let cuerpo = "x".repeat(4000);
+        let comando = format!("notify{NOTIFY_SEP}Título{NOTIFY_SEP}{cuerpo}");
+        cliente.write_all(comando.as_bytes()).unwrap();
+        drop(cliente);
+        let (leido, truncado) = leer_comando(&servidor).expect("comando");
+        assert!(!truncado, "4000 bytes tienen que entrar");
+        assert_eq!(leido, comando, "llega entero, con el cuerpo completo");
+    }
+
+    /// Y el tope sigue existiendo: un cliente que manda basura sin fin se corta (con
+    /// aviso), no se come la memoria del dock.
+    #[test]
+    fn lo_que_pasa_el_tope_se_corta() {
+        let (mut cliente, servidor) = UnixStream::pair().expect("socketpair AF_UNIX");
+        let basura = "y".repeat(IPC_MAX_BYTES + 500);
+        cliente.write_all(basura.as_bytes()).unwrap();
+        drop(cliente);
+        let (leido, truncado) = leer_comando(&servidor).expect("comando");
+        assert!(truncado, "tiene que avisar que cortó");
+        assert_eq!(leido.len(), IPC_MAX_BYTES);
+    }
+
+    /// Un cliente que conecta y no escribe no produce comando (y no cuelga: para eso
+    /// está el timeout de `preparar_cliente`).
+    #[test]
+    fn un_cliente_mudo_no_produce_comando() {
+        let (cliente, servidor) = UnixStream::pair().expect("socketpair AF_UNIX");
+        drop(cliente);
+        assert!(leer_comando(&servidor).is_none());
     }
 }
