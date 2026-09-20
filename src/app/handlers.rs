@@ -122,6 +122,40 @@ impl OutputHandler for App {
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
+/// Qué hacer con un `configure` de la superficie del dock, según el tamaño que mandó el
+/// compositor y el que pedimos (`applied_size`):
+///
+/// - `Adoptar`: no pedimos nada todavía (primer configure), manda el compositor.
+/// - `Reconciliar`: el tamaño no es el nuestro, así que se re-aplica el reparto propio una
+///   vez (si no, el buffer queda de otro tamaño que el layout y los clicks caen corridos:
+///   el hit test usa coordenadas locales, AUDIT.md B7).
+/// - `Dibujar`: coincide (el caso normal) o el compositor ya insistió con otro tamaño y no
+///   tiene sentido girar en bucle de `set_size` -> `configure` -> `set_size`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConfigureAccion {
+    Adoptar,
+    Reconciliar,
+    Dibujar,
+}
+
+pub(super) fn accion_del_configure(
+    applied: Option<(u32, u32)>,
+    nuevo: (u32, u32),
+    ya_reconciliado: bool,
+) -> ConfigureAccion {
+    match applied {
+        None => ConfigureAccion::Adoptar,
+        Some(ap) if ap != nuevo => {
+            if ya_reconciliado {
+                ConfigureAccion::Dibujar
+            } else {
+                ConfigureAccion::Reconciliar
+            }
+        }
+        Some(_) => ConfigureAccion::Dibujar,
+    }
+}
+
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         if layer.wl_surface() == self.layer.wl_surface() {
@@ -167,9 +201,50 @@ impl LayerShellHandler for App {
             return;
         }
         if layer.wl_surface() == self.layer.wl_surface() {
-            // ----- el tamaño que da el compositor y el que dibujamos: si no
-            // coinciden, el buffer se estira y los clicks caen corridos respecto
-            // a lo dibujado (el hit-test usa coordenadas locales del layout). -----
+            let (cw, ch) = configure.new_size;
+            // ----- el compositor manda el tamaño REAL de la superficie; si no es el que
+            // pedimos, el buffer queda de otro tamaño que el layout y los clicks caen
+            // corridos respecto a lo dibujado, porque el hit test usa coordenadas locales
+            // del reparto (AUDIT.md B7) -----
+            match accion_del_configure(
+                self.applied_size,
+                (cw, ch),
+                self.configure_reconciliado,
+            ) {
+                ConfigureAccion::Adoptar => {
+                    // ----- primer configure: es el que manda (todavía no pedimos nada) y
+                    // queda anotado para poder detectar desajustes después -----
+                    self.applied_size = Some((cw, ch));
+                    self.configure_reconciliado = false;
+                }
+                ConfigureAccion::Reconciliar => {
+                    self.configure_reconciliado = true;
+                    log::warn!(
+                        "dock: configure new_size=({cw},{ch}) != applied={:?}: re-aplico el reparto",
+                        self.applied_size
+                    );
+                    let panel = self
+                        .overlay_panel_size()
+                        .or_else(|| self.dock_menu_mode.as_ref().map(|m| (m.panel_w, m.panel_h)));
+                    match panel {
+                        Some((pw, ph)) => self.apply_panel_size(pw, ph),
+                        None => self.restore_dock_size(),
+                    }
+                    self.draw(qh);
+                    return;
+                }
+                ConfigureAccion::Dibujar => {
+                    if self.applied_size == Some((cw, ch)) {
+                        // ----- volvió a coincidir: se re-arma la reconciliación -----
+                        self.configure_reconciliado = false;
+                    } else {
+                        log::warn!(
+                            "dock: el compositor insiste con ({cw},{ch}) contra applied={:?}: dibujo como vino",
+                            self.applied_size
+                        );
+                    }
+                }
+            }
             log::debug!(
                 "dock: configure new_size={:?} base={:?} applied={:?}",
                 configure.new_size,
@@ -477,3 +552,35 @@ smithay_client_toolkit::delegate_pointer!(App);
 delegate_keyboard!(App);
 delegate_layer!(App);
 delegate_registry!(App);
+
+#[cfg(test)]
+mod configure_accion_tests {
+    use super::{ConfigureAccion, accion_del_configure};
+
+    /// B7: el caso normal es `Dibujar` (el compositor devuelve el tamaño que pedimos) y
+    /// NUNCA `Reconciliar`: si esto se rompe, cada configure re-aplicaría el tamaño y el
+    /// dock entraría en churn de `set_size` (con la pérdida de foco del puntero que eso
+    /// trae).
+    #[test]
+    fn el_caso_normal_no_reconcilia_nada() {
+        assert_eq!(
+            accion_del_configure(Some((640, 236)), (640, 236), false),
+            ConfigureAccion::Dibujar
+        );
+        // ----- el primero manda el compositor -----
+        assert_eq!(
+            accion_del_configure(None, (832, 26), false),
+            ConfigureAccion::Adoptar
+        );
+        // ----- desajuste: se reconcilia UNA vez -----
+        assert_eq!(
+            accion_del_configure(Some((640, 236)), (700, 236), false),
+            ConfigureAccion::Reconciliar
+        );
+        // ----- y si el compositor insiste, se dibuja como vino (sin bucle) -----
+        assert_eq!(
+            accion_del_configure(Some((640, 236)), (700, 236), true),
+            ConfigureAccion::Dibujar
+        );
+    }
+}
