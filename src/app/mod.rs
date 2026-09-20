@@ -373,6 +373,21 @@ pub(crate) fn accion_de_la_banda(
     }
 }
 
+/// Ventana mínima entre dos relecturas de workspaces por CLI. Una acción del usuario
+/// (abrir una ventana) emite 3-4 eventos en pocos ms y el primero ya lee el estado final,
+/// así que los de la ráfaga sobran; 150 ms deja pasar el siguiente cambio real (una
+/// segunda pulsación de teclado llega bastante después) y el pendiente se cobra en el
+/// tick de 1 s.
+pub(crate) const WS_READ_MIN_MS: u64 = 150;
+
+/// ¿Toca releer los workspaces ahora o se anota como pendiente?
+pub(crate) fn toca_leer_workspaces(desde_la_ultima: Option<std::time::Duration>) -> bool {
+    match desde_la_ultima {
+        None => true,
+        Some(d) => d >= std::time::Duration::from_millis(WS_READ_MIN_MS),
+    }
+}
+
 impl App {
     /// Qué modo del overlay está abierto, si hay alguno.
     pub(crate) fn current_overlay(&self) -> Option<OverlayMode> {
@@ -663,6 +678,10 @@ pub struct App {
     /// Última flecha con Shift que cicló las pestañas del overlay: su auto-repeat se
     /// traga hasta el release (ver `accion_de_la_banda` y AUDIT.md B1).
     pub overlay_cycle_key: Option<Keysym>,
+    /// Última relectura de workspaces por CLI y si quedó una pendiente por el throttle
+    /// (ver `App::refresh_workspaces` y AUDIT.md B4).
+    pub last_ws_read: Option<std::time::Instant>,
+    pub ws_read_pending: bool,
     pub seat: Option<wl_seat::WlSeat>,
     pub conn: Connection,
     pub qh: QueueHandle<App>,
@@ -741,7 +760,8 @@ pub(crate) fn trim_heap() {
 #[cfg(test)]
 mod overlay_tabs_tests {
     use super::{
-        AccionBanda, OVERLAY_ORDER, accion_de_la_banda, flecha_de_la_banda, overlay_cycle_dir,
+        AccionBanda, OVERLAY_ORDER, WS_READ_MIN_MS, accion_de_la_banda, flecha_de_la_banda,
+        overlay_cycle_dir, toca_leer_workspaces,
     };
     use crate::menu::OVERLAY_TABS;
     use smithay_client_toolkit::seat::keyboard::Keysym;
@@ -780,6 +800,34 @@ mod overlay_tabs_tests {
         assert!(!flecha_de_la_banda(Keysym::Down, false));
         for k in [Keysym::Left, Keysym::Right, Keysym::Up, Keysym::Down] {
             assert!(flecha_de_la_banda(k, true), "{k:?} en vertical");
+        }
+    }
+
+    /// B4: el throttle de la relectura de workspaces. La primera vez siempre toca; una
+    /// ráfaga (varios eventos en pocos ms) no; y pasado el mínimo, la siguiente vuelve a
+    /// tocar. Si alguien sube `WS_READ_MIN_MS` a lo grande, el test lo dice.
+    #[test]
+    fn el_throttle_de_workspaces_deja_pasar_una_por_rafaga() {
+        use std::time::Duration;
+        assert!(toca_leer_workspaces(None), "la primera siempre toca");
+        assert!(
+            !toca_leer_workspaces(Some(Duration::from_millis(0))),
+            "la ráfaga no"
+        );
+        assert!(!toca_leer_workspaces(Some(
+            Duration::from_millis(WS_READ_MIN_MS - 1)
+        )));
+        assert!(toca_leer_workspaces(Some(Duration::from_millis(
+            WS_READ_MIN_MS
+        ))));
+        // ----- en bloque const: si alguien mueve el mínimo fuera de un rango que deja
+        // pasar una segunda pulsación real, esto revienta al compilar (clippy pide
+        // justamente el bloque const acá) -----
+        const {
+            assert!(
+                WS_READ_MIN_MS >= 100 && WS_READ_MIN_MS <= 500,
+                "el mínimo tiene que dejar pasar una segunda pulsación real"
+            );
         }
     }
 

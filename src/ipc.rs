@@ -15,6 +15,13 @@ pub enum IpcMessage {
     VolumeChanged,
     BatteryChanged,
     BluetoothChanged,
+    /// `WorkspacesChanged` de niri: el evento **ya trae la lista entera**, así que el
+    /// dock no tiene que lanzar `niri msg --json workspaces` (que era el costo del
+    /// hallazgo B4). Se filtra por el output anclado y se ordena por id, igual que la
+    /// lectura por CLI (`workspaces_de_json` es la única cuenta de ese mapeo).
+    WorkspacesList(Box<[crate::widgets::WorkspaceInfo]>),
+    /// Algo cambió en los workspaces o en las ventanas y hay que **releer** (esos
+    /// eventos no traen la lista). Va con throttle en `App::refresh_workspaces`.
     WorkspacesChanged,
     /// Lo que el arranque leyó en un hilo aparte (batería, media, bluetooth,
     /// volumen): son las lecturas caras y el primer frame no las espera. Trae el
@@ -476,18 +483,47 @@ fn spawn_niri_workspace_watcher(
 /// al instante y el tick de 2 s ya no tiene que lanzar `niri msg -j keyboard-layouts`
 /// (~14 ms medidos por spawn).
 fn niri_mensaje(line: &str) -> Option<IpcMessage> {
-    if line.contains("KeyboardLayout") {
-        Some(IpcMessage::KbdLayoutChanged)
-    } else if line.contains("OverviewOpenedOrClosed") {
-        // `{"OverviewOpenedOrClosed":{"is_open":true}}`, sin espacios. Se busca
-        // el booleano DENTRO de este evento, no en la línea suelta.
-        Some(IpcMessage::OverviewChanged(
-            line.contains("\"is_open\":true"),
-        ))
-    } else if line.contains("Workspace") || line.contains("workspace") || line.contains("Window") {
-        Some(IpcMessage::WorkspacesChanged)
-    } else {
-        None
+    // ----- el filtro es por NOMBRE de evento, no por substring. Con "contiene
+    // Window/Workspace" pasaban cosas que el dock no dibuja: por UNA ventana que abre y
+    // cierra niri manda 10 eventos (medido) y `WindowFocusChanged`,
+    // `WindowFocusTimestampChanged` y `WindowLayoutsChanged` no cambian ni el workspace
+    // activo, ni cual está vacío, ni la urgencia: costaban 3 de los 10 `niri msg --json
+    // workspaces` de cada ciclo. -----
+    let ev: serde_json::Value = serde_json::from_str(line).ok()?;
+    let (nombre, payload) = ev.as_object()?.iter().next()?;
+    match nombre.as_str() {
+        "KeyboardLayoutsChanged" | "KeyboardLayoutSwitched" => Some(IpcMessage::KbdLayoutChanged),
+        // ----- se busca el booleano DENTRO del evento, no en la línea suelta -----
+        "OverviewOpenedOrClosed" => Some(IpcMessage::OverviewChanged(
+            payload
+                .get("is_open")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        )),
+        // ----- trae la lista: no se lanza nada -----
+        "WorkspacesChanged" => {
+            let vacio = Vec::new();
+            let list = payload
+                .get("workspaces")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&vacio);
+            Some(IpcMessage::WorkspacesList(
+                crate::widgets::workspaces_de_json(list).into_boxed_slice(),
+            ))
+        }
+        // ----- cambian el estado que el dock dibuja (punto activo, workspace vacío,
+        // urgencia) pero NO traen la lista completa: hay que releer -----
+        "WorkspaceActivated"
+        | "WorkspaceActiveWindowChanged"
+        | "WorkspaceUrgencyChanged"
+        | "WindowsChanged"
+        | "WindowOpenedOrChanged"
+        | "WindowClosed"
+        | "WindowUrgencyChanged" => Some(IpcMessage::WorkspacesChanged),
+        // ----- todo lo demás se ignora: `WindowLayoutsChanged`, `WindowFocusChanged`,
+        // `WindowFocusTimestampChanged`, `ConfigLoaded`, `CastsChanged`, el
+        // `{"Ok":"Handled"}` del acuse de recibo, … -----
+        _ => None,
     }
 }
 
@@ -579,16 +615,59 @@ mod niri_event_tests {
     /// que niri acusa recibo del pedido.
     #[test]
     fn el_filtro_del_event_stream() {
+        // ----- estos NO traen la lista, así que piden relectura -----
         for linea in [
-            r#"{"WorkspacesChanged":{}}"#,
             r#"{"WindowsChanged":{}}"#,
             r#"{"WindowOpenedOrChanged":{}}"#,
+            r#"{"WindowClosed":{"id":4}}"#,
+            r#"{"WorkspaceActivated":{"id":1,"focused":true}}"#,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":null}}"#,
+            r#"{"WorkspaceUrgencyChanged":{"id":3,"urgent":true}}"#,
+            r#"{"WindowUrgencyChanged":{"id":4,"urgent":true}}"#,
         ] {
             assert!(
                 matches!(niri_mensaje(linea), Some(IpcMessage::WorkspacesChanged)),
                 "{linea}"
             );
         }
+        // ----- y estos no cambian NADA de lo que el dock dibuja: con el filtro viejo
+        // (por substring "Window") costaban un `niri msg` cada uno, y por cada ventana
+        // que abre y cierra niri manda 10 eventos (medido) con 3 de estos adentro -----
+        for linea in [
+            r#"{"WindowFocusChanged":{"id":4}}"#,
+            r#"{"WindowFocusTimestampChanged":{"id":4,"timestamp":123}}"#,
+            r#"{"WindowLayoutsChanged":{"changes":[]}}"#,
+            r#"{"CastsChanged":{"casts":[]}}"#,
+            r#"{"ConfigLoaded":{"path":"/tmp/x"}}"#,
+        ] {
+            assert!(
+                niri_mensaje(linea).is_none(),
+                "{linea} no tendría que pedir nada"
+            );
+        }
+        // ----- `WorkspacesChanged` SÍ trae la lista entera: se usa el payload y no se
+        // lanza `niri msg --json workspaces` (era el costo de B4). La línea es una real
+        // capturada del event-stream de niri 26.04. -----
+        let payload = r#"{"WorkspacesChanged":{"workspaces": [{"id": 3, "idx": 2, "name": null, "output": "eDP-1", "is_urgent": false, "is_active": false, "is_focused": false, "active_window_id": null}, {"id": 1, "idx": 1, "name": null, "output": "eDP-1", "is_urgent": true, "is_active": true, "is_focused": true, "active_window_id": 4}]}}"#;
+        let Some(IpcMessage::WorkspacesList(ws)) = niri_mensaje(payload) else {
+            panic!("el payload tiene que dar WorkspacesList");
+        };
+        assert_eq!(ws.len(), 2, "los dos del payload");
+        assert_eq!(ws[0].id, 1, "y ordenados por id");
+        assert!(ws[0].active, "el activo sale de is_active");
+        assert!(ws[0].urgent, "y la urgencia de is_urgent");
+        assert_eq!(ws[0].output, "eDP-1");
+        assert_eq!(ws[1].id, 2);
+        assert!(!ws[1].active && !ws[1].urgent);
+        assert!(ws[1].empty, "sin active_window_id = vacío");
+        assert!(!ws[0].empty, "con active_window_id = con ventanas");
+        // ----- un `WorkspacesChanged` sin la lista (versión vieja de niri) no explota:
+        // da lista vacía, y el tick siguiente la corrige -----
+        let Some(IpcMessage::WorkspacesList(vacia)) = niri_mensaje(r#"{"WorkspacesChanged":{}}"#)
+        else {
+            panic!("sin lista tiene que dar lista vacía, no obras");
+        };
+        assert!(vacia.is_empty());
         for linea in [
             r#"{"KeyboardLayoutsChanged":{}}"#,
             r#"{"KeyboardLayoutSwitched":{"idx":1}}"#,

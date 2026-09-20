@@ -413,6 +413,12 @@ impl WidgetSnapshot {
         self.workspaces = read_workspaces();
     }
 
+    /// Aplica una lista ya leída (el payload de `WorkspacesChanged` de niri) sin volver
+    /// a lanzar `niri msg --json workspaces`.
+    pub fn set_workspaces(&mut self, list: Vec<WorkspaceInfo>) {
+        self.workspaces = list;
+    }
+
     pub fn refresh_clock(&mut self, settings: &crate::config::DockSettings) -> bool {
         let time = strftime_now(Self::clock_format(settings)).unwrap_or_default();
         let date = clock_date_now().unwrap_or_default();
@@ -953,10 +959,10 @@ pub fn niri_focus_window(id: u64) {
         .spawn();
 }
 
-fn read_workspaces_niri() -> Vec<WorkspaceInfo> {
-    let Some(list) = niri_json(&["workspaces"]).and_then(|v| v.as_array().cloned()) else {
-        return Vec::new();
-    };
+/// Lista de workspaces a partir del JSON de niri (el mismo formato para `niri msg
+/// --json workspaces` y para el payload de `WorkspacesChanged`). Filtra por el output
+/// anclado (`--output`) y ordena por id.
+pub(crate) fn workspaces_de_json(list: &[serde_json::Value]) -> Vec<WorkspaceInfo> {
     let pinned = pinned_output();
     let mut ws: Vec<WorkspaceInfo> = list
         .iter()
@@ -1003,6 +1009,13 @@ fn read_workspaces_niri() -> Vec<WorkspaceInfo> {
         .collect();
     ws.sort_by_key(|w| w.id);
     ws
+}
+
+fn read_workspaces_niri() -> Vec<WorkspaceInfo> {
+    let Some(list) = niri_json(&["workspaces"]).and_then(|v| v.as_array().cloned()) else {
+        return Vec::new();
+    };
+    workspaces_de_json(&list)
 }
 
 fn read_workspaces_hypr() -> Vec<WorkspaceInfo> {

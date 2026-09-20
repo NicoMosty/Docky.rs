@@ -735,6 +735,11 @@ impl App {
     }
 
     pub(crate) fn refresh_clock(&mut self, qh: &QueueHandle<Self>) {
+        // ----- el reintento del throttle de los workspaces: si una ráfaga de eventos
+        // se salteó la relectura, acá se cobra dentro del segundo siguiente -----
+        if self.ws_read_pending {
+            self.refresh_workspaces(qh);
+        }
         // ----- la grabación se refresca en el tick de 1 s: es un `stat` y el tiempo
         // dibujado tiene que avanzar de a un segundo, no de a dos -----
         if self.widgets.refresh_recording() {
@@ -781,32 +786,66 @@ impl App {
         self.relayout_dock(qh);
     }
 
+    /// Relee los workspaces lanzando `niri msg` (o `hyprctl`) y aplica el cambio. Va
+    /// con **throttle**: una sola acción del usuario (abrir una ventana) emite 3-4
+    /// eventos que piden relectura, y sin el tope cada uno costaba un `niri msg --json
+    /// workspaces` (medido: 27 spawns por 3 ventanas abriéndose y cerrándose). El
+    /// primero ya lee el estado FINAL —niri emite después de aplicar el cambio— así que
+    /// los de la ráfaga sobran; si alguno se saltea, queda `ws_read_pending` y el tick de
+    /// 1 s (`refresh_clock`) lo reintenta. Con el dock sin iconos fijados no hay nada que
+    /// medir: se sale antes, como en el resto de los `refresh_*`.
     pub(crate) fn refresh_workspaces(&mut self, qh: &QueueHandle<Self>) {
         if self.dock.icons.is_empty() {
-            let before = render::ws_target_for(&self.widgets.workspaces);
-            let was_empty = self.empty_workspace();
+            if !toca_leer_workspaces(self.last_ws_read.map(|t| t.elapsed())) {
+                self.ws_read_pending = true;
+                return;
+            }
+            self.last_ws_read = Some(std::time::Instant::now());
+            self.ws_read_pending = false;
             self.widgets.refresh_workspaces();
-            let after = render::ws_target_for(&self.widgets.workspaces);
-            self.marquee.track_ws_target(after);
-            self.sync_widget_bar_len();
-            // ----- la regla del workspace vacío se resuelve ACÁ, antes de decidir el
-            // HUD: `show_ws_flash` mira `dock_visible` en este mismo bloque, así que
-            // dejarlo al dibujo (que puede saltearse por un frame pendiente) hacía que
-            // el HUD apareciera y el dock se revelara tarde. -----
-            self.reveal_dock_if_stays(qh);
-            // ----- dejó de estar vacío (cambio a uno ocupado, o se abrió una
-            // ventana): la regla de "dock fijo" termina YA, no dentro del delay. Si el
-            // puntero está encima o hay un modo abierto, `should_hide` es false y el
-            // dock se queda (correcto). -----
-            if was_empty && !self.empty_workspace() && self.should_hide() {
-                self.set_dock_visible(false);
-            }
-            self.relayout_dock(qh);
-            // ----- sólo si el espacio activo cambió de verdad -----
-            log::debug!("wsflash: refresh before={before} after={after}");
-            if after != before {
-                self.show_ws_flash(qh);
-            }
+            self.post_workspaces_changed(qh);
+        }
+    }
+
+    /// Aplica una lista que YA vino en el evento (`WorkspacesChanged` de niri trae los
+    /// workspaces enteros): cero procesos, y pasa por el mismo camino que la relectura
+    /// para que el HUD, la regla del workspace vacío y el relayout no se puedan
+    /// desincronizar entre los dos caminos.
+    pub(crate) fn apply_workspaces(
+        &mut self,
+        list: Box<[crate::widgets::WorkspaceInfo]>,
+        qh: &QueueHandle<Self>,
+    ) {
+        if self.dock.icons.is_empty() {
+            self.widgets.set_workspaces(list.into_vec());
+            self.post_workspaces_changed(qh);
+        }
+    }
+
+    /// Lo que sigue a tener la lista nueva, venga de donde venga.
+    fn post_workspaces_changed(&mut self, qh: &QueueHandle<Self>) {
+        let before = render::ws_target_for(&self.widgets.workspaces);
+        let was_empty = self.empty_workspace();
+        let after = render::ws_target_for(&self.widgets.workspaces);
+        self.marquee.track_ws_target(after);
+        self.sync_widget_bar_len();
+        // ----- la regla del workspace vacío se resuelve ACÁ, antes de decidir el
+        // HUD: `show_ws_flash` mira `dock_visible` en este mismo bloque, así que
+        // dejarlo al dibujo (que puede saltearse por un frame pendiente) hacía que
+        // el HUD apareciera y el dock se revelara tarde. -----
+        self.reveal_dock_if_stays(qh);
+        // ----- dejó de estar vacío (cambio a uno ocupado, o se abrió una
+        // ventana): la regla de "dock fijo" termina YA, no dentro del delay. Si el
+        // puntero está encima o hay un modo abierto, `should_hide` es false y el
+        // dock se queda (correcto). -----
+        if was_empty && !self.empty_workspace() && self.should_hide() {
+            self.set_dock_visible(false);
+        }
+        self.relayout_dock(qh);
+        // ----- sólo si el espacio activo cambió de verdad -----
+        log::debug!("wsflash: refresh before={before} after={after}");
+        if after != before {
+            self.show_ws_flash(qh);
         }
     }
 
