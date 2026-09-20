@@ -491,9 +491,10 @@ reordenamiento de widgets) y lo posterior:
   apiladas (`overlay_tabs_h(true)` = 4 filas) y la banda es más alta. Los paneles
   crecen con la banda al abrirse (`build_app_search_controls`, `clip_panel_h`,
   `open_wallpaper_picker`). Tests: `menu_render::tabs`, `menu::wallpaper_picker::hit_tests`,
-  `app::overlay_tabs_tests`. La banda **no es clickeable**: los modos se cambian con
-  Shift+←/→ (sumarle click es el hit test de la banda + `cycle_overlay` desde el
-  handler).
+  `app::overlay_tabs_tests`. La banda **es clickeable**: `menu_render::overlay_tab_layout`
+  (la misma función que dibuja) da el reparto de los slots y `overlay_tab_at` traduce un
+  punto del panel a la pestaña, así que el click va **derecho** a la que se clickeó en
+  vez de ciclar (`switch_overlay`, compartido con el ciclo de Shift+←/→).
 - `scripts/pointer.py`.
 - Autostart en niri: `spawn-at-startup` en `~/.config/niri/config/5_autostart.kdl`.
   Con una sola salida, sin `--output` ni `--profile`. No arrancar
@@ -1726,8 +1727,8 @@ reordenamiento de widgets) y lo posterior:
   - El portapapeles usa el cross ANCHO en vertical (`OVERLAY_PANEL_VERTICAL_WIDE` =
     330, el del launcher): con 170 los títulos se elidían a ~16 caracteres. Los fondos
     siguen en 170 porque su miniatura mide 150.
-  - La banda de pestañas **no es clickeable** (los modos se cambian con Shift+←/→):
-    sumarle click es el hit test de `band_rect` + `cycle_overlay` desde el handler.
+  - La banda de pestañas es clickeable además de ciclarse con Shift+←/→: el click va
+    derecho a la que se clickeó (ver el bullet "La banda de pestañas es clickeable").
 
 - **En el vertical los cuatro paneles del overlay comparten el ALTO**
   (`menu::OVERLAY_PANEL_H` = 640), que es el espejo de `OVERLAY_PANEL_W` en el
@@ -1757,6 +1758,34 @@ reordenamiento de widgets) y lo posterior:
     `--toggle-*` con el dock en `Left` ⇒ las cuatro superficies abren 640 de alto
     (390/390/230/390) y volver a 26x584 al cerrar; con ↓ 200 veces el tope del scroll
     deja la última fila entera y el peek no se despega del borde.
+
+- **La banda de pestañas es clickeable** (pedido: con el cursor no se podía cambiar de
+  pestaña). El click va **derecho** a la pestaña clickeada —no cicla— y el ciclo con
+  Shift+←/→ sigue igual: los dos entran por `App::switch_overlay` (que es el viejo
+  `cycle_overlay` partido en dos, con la dirección del deslizamiento como parámetro).
+  - El reparto de los slots vive en **`menu_render::overlay_tab_layout`**, la función que
+    ya usaba el dibujo, y `overlay_tab_at` traduce un punto a un índice: una sola cuenta
+    para la pastilla, el slot y el click (trampa 10). Antes el reparto estaba adentro de
+    `draw_overlay_tabs` y no se podía reusar, que es por lo que la banda no era
+    clickeable.
+  - En el panel vertical el slot mide `pill_len + 10 * scale` (84 medido), así que los
+    cinco slots **no reparten los 640 del panel**: el aire de abajo no cambia de modo
+    (`overlay_tab_at` devuelve `None`) y el hit test resta el origen de la banda, que con
+    el dock a la derecha arranca corrido.
+  - `App::overlay_tab_hit` sale de `current_overlay()` (el panel de ajustes comparte la
+    superficie pero no tiene banda) y usa el mismo `scale` que el dibujo
+    (`output_scale`), con las coordenadas del `panel_local`. El chequeo va **antes** de
+    las ramas de cada panel en `pointer.rs`, así que el hit test del panel no se lo come.
+  - Click en la pestaña activa = nada (no cierra el panel): para cerrar están ESC, el
+    click afuera y clickear un widget del dock.
+  - Verificado a mano con el dock en `Left`: las cinco pestañas se clickean (Apps →
+    Clipboard → Notifs → Wallpapers → Windows → Apps, incluidas las dos que comparten
+    `app_search_mode`), el panel queda en 390x640 en todas, la pestaña activa no hace
+    nada y el aire debajo de los cinco slots tampoco. Sensor: `overlay: click en la
+    banda (px,py) -> <Modo>` en el log. Guard:
+    `menu_render::tabs::tabs_tests::el_click_de_la_banda_cae_en_la_pestana_dibujada`
+    (centros y bordes de los cinco slots en fila y columna, el aire del final de la
+    columna y la banda corrida del dock a la derecha).
 
 - Calendario del reloj: no se pasa de mes con el mouse (no tiene ‹ › clickeables,
   sólo ←/→) y no selecciona días ni navega semanas: muestra el mes y marca hoy. El
