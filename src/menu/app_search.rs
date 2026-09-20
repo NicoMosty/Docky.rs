@@ -59,8 +59,9 @@ pub fn build_app_search_controls(frame: PanelFrame, is_vertical: bool) -> (Vec<C
     // ----- la separación caja -> tarjetas es la misma que la del borde de arriba
     // a la caja: el panel del launcher usa MENU_PADDING de punta a punta. El alto
     // que devuelve es el del CONTENIDO (el frame), no el del panel. -----
-    let fixed_h =
-        (app_search_strip_y(frame) - frame.y) + app_search_strip_h(frame, is_vertical) + MENU_PADDING;
+    let fixed_h = (app_search_strip_y(frame) - frame.y)
+        + app_search_strip_h(frame, is_vertical)
+        + MENU_PADDING;
     (controls, fixed_h)
 }
 
