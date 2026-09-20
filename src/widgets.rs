@@ -1382,15 +1382,38 @@ fn cached_remote_art(url: &str, allow_network: bool, downloaded: &mut bool) -> O
 /// Baja la caratula. `--fail` para que un 404 no se guarde como `.jpg` y se sirva
 /// para siempre (D3 de AUDIT.md), y `--max-time 1`: quien llama ya es un hilo de fondo,
 /// pero no hay razon para esperar 3 s por una miniatura.
+/// Tope de lo que se baja de una carátula remota. La URL sale de la metadata MPRIS, que la
+/// escribe cualquier app: un `artUrl` a un archivo de gigabytes no tiene que llenar el
+/// disco (ni el pico de memoria al decodificarlo). 8 MB es holgado para una tapa
+/// (AUDIT.md B8).
+const ART_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
 fn download_art(url: &str, path: &std::path::Path) -> Option<()> {
     std::fs::create_dir_all(art_cache_dir()).ok()?;
     let status = std::process::Command::new("curl")
-        .args(["-s", "-L", "--fail", "--max-time", "1", "-o"])
+        .args([
+            "-s",
+            "-L",
+            "--fail",
+            "--max-time",
+            "1",
+            // ----- corta si el servidor dice el tamaño… -----
+            "--max-filesize",
+            "8388608",
+            "-o",
+        ])
         .arg(path)
         .arg(url)
         .status()
         .ok()?;
     if !status.success() || std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) == 0 {
+        let _ = std::fs::remove_file(path);
+        return None;
+    }
+    // ----- …y esto lo corta igual si no lo dijo (el `--max-filesize` sólo actúa si el
+    // servidor manda `Content-Length`) -----
+    if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > ART_MAX_BYTES {
+        log::warn!("caratula de mas de {ART_MAX_BYTES} bytes: la descarto");
         let _ = std::fs::remove_file(path);
         return None;
     }
@@ -1850,5 +1873,52 @@ mod art_cache_tests {
         prune_art_cache(&dir, 200);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod art_url_tests {
+    use super::*;
+
+    /// B8: de la metadata MPRIS (que la escribe cualquier app) sólo se aceptan URLs
+    /// http(s) o `file://`; todo lo demás se ignora, y el archivo del caché es un HASH de
+    /// la URL (no puede escaparse del directorio con `../`).
+    #[test]
+    fn las_urls_de_caratula_se_filtran_y_el_archivo_es_un_hash() {
+        let mut descargado = false;
+        // ----- esquemas que no se tocan -----
+        for url in [
+            "ftp://x/y.jpg",
+            "data:image/png;base64,AAAA",
+            "javascript:alert(1)",
+            "/etc/passwd",
+            "",
+        ] {
+            assert!(
+                resolve_art_path(url, true, &mut descargado).is_none(),
+                "{url} no tendría que resolverse"
+            );
+        }
+        assert!(!descargado, "y sin red de por medio");
+        // ----- `file://` sí (es local) -----
+        assert_eq!(
+            resolve_art_path("file:///tmp/portada.png", false, &mut descargado).as_deref(),
+            Some("/tmp/portada.png")
+        );
+        // ----- y el path del caché es un nombre plano, sin recorrer directorios -----
+        let path = art_cache_path("http://host/../../etc/passwd.jpg");
+        assert_eq!(
+            path.parent().unwrap(),
+            art_cache_dir(),
+            "el archivo vive en el dir del caché"
+        );
+        let nombre = path.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            !nombre.contains('/') && !nombre.contains(".."),
+            "el nombre es un hash: {nombre}"
+        );
+        assert!(nombre.ends_with(".jpg"));
+        // ----- y el tope del archivo es el documentado -----
+        assert_eq!(ART_MAX_BYTES, 8 * 1024 * 1024);
     }
 }
