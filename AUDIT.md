@@ -86,7 +86,20 @@ Trabajar sobre un árbol sucio hace imposible distinguir "lo rompió el agente" 
 
 > **Corregidos después de esta auditoría** (detalle en la sección "Qué se hizo" de
 > `AGENTS.md`): **A1** — `read_volume()` pasó a `run_with_timeout`;
+> **A2** — `extract_color_scheme` y `run_matugen` pasan por `run_with_timeout` con
+> tope de 10 s (matugen tarda 1-2 s de verdad, pero colgado ya no deja al dock sin
+> dibujar);
+> **A3, A4 y D3 resueltos (2026-09-20, ver §4.5 y §4.6).** El `GetLayout` del tray
+> se resuelve en un hilo propio (`tray::spawn_menu_worker` → `IpcMessage::TrayMenuReady`)
+> y la conexión lleva `method_timeout` de **500 ms** medido; la carátula remota se baja
+> en el hilo del watcher de media y el hilo que dibuja llama a `read_media(false)`
+> (sin red). Verificado end-to-end con un SNI que nunca contesta y con un click real
+> inyectado, y con un tarpit local + `playerctl` falso para la carátula.
 > **A6** — `catch_unwind` + `reexec()` con tope de 3 en `DOCKYRS_REEXEC`;
+> **A7** — mitigado sin memoizar: `Compositor::detect()` corta por `HYPRLAND_INSTANCE_SIGNATURE`/`NIRI_SOCKET`
+> (que niri/uwsm exportan siempre) y el `niri msg` de sondeo queda sólo para un
+> arranque sin env; además los workspaces y el layout de teclado salieron del tick de
+> 2 s (llegan por el event-stream), así que `detect()` se llama por evento, no por tick;
 > **D1** — el reparto salió a `workspaces::slot_at()`, que recibe `hit_scale()`;
 > **A5 parcial** — cerrados los 3 panics alcanzables (`percent_decode` sobre bytes,
 > el buffer oculto de `draw_hidden`, `icons.get()` en el click de apps).
@@ -94,7 +107,8 @@ Trabajar sobre un árbol sucio hace imposible distinguir "lo rompió el agente" 
 > `widgets::percent_decode_tests`, `main::reexec_tests`.
 > **A5 sigue abierto en parte**: el guard cubre sólo el dispatch, no los drenajes
 > de IPC posteriores al `match` en `main.rs`, y los `.lock().unwrap()` (≈60) no se
-> tocaron. El resto de la tabla sigue pendiente.
+> tocaron. **B1** (auto-repeat de Shift+flecha) sigue abierto. El resto de la tabla
+> sigue pendiente.
 
 | ID | Sev. | Título | Archivo |
 | --- | --- | --- | --- |
@@ -115,7 +129,7 @@ Trabajar sobre un árbol sucio hace imposible distinguir "lo rompió el agente" 
 | **B7** | MEDIA | `configure` no reconcilia `new_size` con lo dibujado → clicks corridos | `handlers.rs:154` |
 | **B8** | MEDIA | Carátula: metadata MPRIS no confiable → request saliente + escritura en caché | `widgets.rs:932` |
 | **D2** | MEDIA | `percent_decode` paniquea con `%` seguido de multibyte (input MPRIS) | `widgets.rs:906` |
-| **D3** | MEDIA | `curl` sin `--fail`: un 404 se cachea como `.jpg` y no reintenta nunca | `widgets.rs:943` |
+| **D3** | HECHO | `curl` sin `--fail`: un 404 se cacheaba como `.jpg` y no reintentaba | `widgets.rs:943` |
 | **D4** | MEDIA | Caché de carátulas en disco sin tope (crece con cada tema nuevo) | `widgets.rs:925` |
 | **D5** | MEDIA | El `Watcher` del tray no purga items muertos; los re-resuelve todos cada 2 s | `tray.rs:348` |
 | **D6** | MEDIA | `draw_text_clipped` aloca y zero-llena un `Pixmap` por frame (~30 fps) | `render/media.rs:8` |
@@ -363,6 +377,32 @@ seguir animando y responder a Escape mientras corre.
 
 ### 4.5 — `GetLayout` D-Bus sincrónico en el hilo principal {#a3}
 
+> **Resuelto (2026-09-20).** El `GetLayout` ya no corre en el hilo que dibuja: los dos
+> sitios de `dock_popup.rs` **envían una petición** (`tray::MenuRequest`) a un hilo
+> propio (`tray::spawn_menu_worker`) y el menú vuelve por el canal de IPC
+> (`IpcMessage::TrayMenuReady` → `App::apply_tray_menu`, que descarta el resultado si
+> el usuario ya abrió otra cosa: el guard es `tray_menu_still_wanted`, con test).
+>
+> Además la conexión D-Bus del tray ahora lleva `method_timeout` de **500 ms**
+> (`tray::TRAY_CALL_TIMEOUT`), que es el techo de *cualquier* llamada del tray en vez
+> de los 25 s del default de zbus. La constante está medida, no elegida a ojo:
+> `GetLayout` real con gdbus (incluye el spawn del proceso) dio **10,6-13,4 ms**
+> (nm-applet) y **17,5-20,2 ms** (blueman), o sea ~25-50x de margen.
+>
+> **Verificado end-to-end con `scripts/fake_sni_hang.py`** (un SNI que registra un
+> `Menu` y **nunca contesta** `GetLayout`) más un click real inyectado: el log del
+> falso da `GETLAYOUT` → **500 ms** → `ACTIVATE`, o sea el timeout disparando y el
+> fallback de menú vacío funcionando. Lo importante: **el dock siguió dibujando y
+> procesando clicks durante todo el cuelgue** — con el código viejo el primer click
+> habría congelado el hilo principal 25 s (los clicks del barrido habrían dejado de
+> registrarse; se registraron todos). El camino feliz también: con remmina (app real)
+> el menú se abre igual, `getlayout=1ms`, por el hilo nuevo.
+>
+> **Lo que NO hace**: no hay estado "cargando" en el popup. El menú aparece cuando
+> llega la respuesta (~30 ms normal, 500 ms con la app colgada) y si vuelve vacío se
+> cae al `Activate` de siempre. Se prefirió eso a un spinner para un caso que, con el
+> timeout, dura medio segundo.
+
 **Archivo:** `src/app/dock_popup.rs:75` y `:568`
 
 ```rust
@@ -397,6 +437,23 @@ animando y el popup mostrar "cargando" → menú o `Activate`.
 ---
 
 ### 4.6 — `curl` de carátula en el hilo principal {#a4}
+
+> **Resuelto (2026-09-20).** `read_media` recibe un flag `allow_network` y el hilo que
+> dibuja siempre llama con `false`: sin red, la carátula remota que no está en el caché
+> simplemente se resuelve a `None` (el widget se dibuja igual, sin tapa). La descarga la
+> hace `warm_media_art()` **en el hilo del watcher de media**, que después manda un
+> segundo `MediaChanged` para que la carátula entre en un frame posterior. El único
+> otro llamador con red es `read_deferred`, que ya corre en un hilo propio al arrancar.
+> De paso se cerró **D3**: el `curl` ahora lleva `--fail` (un 404 ya no se cachea como
+> `.jpg`) y `--max-time 1` en vez de 3.
+>
+> **Verificado con un tarpit local** (un server que acepta la conexión y no responde
+> nunca) y un `playerctl` falso que emite metadata cada 300 ms con esa `artUrl`:
+> mientras una descarga estaba **en vuelo** (verificado que era el *mismo* `curl`, hijo
+> del proceso del dock, antes y después), una notificación pedida por IPC se dibujó
+> **0,4 s después**. Es decir: el hilo principal nunca esperó por la red. El
+> `10.255.255.1` que sugería esta auditoría no sirve en esta máquina: rebota en 85 ms,
+> así que no ejercita nada (de ahí el tarpit local).
 
 **Archivo:** `src/widgets.rs:932-954`
 

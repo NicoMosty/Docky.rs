@@ -216,6 +216,47 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
    que ya era una superficie full-screen con input region). Arranca **vacía** y
    recién con el configure se sabe cuánto mide la salida para calcular el agujero.
 
+ 1. **El tick del reloj es la única vía de los datos de 1 s, y dormía 20 s.**
+   `spawn_clock_ticker` (la única llamada a `App::refresh_clock`) hacía
+   `sleep(20s)`. El reloj muestra HH:MM, así que 20 s le sobraban y nadie lo notó
+   hasta que la **grabación** colgó de ese mismo tick: `refresh_recording` es un
+   `stat` que tiene que verse en ~1 s y su contador es MM:SS. Con 20 s, la isla
+   tardaba ese tiempo en ver el archivo (el reloj de la isla incluido) y el
+   contador avanzaba de a 20, no de a 1. Ahora son 1 s.
+   **Lo que costó la vuelta**: el pendiente decía que "la verificación en vivo
+   falló — con el archivo presente la isla NO mostró la actividad" y sospechaba de
+   `refresh_clock` o de `dirs::cache_dir()`. Ninguna de las dos: el dato llegaba,
+   sólo llegaba tarde. La espera de la prueba (2 s) era más corta que el tick (20
+   s), así que el bug estaba *en el test*, escondido detrás de un tick de reloj
+   que no se mira. Lección: antes de instrumentar con `log::debug!`, mirar **cada
+   cuánto corre** el tick que alimenta el dato — `grep -n "from_secs" src/main.rs`
+   responde eso en un segundo.
+   Medido en reposo: 4 jiffies en 20 s con tick de 1 s contra 11 con el de 20 s
+   (dentro del ruido: el tick que domina es el de 2 s del sistema, que spawnea
+   `wpctl`), y 0 líneas de log (no hay redibujados de más: `refresh_recording`
+   devuelve `false` cuando no hay archivo).
+
+ 2. **Lo que puede colgarse por algo externo va en un hilo, y el techo lo pone la
+   conexión.** Dos auditorías (A3 y A4) encontraron lo mismo dos veces: una llamada
+   D-Bus (`GetLayout` del tray, default de zbus **25 s**) y un `curl` de carátula
+   (hasta 3 s) corriendo en el hilo que dibuja. El síntoma es "el dock se trabó" y no
+   hay log que lo delate, así que se paga una sesión entera. Las dos quedaron en
+   hilos propios (`tray::spawn_menu_worker` y el watcher de media) y el resultado
+   vuelve por el canal de IPC (`IpcMessage`) o por un segundo aviso.
+
+- **El techo va en la conexión, no en cada llamada**: `tray_conn()` crea la sesión
+     con `method_timeout` de 500 ms (`tray::TRAY_CALL_TIMEOUT`), medido contra
+     `GetLayout` real (10-20 ms) para no cortar una respuesta lenta pero legítima.
+     Un `--max-time` en el `curl` es lo mismo del lado de la red.
+- **Un resultado asíncrono necesita un guard de "todavía me interesa"**: el menú
+     que llega tarde no puede pisar el panel que el usuario abrió entretanto
+     (`tray_menu_still_wanted`, con test). El mismo problema, del otro lado, es
+     trampa 15 (un resultado que llega y nadie dibuja).
+- **Y hay que poder probarlo**: `scripts/fake_sni_hang.py` es la app del tray que
+     nunca contesta, y el tarpit local de `/tmp` la red que nunca contesta. Con
+     `10.255.255.1` (lo que sugería AUDIT) el `connect` rebota en 85 ms y **la prueba
+     no prueba nada**: un host que falla rápido no ejercita un timeout.
+
 ## Mapa del código
 
 - `src/render/widget_spec.rs` — la tabla `WIDGETS`: la única lista de widgets del
@@ -249,7 +290,9 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
   volumen, tray).
 - `src/widgets.rs` — lecturas del sistema y `WidgetSnapshot`.
 - `src/config.rs` — `DockSettings`, `default_widgets()`, load/save.
-- `scripts/pointer.py` — puntero virtual por uinput para tests.
+- `scripts/pointer.py` — puntero virtual por uinput para tests (también
+  `scripts/sweep_vertical.py` para el dock vertical y `scripts/fake_sni_hang.py`
+  para una app del tray que nunca contesta `GetLayout`).
 
 ## Convenciones
 
@@ -298,15 +341,8 @@ del dock, así que no necesita saber la geometría.
 
   ```sh
   dockyrs --toggle-dock-menu                     # abre el panel
-  sudo python3 scripts/pointer.py --key down --times 3
-  sudo python3 scripts/pointer.py --key escape   # cierra el panel
-  niri msg --json layers | grep dockyrs          # interactividad de vuelta en None
-  ```
-
-  ```sh
-  dockyrs --toggle-dock-menu                     # abre el panel
-  sudo python3 scripts/pointer.py --key down --times 3
-  sudo python3 scripts/pointer.py --key escape   # cierra el panel
+  python3 scripts/pointer.py --key down --times 3
+  python3 scripts/pointer.py --key escape   # cierra el panel
   niri msg --json layers | grep dockyrs          # interactividad de vuelta en None
   ```
 
@@ -318,11 +354,38 @@ del dock, así que no necesita saber la geometría.
   clúster derecho:
 
   ```sh
-  sudo python3 scripts/pointer.py --extra 600 --button L   # -> Some(Clock)
-  sudo python3 scripts/pointer.py --extra 600 --hover      # calendario: abre center=…
-  sudo python3 scripts/pointer.py --key right --times 2    # → mes siguiente (x2)
-  sudo python3 scripts/pointer.py --key escape             # cierra el panel
+  python3 scripts/pointer.py --extra 600 --button L   # -> Some(Clock)
+  python3 scripts/pointer.py --extra 600 --hover      # calendario: abre center=…
+  python3 scripts/pointer.py --key right --times 2    # → mes siguiente (x2)
+  python3 scripts/pointer.py --key escape             # cierra el panel
   ```
+
+- **Con el dock VERTICAL (`Left`/`Right`) `pointer.py` no sirve**: barre la franja de
+  arriba con `rel(3, 0)`, y con la barra al costado el puntero nunca entra al blob
+  (que está centrado en la vertical). Para eso está `scripts/sweep_vertical.py`, que
+  parkea abajo-izquierda (clamping), **sube** hasta cruzar el blob (así detecta el
+  `reveal`), y después recorre la barra con paso configurable clickeando en cada
+  paso: el sensor es la línea `dock: click ... -> Some(Kind)` del log, que trae las
+  coordenadas **lógicas** de la superficie, y con eso se ubica cada widget. Como
+  `park_away` deja el puntero abajo (no en 0,0), el script sube en y; y después de
+  cada click manda ESC por el teclado virtual para cerrar el popup que se haya
+  abierto. Medido con esta config (`Left` + `Middle`): Workspaces en `y≈349`, Tray en
+  `420-441`, Clock en `445-474`.
+- **Para las llamadas que pueden colgarse hace falta un servicio que cuelgue**:
+  `scripts/fake_sni_hang.py` registra un StatusNotifierItem con `Menu` y un dbusmenu
+  cuyo `GetLayout` **nunca contesta** (usa `async_callbacks` y no los llama, así el
+  loop sigue vivo y sí recibe el fallback). Imprime con marca de tiempo
+  `GETLAYOUT` / `ACTIVATE`, que es lo que se mide: el hueco entre los dos es el
+  `method_timeout` de la conexión (500 ms) y `ACTIVATE` es el fallback de menú vacío.
+  Dos cosas que costaron: el `BusName` **hay que retenerlo** en una variable (sin
+  referencia se libera y el dock no puede resolver el item: el watcher lo lista
+  igual, porque guarda el string), y los callbacks de python-dbus tienen que
+  llamarse exactamente `reply`/`error` (los busca **por nombre**).
+- **Una red que "no responde" de verdad** no es `10.255.255.1`: en esta máquina
+  rebota en 85 ms (`curl` rc=7) y no ejercita ningún timeout. Lo que sirve es un
+  tarpit local: un socket que acepta la conexión y **no contesta nunca** (`python3`
+  con `accept()` y un `threading.Event().wait()` por conexión), apuntado por un
+  `playerctl` falso en el `PATH` (ver trap 15 y A4).
 
 - Ojo con la convención de signo: `REL_WHEEL +1` (rueda arriba) llega a la app como
   `discrete = -1`, porque en `wl_pointer` el eje vertical es positivo hacia abajo.
@@ -620,8 +683,9 @@ reordenamiento de widgets) y lo posterior:
     `exclusive` mientras el menú está abierto y desaparece al cerrarse.
   - Guardo: `menu::keynav_tests` (orden/extremos/deshabilitados del tray),
     `menu::volume_panel::volume_panel_tests::el_x_de_un_porcentaje_da_la_vuelta_completa`.
-    A mano: `scripts/pointer.py --key up|down|enter|escape` (nuevo; necesita sudo
-    por `/dev/uinput`) y las líneas `teclado:` del log.
+    A mano: `scripts/pointer.py --key up|down|enter|escape` y las lineas `teclado:`
+    del log (sin sudo: `/dev/uinput` tiene ACL para `nicomosty`, ver "Testear sin
+    mouse").
 
 - **Calendario del reloj por hover**: con el puntero encima del widget `Clock` (el
   clúster derecho de la config de fábrica) se abre el mes actual debajo, igual que el
@@ -866,11 +930,14 @@ reordenamiento de widgets) y lo posterior:
     `set_size(0,0)`, `set_keyboard_interactivity(0)`, configure de niri con
     `1920x1080`, los tres `wl_region.add` exactos (`0,236,1920,844` / `0,0,640,236` /
     `1280,0,640,236`) y el buffer `1920x1080` stride 7680; 0 errores de protocolo.
-  - **Falta verificar el click de verdad**: inyectar puntero necesita `sudo`/uinput,
-    que no está disponible. Los tests cubren la cuenta de la región y el protocolo
-    confirma la superficie; lo que hay que probar a mano es que clickear una ventana
-    de abajo cierre el panel y que clickear una tarjeta del launcher siga abriendo la
-    app (el agujero).
+  - **El click de VERDAD ya se puede probar sin sudo**: `/dev/uinput` tiene una ACL
+    que le da `rw` a `nicomosty` (`getfacl /dev/uinput` → `user:nicomosty:rw-`), así
+    que `scripts/pointer.py` corre como usuario normal. Las notas viejas de este
+    archivo que decían "necesita sudo" quedaron desactualizadas (el `sudo` no
+    molesta, pero si no hay contraseña a mano hace creer que la verificación es
+    imposible y no lo es). Verificado el 2026-09-20 inyectando clicks reales: el log
+    del dock imprime `dock: click derecho (x,y) -> Some(Kind)` con las coordenadas
+    lógicas de la superficie, que es el sensor que usa `scripts/sweep_vertical.py`.
 
 - **El nombre de la 1ª tarjeta titilaba al mover el mouse.** No era un artefacto de
   dibujo: había **dos fuentes de verdad** para "qué tarjeta está resaltada". La pastilla
@@ -1208,7 +1275,424 @@ reordenamiento de widgets) y lo posterior:
   - **Lo que NO hace**: el panel no se aparta del dock cuando el dock crece (el
     `pos_y` sigue moviendo los dos juntos) ni hay animación de apertura entre ellos.
 
+- **El dock aparece y se oculta como una isla dinámica, y en reposo queda un blob
+  con una actividad viva.** Dos piezas, en el mismo motor:
+  - **`reveal_anim` (0 = isla compacta, 1 = dock entero)**: la aparición/colapso del
+    dock morphea la cápsula en vez de aparecer de golpe. `draw(.., reveal)` dibuja el
+    dock completo en un pixmap aparte y lo pega **recortado por la máscara de la
+    cápsula** (`reveal_mask`), con la opacidad subiendo con el largo. El piso es el
+    blob de la isla, no la nada: el dock **no desaparece, se encoge**.
+  - **`draw_island`**: el estado que se ve MIENTRAS el dock está oculto. Misma
+    cápsula que el dock en `reveal = 0`, pero con las actividades adentro
+    (`island_activities`: **Media si está sonando > Volumen**, y la **batería** de
+    segunda siempre que haya dato) dibujadas con el **mismo `draw` del widget**
+    (`layout::draw_one_widget`), pegadas a lo largo de la cápsula, no con una segunda
+    versión. Sin dato no hay isla: queda el buffer transparente de siempre.
+  - **Una sola cuenta de la forma**: `reveal_capsule` (rect) la usan la máscara, el
+    fondo (`draw_capsule`, compartido con el dock entero) y el blob de la isla; y
+    `island_plan` (qué actividades + el largo de cada una + el total) la usan el
+    dibujo de la isla y el piso de la animación. Si se despegaran, el dock se
+    encogería a un blob y la isla se dibujaría en otro (trampa 10).
+  - **La isla crece para que entren sus actividades** (`island_plan` = la medida
+    natural de cada widget, con el piso de `ISLAND_COMPACT` × el grosor —2,6: son
+    ~73 px de blob— y el techo del dock): Media pide ~122 px con su carátula y su
+    texto, el volumen ~38 y la batería ~43 (medido con la config del usuario y
+    `widget_scale` 1,1065). Con un largo fijo, al título de Media le cortaba las
+    letras a la mitad y la batería no entraba.
+  - **El blob tiene RELLENO en los dos extremos** (`IslandPlan::pad` = el radio de la
+    esquina, clampeado a la mitad del eje corto) y un **gap entre actividades**
+    (`ISLAND_GAP` = 5). No es decoración: adentro de la franja del radio el blob se
+    angosta (con r=13 en un blob de 26 de ancho, a 2 px del extremo solo quedan ~20 px
+    de ancho) y **la máscara le cortaba el contenido**, que se veía como "la batería
+    se ve rara" — es el icono más ancho (18 + 3 del nub) y estaba mordido contra el
+    borde. El contrato es `compact - 2·pad ≥ suma + gaps` y lo custodia
+    `la_isla_crece_para_que_entren_las_actividades` (calcula la franja útil).
+  - **El piso NO se aplica sin actividades**: ahí `compact = 0` es "no hay isla" y el
+    dock colapsa a nada (si no, el reveal terminaría en un blob que `draw_island` no
+    dibuja). Lo cazó el mismo test.
+  - **El buffer NO se redimensiona para animar** (trampa 1): el morph es todo dentro
+    del pixmap; el `set_size` sigue siendo sólo el del relayout del dock. Y
+    `draw_island` reusa la superficie y el pool del dock, así que no suma ni una
+    superficie (tampoco un frame callback de más: el que pide lo consume el tick del
+    reveal, que se apaga solo al llegar al destino).
+  - **La isla no prende lecturas nuevas**: los datos son los de `refresh_*`, que ya
+    están gateados por el widget colocado. Por eso Media aparece en la isla **sólo
+    con el widget `Media` colocado** (que es también lo que enciende el
+    `playerctl --follow`, +7 MB de hijo), y con `media_smooth_scroll` apagado el
+    título se recorta en vez de scrollear, igual que en la barra. La config del
+    usuario ya tiene el widget `Media` en `Left` (pedido explícito: la isla muestra
+    Now Playing y la batería a la vez), así que el watcher está corriendo.
+  - **Medido**: reveal `0.00 -> 1.00` en 15 frames (~230 ms) y colapso `1.00 -> 0.00`
+    en 20 (~330 ms), todos por frame callback; el número de la isla cambia al instante
+    con el volumen (`50` medido a los 1.5 s de un `wpctl set-volume`, contra el tick de
+    2 s); con un `playerctl` falso en `PATH` se verificó el camino entero de Media
+    (la isla pasó a mostrar `Tema de pr…` + la batería, ganándole al volumen) y la
+    vuelta atrás al morir el player; en reposo **0-2 ticks de CPU en 6 s** con 0 líneas
+    de log (el piso de siempre) y ~13,7 MB de RSS; `dockyrs` sigue en `Layer::Top` con
+    `keyboard_interactivity: None` cuando está oculto.
+  - **Limitación conocida**: el eje corto de la isla es el grosor del dock (26 px),
+    así que el contenido va rotado como en la barra vertical y adentro se ve la
+    pastilla propia del widget. Una isla más gruesa pide pre-dimensionar la superficie
+    al estado mayor **y** restringir la input region a la cápsula: hoy
+    `sync_autohide_surfaces` hace `set_input_region(None)` (toda la superficie es el
+    disparador del hover), así que el aire reservado para crecer se comería clicks de
+    la ventana de abajo. Patrón a copiar: `dock_popup::popup_input_region()`.
+  - **El panel `Notifs` mide lo mismo que el portapapeles**: cross ancho en vertical
+    (`OVERLAY_PANEL_VERTICAL_WIDE` = 330 + los 26 de la banda) y su alto de contenido
+    (`clip_content_h()`). Medido: los dos abren **390x610**. Antes crecía con la cantidad
+    de avisos y en vertical quedaba una columna de 196 de ancho, que se veía apretada.
+  - **El dock oculto SÓLO se revela desde la isla**: la input region de la superficie se
+    achica al blob (`render::island_blob_region`, la misma cuenta que dibuja) en vez de
+    quedar en la superficie entera. Medido con `WAYLAND_DEBUG=1`:
+    `wl_region.add(0, 247, 26, 116)` sobre una superficie de 26x610. Visible vuelve a la
+    superficie entera, y **sin isla** (sin datos) también: si no, el dock no se podría
+    revelar nunca. Efecto lateral: la franja de 26x~500 que antes se comía el dock le
+    llega ahora a la ventana de abajo. Se re-aplica sólo cuando cambia (`applied_input`),
+    que cada `set_input_region` es un `commit` de más.
+  - **La isla NO recibe puntero, y no es un olvido**: al entrar al **blob** (que es lo
+    único que el dock oculto tiene activo) el `Enter` revela el dock en el mismo handler y `should_hide()` exige `pointer_pos` en `None`,
+    así que la isla existe **sólo con el puntero lejos de la superficie**. Se probó
+    cablearle rueda = volumen y tap = play/pause (`island_hit` sobre `island_spans`) y
+    hubo que revertirlo: era código inalcanzable. Para darle interacción hay que
+    **achicar el disparador al blob** (se pierde tirar el mouse al borde) o aceptar que
+    scrollear revele el dock: decisión de diseño, no de código.
+  - **La isla entera SE CORRE a la altura del indicador** con el split abierto:
+    `island_ws_shift` (del MISMO reparto del dock, `layout_widgets`) devuelve cuánto
+    hay que desplazar el blob sobre el eje largo para quedar centrado donde el dock
+    tiene el widget de Workspaces, y ese desplazamiento **viaja con el split**
+    (`* ws_split`), así que el movimiento es parte de la misma animación de apertura.
+    Sin esto, al revelarse el dock el indicador saltaba de lugar (el bug del HUD
+    centrado). Medido en vivo: la banda de la hora pasó de `y=503` (isla cerrada) a
+    `484` (split abierto), o sea ~19 px. Guard:
+    `la_isla_se_corre_al_lugar_del_indicador` (caso desparejo a propósito: con el
+    indicador en el centro el shift sería 0 y el test no probaría nada).
+  - **Al cambiar de workspace la isla se PARTE en dos** (`island_ws_split`): el
+    indicador entra EN EL MEDIO, entre la hora y la batería, en vez de que el HUD
+    reemplace la isla 3 s (que se veía como "la isla desaparece"). Es una actividad
+    más del plan (`island_activities(.., ws_split)` mete `Workspaces` al medio) y sus
+    dos gaps crecen con el split (`plan.gap * ws_split`), así que en 0 la isla mide lo
+    mismo que antes de la feature y **no hay salto** al abrirse. El largo lo anima
+    `tick_island_split_frame` (mismo criterio que el reveal: el frame que se pide al
+    dibujar es el reloj, y `smooth_transitions` apagado lo salta). El HUD de siempre
+    queda como **fallback para cuando no hay isla** (sin actividades no hay dónde
+    poner el indicador). Guard: `la_isla_se_parte_en_dos_con_el_indicador_al_medio`
+    (en 0 son 2 items, en 1 son 3 con el indicador en el medio, a medias el indicador
+    mide la mitad y el largo queda entre las dos). Sensor:
+    `wsflash: split -> abrir la isla con el indicador en el medio` en el log.
+  - **La isla muestra HORA + BATERÍA** (`island_activities`): la hora **compacta** (sólo
+    `11:38`: sin AM/PM y sin fecha) y la batería de segunda. El **volumen queda en el
+    dock** a propósito (ahí tiene su pastilla, su rueda y su panel) y **Media no se
+    muestra**: necesitaría el widget `Media` colocado (los `refresh_*` están gateados
+    por el widget) y la config del usuario ya no lo tiene. Si vuelve, es una línea en
+    `island_activities`. El marquee de la isla queda cableado para ese caso
+    (`advance: true` + `set_marquee_rate`), pero con media fuera de la isla no corre
+    nunca: **el costo medido (18 ticks/6 s ≈ 3% de un core) sólo aparecía mientras
+    sonaba música**.
+  - **El "modo compacto" vive en `Ctx.compact`** (no en un segundo dibujo): `len_clock`
+    y `draw_clock_widget` leen el MISMO flag y la MISMA cadena (`WidgetSnapshot::time_short`,
+    que saca el sufijo AM/PM con `sin_ampm`), así que la medida y el dibujo no se pueden
+    despegar (trampa 12: es el bug del reloj vertical otra vez). La barra lo arma en
+    `false` (`draw_widgets`, `widget_natural_len`) y la isla en `true`
+    (`draw_one_widget`, `island_plan`). Guards: `el_reloj_compacto_mide_solo_la_hora_sin_ampm`
+    y `la_hora_de_la_isla_no_lleva_ampm`. El resto de los widgets ignoran el flag: el
+    que necesite otra cosa en la isla lo mira él.
+  - Guards: `render::reveal_tests` (el blob y el dock entero en los dos ejes, el largo
+    que crece monótono, la máscara que recorta y deja el eje corto completo, la lista de
+    actividades de la isla —media > volumen, batería siempre de segunda— y que el blob
+    crezca para que entren, con la franja útil calculada). Sensor:
+    `reveal:<ms> <antes> -> <después> visible=` en el log.
+
+- **El `GetLayout` del tray y la carátula remota salieron del hilo que dibuja**
+  (A3 y A4 de AUDIT.md, cerrados el 2026-09-20). Ninguno de los dos era visible
+  hasta que se midió: son los dos únicos llamados que pueden **colgarse** por algo
+  externo (una app del tray que no contesta su D-Bus, un host que no responde).
+  - **A3 — el menú del tray en su propio hilo**: los dos sitios de
+    `dock_popup.rs` que llamaban `tray::fetch_menu` (menú raíz y submenú) ahora
+    **piden** (`crate::tray::MenuRequest`) y el resultado vuelve por el canal de IPC
+    (`ipc::IpcMessage::TrayMenuReady` → `app::dock_popup::apply_tray_menu`). El
+    worker es **uno solo** (`tray::spawn_menu_worker`), así las peticiones se
+    atienden en orden y el último click pisa al anterior en vez de que gane el que
+    conteste primero. Además `tray_conn()` pone `method_timeout` de **500 ms**
+    (`tray::TRAY_CALL_TIMEOUT`) en la conexión compartida: es el techo de CUALQUIER
+    llamado del tray (incluido el `GetProperty` de `resolve_item` que corre en el
+    hilo del tray) en vez de los **25 s** del default de zbus. El 500 está medido:
+    `GetLayout` real con gdbus dio 10,6-13,4 ms (nm-applet) y 17,5-20,2 ms (blueman).
+  - **A4 — la carátula remota en el hilo del watcher**: `read_media` recibe
+    `allow_network` y el hilo que dibuja SIEMPRE pasa `false` (sin red: si no está
+    en caché, `art_path` es `None` y el widget se dibuja sin tapa). La descarga la
+    hace `warm_media_art()`, que se llama **desde el watcher de media** después de
+    avisar el título: si bajó algo, manda un segundo `MediaChanged` y la carátula
+    entra en un frame posterior. El otro llamador con red es `read_deferred`, que ya
+    corre en un hilo al arrancar. De paso el `curl` lleva `--fail` (D3: un 404 ya no
+    se cachea como `.jpg`) y `--max-time 1` en vez de 3.
+  - **Guard del resultado viejo**: `tray_menu_still_wanted(settings_open, popup_screen)`
+    decide si el menú que llegó tiene a quién contestarle. Sin él, un tray lento
+    (hasta 500 ms) le pisaba el panel de volumen o los ajustes que el usuario acababa
+    de abrir. Test: `app::dock_popup::tray_menu_tarde_tests`. El submenú tiene su
+    propio guard, más fino: `pending_submenu` (el id que espera) + el `menu_path`.
+  - **Verificado end-to-end, sin sudo** (ver la ACL de `/dev/uinput` más arriba):
+    - A3 con `scripts/fake_sni_hang.py` (un SNI que registra un `Menu` y **nunca**
+      contesta `GetLayout`) + un click real: `GETLAYOUT` → **500 ms** → `ACTIVATE`,
+      o sea el timeout disparando y el fallback de menú vacío. Y lo que importa: el
+      dock **siguió procesando clicks** durante todo el cuelgue (los 11 clicks del
+      barrido quedaron en el log; con el código viejo el primero habría congelado el
+      hilo principal 25 s). Camino feliz con remmina: `getlayout=1ms` y el popup
+      abre igual.
+    - A4 con un **tarpit local** (un server que acepta y no contesta nunca) + un
+      `playerctl` falso que emite metadata cada 300 ms: con la MISMA descarga en
+      vuelo (verificado por pid, hija del proceso del dock) una notificación pedida
+      por IPC se dibujó **0,4 s** después. Ojo: el `10.255.255.1` que sugería AUDIT
+      no sirve acá, rebota en 85 ms y no ejercita nada.
+  - **Lo que NO se hizo**: no hay estado "cargando" en el popup del tray (aparece
+    cuando llega la respuesta: ~30 ms normal, 500 ms colgado; si viene vacío, cae al
+    `Activate` de siempre). Y la descarga que falla se reintenta en cada evento de
+    metadata, porque no se recuerda el fracaso (mismo comportamiento que antes, sólo
+    que fuera del hilo que dibuja).
+
 ## Pendientes conocidos
+
+- **Isla dinámica, lo que sigue** (ordenado por valor/costo, medido contra el código;
+  lo marcado con ✔ ya está):
+  1. ✔ **El marquee del título** (con `media_smooth_scroll` prendido) y ✔ **mostrar dos
+     actividades** (la principal + la batería).
+  2. **Las interacciones de puntero están bloqueadas por el trigger** (ver arriba):
+     decidir si el disparador se achica al blob (rueda = volumen, tap = play/pause, y se
+     pierde tirar el mouse al borde) o si se deja la isla como display y los controles
+     viven en el dock revelado (hoy: así).
+  3. **Un solo cuerpo que morphea**: hoy el OSD, la notificación y el HUD de
+     workspaces le *piden prestada* la superficie al dock (`layer_is_borrowed`,
+     `set_size` por modo), así que el dock desaparece cuando sale el OSD. Migrarlos a
+     `draw_island` + el motor de reveal los vuelve estados de la misma cápsula y borra
+     esa familia de bugs. Es el escalón estructural (medio-alto).
+  4. **Que Media viva sólo en la isla**: hoy el widget `Media` está colocado en la
+     barra (pedido explícito) y muestra `Nothing is playing` al pedo cuando no suena
+     nada. Sacarlo de la barra y dejar que la isla lo lea sola pide desgatear
+     `media_wanted`/`refresh_media`/`read_deferred` (con el arte gateado por
+     `has_widget(Media)`, si no el `curl` de carátula de AUDIT A4 corre al vacío) — ~15
+     líneas, a cambio del `playerctl --follow` encendido siempre que haya autohide.
+  5. **Actividades concurrentes con prioridad real**: `island_activities` es una lista
+     fija (principal + batería); falta la cola que desplace la que llega y el reparto en
+     mitades. `island_plan`/`island_spans` ya son la única cuenta del largo y la
+     posición, así que el split entra ahí. Ojo con la asimetría del tap: la actividad de
+     Media existe **sólo mientras `playing`**, así que el tap pausa pero no reanuda
+     (habría que decidir si un player pausado deja el título en la isla).
+  6. **Grabación como actividad viva**: `record-toggle.sh` ya escribe
+     `~/.cache/dockyrs-recording-path` al empezar y lo borra al terminar, así que
+     alcanza con leerlo en el tick (el tiempo sale del mtime). Punto rojo + tiempo.
+  7. **Long-press**: no tiene sentido todavía (la isla ES el dock: expandir ya es
+     revelar). Serviría recién para "abrir la app del player" o para controles sin
+     revelar, y para eso hay que decidir antes qué abre. Necesita un `Instant` del press
+     (hoy hay `press_pos` pero ningún reloj de long-press).
+  8. **Timer/countdown**: no existe nada de timers (necesita IPC + UI de entrada).
+  9. **Notificaciones con botones**: el más caro: el notifyd ignora `actions`
+     (`_actions: Vec<&str>`) y el pill no tiene hit targets ni teclado.
+  - Cosmético descartado: **separador de 1 px entre actividades** (el gap de 5 ya las
+    separa y el iPhone no dibuja divisor) y **una isla más gruesa que la barra** (el
+    bump: el eje corto de la isla ES el grosor del dock, así que un bump más grueso pide
+    pre-dimensionar la superficie al estado mayor **y** restringir la input region a la
+    cápsula —hoy `sync_autohide_surfaces` hace `set_input_region(None)`, o sea que el
+    aire reservado se come los clicks de abajo—; patrón a copiar:
+    `dock_popup::popup_input_region()`. Subir `dock_scale` engorda las dos cosas).
+  - Lo que **no** conviene: swipe para descartar (no hay detección de gestos y el
+    mouse-out ya cierra), squish/stretch (la forma es un rounded-rect en un eje) y
+    badges/Face ID/AirDrop (no hay fuente de dato).
+  - **Prioridad honesta**: AUDIT.md sigue con **B1** (Shift+flecha en auto-repeat
+    cicla los modos en bucle). A2, **A3** y **A4** quedaron cerrados (A3/A4 el
+    2026-09-20: ver "Qué se hizo"), y el resto de la tabla es media/baja.
+  - **Verificado 2026-09-20 en una pasada por los pendientes**: de los dos puntos
+    marcados "sin verificar a ojo" quedó **cero**. La grabación andaba pero tarde
+    (trampa 17: el tick dormía 20 s, no 1) y el widget `Mic` quedó confirmado
+    (`MUTE` en rojo / `ON` sin rojo). Lo único que sigue sin verificar a mano es el
+    **click real del click-catcher** (la nota de arriba, línea ~889): el protocolo y
+    la cuenta de la región están verificados, el click físico no — y ahora **sí se
+    puede** (ver la ACL de `/dev/uinput` en esa misma nota), ya no hace falta sudo.
+
+- **Niri: qué falta usar** (repaso contra la IPC de niri 26.x: `enum Request` 16
+  variantes, `enum Event` 19, `enum Action` 141; el dock hoy usa Workspaces/Windows/
+  Layers/KeyboardLayouts + el event-stream + un puñado de acciones). Ordenado por
+  valor/costo:
+  - ✔ **Urgencia** (HECHO): `WorkspaceInfo.urgent` se lee del `is_urgent` de niri y el
+    punto del workspace va **rojo pleno** (`ws_tone` en `render/workspaces.rs`, el mismo
+    rojo del mute). No hizo falta tocar la IPC: `niri_mensaje` ya manda cualquier línea
+    con "Workspace"/"Window" a `WorkspacesChanged`, así que el evento
+    (`WorkspaceUrgencyChanged`) re-lee los workspaces y el dato entra solo. Hyprland no
+    expone urgencia (`urgent: false`). Guard: `ws_tone_tests::el_urgente_va_en_rojo_y_el_resto_en_el_acento`.
+    Verificado en vivo: `niri msg action set-window-urgent --id N` → el JSON de
+    workspaces pasa a `is_urgent: true` → el punto se ve rojo. **Ojo al probarlo**: la
+    acción es `set-window-urgent --id <id>` (no existe `set-workspace-urgent`), y
+    **enfocar la ventana limpia la urgencia** (lo dice niri), así que si cambiás al
+    workspace de esa ventana el rojo desaparece — hay que dejarla en otro workspace
+    (p. ej. estando en el vacío) para verlo.
+  - **`Event::ScreenshotCaptured { path }`**: la isla puede hacer el flash "Guardado en
+    …" **sin adivinar nada** y también para las capturas hechas con la UI de niri (hoy
+    el dock sólo sabe de las suyas). El `path` es `None` si fue sólo al portapapeles.
+  - **`Event::CastStartedOrChanged` / `CastStopped` / `CastsChanged`** (y
+    `Request::Casts`): actividad de isla "se está compartiendo pantalla" — el mismo
+    caso que la grabación, pero para cualquier cast (ventana/monitor).
+  - **Nombres de workspace** (`Workspace.name` + `Action::SetWorkspaceName`): el widget
+    muestra puntos; con el nombre se puede elidir texto. Y el dock puede **nombrar** el
+    workspace activo.
+  - **`Request::FocusedWindow` / `FocusedOutput`**: más barato que `niri msg --json
+    windows` para "qué está enfocado" (título de la ventana en la isla, o resaltar la
+    enfocada en el panel Windows).
+  - **`Request::PickColor`**: "tomar el acento de un píxel de la pantalla" desde
+    Ajustes → Colors. Es el caso de uso natural de este dock (ya tiene acentos +
+    matugen) y niri lo expone listo.
+  - **`Request::PickWindow`** (+ `Action::ScreenshotWindow --id`): capturar la ventana
+    que clicás (es el ejemplo que da la propia doc de niri).
+  - **`Window.focus_timestamp`** (+ `WindowFocusTimestampChanged`): el orden de
+    **recientes** para el panel Windows, que hoy usa el orden de `niri msg windows`.
+  - **Screenshot nativo** (`Action::Screenshot`/`ScreenshotScreen`/`ScreenshotWindow`
+    con `show-pointer`): reemplazaría el selector de región propio (`app/screenshot*`,
+    superficie full-screen + input region) por la UI de niri, que ya es táctil, tiene
+    teclado y avisa con `ScreenshotCaptured`. Candidato fuerte a borrar código, con el
+    costo de perder el look del dock en ese modo.
+  - **Layout niri-native** (`ExpandColumnToAvailableWidth`, `SetColumnWidth`,
+    `CenterColumn`, `ToggleColumnTabbedDisplay`, `MoveWindowToWorkspace`,
+    `MoveWorkspaceToMonitor`): un panel/widget de layout en el dock.
+  - **Chicos y baratos**: `Action::ShowHotkeyOverlay` (botón de ayuda de atajos),
+    `PowerOffMonitors`/`PowerOnMonitors` (botón o actividad), `Quit { skip_confirmation }`
+    como ítem del menú de energía, `ConfigLoaded` (el usuario recargó niri: re-leer
+    `wallpaper_program()`/tema, que hoy se lee una vez al arrancar), `OutputsChanged`
+    (monitor conectado: los perfiles por salida) y `Request::Version` (chequear antes de
+    usar un request nuevo, en vez de asumir).
+
+- **Panel de notificaciones** (implementado; el pedido era "un dock para notificaciones, lo
+  más sencillo posible, con negrilla e itálica"):
+  - **Historial**: `App::notifications: Vec<NotifyEntry { title, body, at }>`, el más
+    nuevo primero, tope `menu::NOTIF_HISTORY_CAP` = 50. Lo llena `push_notification`, que
+    se llama **antes** del corte de `show_notification` (el aviso entra al historial
+    aunque el pill no se muestre porque hay otro modo abierto). `at` es la hora del reloj
+    del dock **sin AM/PM** (`WidgetSnapshot::time_short`): no hay un segundo formato de
+    hora en el código. Si el panel está abierto, el aviso nuevo lo re-abre para que el
+    alto crezca (el frame sale de la cantidad de avisos).
+  - **Un panel más del overlay**: pestaña **`Notifs`** (`OVERLAY_TABS` pasó a 5 y
+    `OVERLAY_ORDER` a 5, entre Clipboard y Wallpapers), `notifications_mode` con sólo
+    `{ scroll, hovered, frame, is_vertical }` — sin selección, sin animación y sin
+    acciones. Geometría en `menu/notifications.rs` (filas de 34, 5 visibles, el rect de
+    cada fila y su hit test) y dibujo en `menu_render/notifications.rs`. El cross en
+    vertical es el angosto (`OVERLAY_PANEL_VERTICAL_W` = 170, medido: la superficie queda
+    en 230x610).
+  - **Tipografía**: título en negrilla (700), cuerpo normal elidido y **hora en
+    itálica** — la itálica NO existía en el canvas: se rasteriza armando un SVG
+    (`font-style`), así que ahora hay `TextCache::get_italic` (una línea de flag por
+    `lookup`/`rasterize` + el flag en la clave del caché). El elidedor `fit` pasó a ser
+    `pub(super)` para que lo compartan el portapapeles y este panel.
+  - **El toast de notificaciones vive en su PROPIA superficie** (`dockyrs-notify`,
+    `Layer::Overlay` anclada **arriba a la derecha** con margen 8, `exclusive_zone(-1)`,
+    teclado `None` e **input region vacía** — los clicks la atraviesan y el aviso se va
+    solo con su timeout). Se crea al primer aviso y se **suelta** al terminar el fade
+    (`toast_layer = None`), como el popup: es descartable, no la compartida del dock
+    (trampa 2 no aplica). Antes el aviso le pedía la superficie al dock, que es una
+    franja de 26 px pegada al borde izquierdo: de ahí que apareciera encima del panel
+    del launcher y que la píldora fuera vertical (76x300). Ahora el toast es **siempre
+    apaisado** (300x76 medido) y `NotificationArgs::is_vertical` lo fuerza, porque el
+    dock de este setup es vertical y el render elegía el layout con `dock.is_vertical()`.
+  - Por eso `notification_mode` **ya no está** en `layer_is_borrowed` ni en
+    `forces_dock_visible` (el dock no se revela ni se da por prestado por un aviso), ni
+    hay corte por modos abiertos en `show_notification`: un aviso se ve aunque el
+    launcher esté abierto.
+  - **El cierre es INMEDIATO a propósito** (timeout de 4 s + 0.9 s por línea, o un
+    click). Antes se iba con un fade que dependía de los frame callbacks de la
+    superficie: si esos no llegaban, el aviso se quedaba pegado en pantalla para
+    siempre (bug reportado). No volver a meterle animación de salida sin resolver eso:
+    la superficie se suelta de una (`toast_layer = None` la desmapea).
+  - **Un click sobre el toast lo descarta**: la input region es SU rectángulo
+    (`region.add(0, 0, w, h)`) y el `Press` sobre esa superficie llama a
+    `close_notification_mode` desde `handlers::pointer_frame`.
+  - **Ojo al crearla**: la superficie recién creada no tiene tamaño hasta el
+    `configure`, así que el primer dibujo lo dispara `handlers::configure` (un `attach`
+    antes de eso lo rechaza el compositor).
+  - **Cierre y teclado del panel**: ESC y click afuera (catcher) cierran, como los otros
+    paneles; el modo está en `enforce_keyboard`, `layer_is_borrowed`, `forces_dock_visible`,
+    `overlay_panel_size`, `current_overlay`, `cycle_overlay`, `dismiss_overlay` y en el
+    corte de `show_notification`. **Ojo con `overlay_panel_size`**: sin el arm de un modo
+    nuevo el panel queda mapeado pero invisible (no hay reparto) — pasó en la primera
+    prueba.
+  - Flechas/rueda/PageUp/PageDown/Home/End scrollean (`scroll_notifications`, clamp con
+    `notif_max_scroll`); IPC `--toggle-notifications` (y el ciclo de pestañas).
+  - Guards: `menu::notifications::notif_tests` (el hit test cae en la fila que dibuja el
+    rect, fuera del frame no hay fila, el alto se acota y el scroll no pasa de lo que
+    sobra) y `menu_render::tabs` (el slot de la banda ahora con 5 pestañas). Sensor:
+    `notifs: abre con N aviso(s)` en el log.
+
+- **Widgets y actividades nuevos** (propuesta, nada de esto está implementado). Un
+  widget nuevo son **4 lugares**: el enum `WidgetKind`, su entrada en `WIDGETS`
+  (`natural_len` + `draw` + `click`), `WIDGET_KIND_ORDER` y `widget_label`; el test
+  `la_tabla_cubre_todos_los_widgets_del_panel` avisa si falta alguno.
+  - **Para el dock**, por valor/costo:
+    1. ✔ **Mic mute** (HECHO y **verificado a ojo**): widget `Mic` (icono +
+       `ON`/`MUTE`, **rojo cuando está muteado**), `read_mic` comparte el parseo con
+       `read_volume` (`read_wpctl`) y el click togglea el mute
+       (`WidgetAction::ToggleMic`). Se lee en el tick SÓLO si el widget está colocado
+       (es otro `wpctl` de ~19 ms). Verificado: `MUTE` en rojo muteado y `ON` sin
+       rojo al desmutear (`wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 0`). **Cómo verlo**:
+       agregar `{"kind":"Mic","slot":"Left"}` a `settings.widgets`, reiniciar y
+       revelar el dock con `niri msg action open-overview` o con
+       `scripts/pointer.py` (funciona sin sudo); después restaurar la config.
+    2. **Perfil de energía**: `powerprofilesctl get/set` (performance/balanced/
+       power-saver) con click que cicla. Barato.
+    3. **Inhibidor de idle**: lanzar/matar `systemd-inhibit --what=idle:sleep` y mostrar
+       el estado (hay que matar el hijo al salir del dock). Barato.
+    4. **Clima**: Open-Meteo por HTTP (sin API key) con `run_with_timeout`, caché en
+       disco y refresco cada 15-30 min. Primer widget que necesita red + estado propio:
+       el más pedido, costo medio.
+    5. **Tráfico de red**: deltas de `/proc/net/dev` cada 2 s (↓↑ en KB/s); hay que
+       guardar la muestra anterior, como hace `custom_last_polls`.
+    6. **Espacio libre** (`statvfs` del home) y **temperatura** (`/sys/class/thermal`):
+       baratos, valor medio; lo que se extraña de CPU/RAM.
+    7. **Notificaciones + No Molestar**: el notifyd es nuestro (contar no leídas + un
+       toggle), pero toca el otro binario y un canal nuevo: costo medio.
+  - **Para la isla**, como actividad viva (el motor ya está: `island_activities` + el
+    `draw` del widget o un caso propio):
+    1. **Timer/Pomodoro**: el clásico de una isla. Backend barato (`Instant` + el tick del
+       sistema) + IPC `dockyrs --timer 25m`; lo caro es la UI de entrada.
+    2. **Grabación**: punto rojo + tiempo leyendo `~/.cache/dockyrs-recording-path` (lo
+       escribe `record-toggle.sh`) y el mtime. Barato y muy "live activity".
+    3. **Cargando** (rayo + % unos segundos al enchufar) y **batería baja** (≤10%: el blob
+       late en rojo). El dato y el color ya están.
+    4. **Flash de "listo"**: al guardar un screenshot o copiar al portapapeles, la isla
+       muestra el destino o el conteo 2 s. Los dos flujos ya existen y saben cuándo
+       terminan.
+    5. **Conectividad**: wifi caído / VPN (2 s). El dato de red está; la VPN habría que
+       leerla.
+    6. **El OSD (volumen/brillo) como estado de la isla** en vez de pedirle la superficie
+       al dock: es el escalón estructural que ya está en la lista de arriba.
+
+- **Grabación como actividad viva** (implementado y **verificado a ojo**): widget
+  `Recording` (punto rojo + `MM:SS`, el mismo reparto de pastilla que volumen/mic) y
+  `island_activities` lo pone **primero** cuando hay grabación, aunque el widget no esté
+  colocado en la barra: el dato es un `stat` (`read_recording` mira
+  `~/.cache/dockyrs-recording-path`, que escribe `record-toggle.sh`, y el tiempo sale
+  del `mtime`), así que no cuesta un spawn. El click corre el script.
+  - **El bug de la verificación fallida era el tick, no el dato** (trampa 17):
+    `refresh_recording` se llama desde `refresh_clock`, y ese ticker dormía **20 s**,
+    así que el archivo se veía hasta 20 s después y el contador saltaba de a 20. La
+    espera de 2 s de la prueba era más corta que el tick, de ahí el "no se ve".
+    Arreglado: el ticker va a **1 s**.
+  - Verificado a ojo (crear el archivo → isla en ~1-2 s con `00:02`; unos segundos
+    después `00:25`; borrarlo → la isla vuelve a reloj+batería en ~1-2 s). El archivo
+    se creó a mano; no hace falta `wf-recorder` para probarlo.
+
+- **A2 cerrado**: `extract_color_scheme` (el matugen que corre en el hilo principal al
+  elegir fondo, 1-2 s) y `run_matugen` pasan por `widgets::run_with_timeout` (que pasó a
+  `pub(crate)`) con un tope de **10 s**: matugen tarda de verdad, así que el tope es
+  holgado, pero colgado ya no deja al dock sin dibujar para siempre.
+
+- **Ojo al agregar un widget (corrección)**: son **2 lugares**, no 4 — el enum
+  `WidgetKind` y la entrada en `WIDGETS` (con `label`, `natural_len`, `draw` y
+  `click`). El orden y las etiquetas de Ajustes salen de la tabla
+  (`widget_kind_order`/`widget_label`), así que no hay listas paralelas. El guard
+  `la_tabla_cubre_todas_las_variantes_del_enum` **falla a propósito** y hay que
+  actualizar sus dos números (los fijos + 1 por `Custom`, y los fijos). Y ojo con el
+  anclaje al insertar en `WIDGETS`/`syswidgets.rs`: meter una función *antes* de otra
+  se lleva su `#[allow]` pegado (eso sumó un warning nuevo de clippy hasta que lo
+  devolví).
+
+- **Widgets y actividades descartados a propósito**: relleno/brillo automático por hora,
+  clima en la isla (la isla es de 26 px de grosor: entra un número, no un ícono con
+  texto), badges numéricos sobre los widgets y cualquier cosa que necesite un `curl`
+  sincrónico en el hilo principal (AUDIT A4 sigue abierto).
 
 - Paneles del overlay: el **ancho del contenido** ya es el mismo en los tres
   (`OVERLAY_PANEL_W` en horizontal; `OVERLAY_PANEL_VERTICAL_W` = 170 en vertical,
@@ -1259,3 +1743,18 @@ reordenamiento de widgets) y lo posterior:
 - Campo `closing` en `DockMenuMode`: sólo se inicializa, nadie lo pone en `true`
   (código muerto). En `WsFlashMode` sí se usa (`close_ws_flash_mode` lo pone en `true`).
 - `LEAVE_HIDE_MS` y `WS_FLASH_TIMEOUT_MS` son constantes; candidatos a ajuste.
+
+- **La IPC del dock se quedaba muda para siempre (bug cazado 20-sep).** Síntoma:
+  `Meta+Space` (y todo `--toggle-*`, `--notify`, screenshots) no hace nada, sin ningún
+  error. Diagnóstico: `pgrep -x dockyrs` vivo, el hilo principal en `ppoll`, el socket
+  de `/run/user/1000/dockyrs.sock` **bound y LISTENING** en `/proc/net/unix`, el proceso
+  con su fd… y `connect()` dando **`ECONNREFUSED`**: eso es **cola de aceptación llena**
+  (en AF_UNIX, a diferencia de TCP, la cola llena se reporta así). Causa: el listener era
+  **un solo hilo** y corría `handle_client` **en línea**, así que un cliente que conecta y
+  no escribe (o cuyo `read` se cuelga) dejaba de aceptar; a los ~128 clientes, todos los
+  `connect` fallan y el cliente los ignora en silencio (`send_message` no chequeaba nada).
+  Arreglo: **un hilo por cliente** (`ipc::spawn_listener`) y `send_message` que avisa por
+  stderr cuando no puede conectar/escribir. Verificado abriendo **200 conexiones mudas**:
+  con el dock nuevo el launcher y las notificaciones siguen andando (antes, con eso, la
+  IPC moría). Lección para el próximo "no anda el keybind": si el comando es de la IPC,
+  mirarlo del lado del socket antes de sospechar del bind de niri.
