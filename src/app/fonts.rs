@@ -1,3 +1,25 @@
+/// Escribe un archivo de config de OTRA app sin dejarlo a medias: `.tmp` en el mismo
+/// directorio + `rename` (atómico dentro del mismo sistema de archivos). Un `write`
+/// directo que se corta (crash, disco lleno, kill) deja `gtk-3.0/settings.ini`,
+/// `kdeglobals` o `kitty.conf` rotos **para el resto del sistema**, no sólo para el dock
+/// (AUDIT.md B10). El temporal lleva el pid para que dos instancias del dock no se pisen
+/// —`--profile` permite correr una por monitor— y se copian los permisos del original
+/// si ya existía (un `rename` no los hereda).
+fn escribir_atomico(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::write(&tmp, content)?;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(err)
+        }
+    }
+}
+
 fn read_ini_value(path: &std::path::Path, section: &str, key: &str) -> Option<String> {
     let existing = std::fs::read_to_string(path).ok()?;
     let section_header = format!("[{section}]");
@@ -60,7 +82,9 @@ fn merge_ini_key(path: &std::path::Path, section: &str, key: &str, value: &str) 
     } else if !wrote_key {
         lines.push(full_line);
     }
-    let _ = std::fs::write(path, lines.join("\n") + "\n");
+    if let Err(err) = escribir_atomico(path, &(lines.join("\n") + "\n")) {
+        log::warn!("no pude escribir {path:?}: {err}");
+    }
 }
 
 // ----- gtk ini -----
@@ -107,7 +131,9 @@ fn merge_flat_config_key(path: &std::path::Path, key: &str, value: &str) {
     if !wrote {
         lines.push(full_line);
     }
-    let _ = std::fs::write(path, lines.join("\n") + "\n");
+    if let Err(err) = escribir_atomico(path, &(lines.join("\n") + "\n")) {
+        log::warn!("no pude escribir {path:?}: {err}");
+    }
 }
 
 pub(super) fn apply_kitty_font(family: &str) {
@@ -134,5 +160,55 @@ pub(super) fn apply_kitty_font(family: &str) {
         let _ = std::process::Command::new("kitty")
             .args(["@", "--to", &target, "load-config"])
             .spawn();
+    }
+}
+
+#[cfg(test)]
+mod font_write_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn dir_temporal(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("dockyrs-fonts-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).expect("dir temporal");
+        d
+    }
+
+    /// B10: la escritura es atómica (`.tmp` + `rename`), no deja temporales y no le
+    /// afloja los permisos al archivo que ya existía (el `rename` no los hereda).
+    #[test]
+    fn la_escritura_no_deja_temporales_y_conserva_permisos() {
+        let dir = dir_temporal("perm");
+        let path = dir.join("kdeglobals");
+        std::fs::write(&path, "[General]\nfont=Ubuntu,10\n").expect("original");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        merge_ini_key(&path, "General", "font", "JetBrainsMono Nerd Font,11");
+        let out = std::fs::read_to_string(&path).expect("leer");
+        assert!(out.contains("JetBrainsMono Nerd Font,11"), "escribió: {out:?}");
+        assert!(!out.contains("Ubuntu"), "reemplaza la clave vieja: {out:?}");
+        let modo = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(modo, 0o600, "los permisos del original se conservan");
+        let sobrantes: Vec<String> = std::fs::read_dir(&dir)
+            .expect("read_dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(sobrantes.is_empty(), "quedaron temporales: {sobrantes:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Y el caso normal del arranque: un archivo que todavía no existe se crea.
+    #[test]
+    fn un_archivo_nuevo_se_crea() {
+        let dir = dir_temporal("nuevo");
+        let path = dir.join("settings.ini");
+        merge_ini_key(&path, "Settings", "gtk-font-name", "Inter 10");
+        let out = std::fs::read_to_string(&path).expect("leer");
+        assert!(
+            out.contains("[Settings]") && out.contains("gtk-font-name=Inter 10"),
+            "{out:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
