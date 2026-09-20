@@ -391,6 +391,7 @@ fn main() -> anyhow::Result<()> {
         marquee_rate: 0,
         modifiers: Default::default(),
         held_key: None,
+        overlay_cycle_key: None,
         seat,
         conn: conn.clone(),
         qh: qh.clone(),

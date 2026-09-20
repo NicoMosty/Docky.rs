@@ -372,11 +372,23 @@ impl KeyboardHandler for App {
         // banda de pestañas es una columna, así que la flecha que corre por ella es ↑/↓
         // y también cicla (las cuatro siguen andando: el gesto de ←/→ no se toca). Va
         // ANTES de armar `held_key`; si no, el auto-repeat de la flecha ciclaría un modo
-        // por frame. -----
+        // por frame (y el release es el que limpia `overlay_cycle_key`). -----
         if self.modifiers.shift && flecha_de_la_banda(event.keysym, self.dock.is_vertical()) {
-            let dir = overlay_cycle_dir(event.keysym);
-            if self.cycle_overlay(dir, qh) {
-                return;
+            let accion = accion_de_la_banda(
+                self.overlay_cycle_key,
+                event.keysym,
+                self.current_overlay().is_some(),
+            );
+            match accion {
+                AccionBanda::Ciclar => {
+                    self.overlay_cycle_key = Some(event.keysym);
+                    let dir = overlay_cycle_dir(event.keysym);
+                    if self.cycle_overlay(dir, qh) {
+                        return;
+                    }
+                }
+                AccionBanda::Tragar => return,
+                AccionBanda::Seguir => {}
             }
         }
         self.held_key = matches!(
@@ -412,6 +424,11 @@ impl KeyboardHandler for App {
     ) {
         if self.held_key.is_some_and(|(k, ..)| k == event.keysym) {
             self.held_key = None;
+        }
+        // ----- soltar la flecha re-arma el ciclo de la banda (B1): la próxima
+        // pulsación de esa misma flecha tiene que ciclar de nuevo -----
+        if self.overlay_cycle_key == Some(event.keysym) {
+            self.overlay_cycle_key = None;
         }
     }
     fn update_modifiers(

@@ -339,6 +339,40 @@ pub(crate) fn flecha_de_la_banda(keysym: Keysym, is_vertical: bool) -> bool {
         || (is_vertical && matches!(keysym, Keysym::Up | Keysym::Down))
 }
 
+/// Qué hace una flecha de la banda con Shift apretado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AccionBanda {
+    /// Primera pulsación: cambia de modo.
+    Ciclar,
+    /// Es el auto-repeat de una flecha que YA cicló, con el overlay abierto.
+    Tragar,
+    /// No es asunto de la banda: sigue el camino normal.
+    Seguir,
+}
+
+/// El auto-repeat del compositor manda la misma flecha cada ~30 ms. Antes CADA
+/// repetición entraba a la rama del ciclo, así que mantener Shift+←/→ daba la vuelta a
+/// las cinco pestañas en bucle (AUDIT.md B1): ahora cicla la primera y las repeticiones
+/// se tragan **mientras el overlay esté abierto**.
+///
+/// Con el overlay cerrado la repetición NO se traga, y es a propósito: ahí la flecha
+/// sigue su camino normal, que es lo que espera el panel de ajustes (un ←/→ repetido
+/// mueve el slider). El estado `ya_ciclo` lo pone el que cicla y lo limpia el release,
+/// así que la próxima pulsación vuelve a ciclar.
+pub(crate) fn accion_de_la_banda(
+    ya_ciclo: Option<Keysym>,
+    keysym: Keysym,
+    overlay_abierto: bool,
+) -> AccionBanda {
+    if ya_ciclo != Some(keysym) {
+        AccionBanda::Ciclar
+    } else if overlay_abierto {
+        AccionBanda::Tragar
+    } else {
+        AccionBanda::Seguir
+    }
+}
+
 impl App {
     /// Qué modo del overlay está abierto, si hay alguno.
     pub(crate) fn current_overlay(&self) -> Option<OverlayMode> {
@@ -626,6 +660,9 @@ pub struct App {
     pub marquee_rate: u64,
     pub modifiers: Modifiers,
     pub held_key: Option<(Keysym, u32, f32)>,
+    /// Última flecha con Shift que cicló las pestañas del overlay: su auto-repeat se
+    /// traga hasta el release (ver `accion_de_la_banda` y AUDIT.md B1).
+    pub overlay_cycle_key: Option<Keysym>,
     pub seat: Option<wl_seat::WlSeat>,
     pub conn: Connection,
     pub qh: QueueHandle<App>,
@@ -703,7 +740,9 @@ pub(crate) fn trim_heap() {
 
 #[cfg(test)]
 mod overlay_tabs_tests {
-    use super::{OVERLAY_ORDER, flecha_de_la_banda, overlay_cycle_dir};
+    use super::{
+        AccionBanda, OVERLAY_ORDER, accion_de_la_banda, flecha_de_la_banda, overlay_cycle_dir,
+    };
     use crate::menu::OVERLAY_TABS;
     use smithay_client_toolkit::seat::keyboard::Keysym;
 
@@ -742,5 +781,25 @@ mod overlay_tabs_tests {
         for k in [Keysym::Left, Keysym::Right, Keysym::Up, Keysym::Down] {
             assert!(flecha_de_la_banda(k, true), "{k:?} en vertical");
         }
+    }
+
+    /// B1: el auto-repeat no puede volver a ciclar. La primera pulsación cicla; las
+    /// repeticiones (misma tecla, overlay abierto) se tragan. Y con el overlay cerrado
+    /// la flecha sigue de largo, que es lo que hace que un ←/→ repetido siga moviendo
+    /// el slider del panel de ajustes.
+    #[test]
+    fn el_auto_repeat_no_vuelve_a_ciclar() {
+        use AccionBanda::{Ciclar, Seguir, Tragar};
+        // ----- primera pulsación de cada flecha: cicla -----
+        assert_eq!(accion_de_la_banda(None, Keysym::Right, true), Ciclar);
+        assert_eq!(accion_de_la_banda(None, Keysym::Right, false), Ciclar);
+        assert_eq!(accion_de_la_banda(Some(Keysym::Left), Keysym::Right, true), Ciclar);
+        // ----- repetición de la misma flecha, con el overlay abierto: se traga -----
+        assert_eq!(accion_de_la_banda(Some(Keysym::Right), Keysym::Right, true), Tragar);
+        // ----- y sin overlay abierto sigue de largo (no se come la flecha) -----
+        assert_eq!(
+            accion_de_la_banda(Some(Keysym::Right), Keysym::Right, false),
+            Seguir
+        );
     }
 }
