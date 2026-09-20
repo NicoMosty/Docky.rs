@@ -353,3 +353,87 @@ impl Dock {
         None
     }
 }
+
+#[cfg(test)]
+mod icon_at_y_drag_tests {
+    use super::*;
+    use crate::config::{DockEdge, PinnedApp};
+
+    /// Dock con tres íconos fijos en posiciones conocidas.
+    fn dock_con_tres_iconos() -> Dock {
+        let mut config = Config::default();
+        config.settings.dock_edge = DockEdge::Bottom;
+        let mut dock = Dock::new(config);
+        dock.icons = [("a", 50.0), ("b", 150.0), ("c", 250.0)]
+            .into_iter()
+            .map(|(name, x)| DockIcon {
+                app: PinnedApp {
+                    name: name.to_string(),
+                    icon: name.to_string(),
+                    exec: String::new(),
+                },
+                scale: 1.0,
+                target_scale: 1.0,
+                x,
+                target_x: x,
+            })
+            .collect();
+        dock
+    }
+
+    fn nombres(dock: &Dock) -> Vec<&str> {
+        dock.icons.iter().map(|i| i.app.name.as_str()).collect()
+    }
+
+    /// C5 (trampa 10): el centro que dibuja `layout()` tiene que ser el que devuelve
+    /// `icon_at`, que es el hit test del click y del arrastre. El hueco entre dos íconos no
+    /// es de ninguno (devolver el vecino cambiaría el gesto de "soltar en el hueco").
+    #[test]
+    fn el_centro_de_cada_icono_cae_en_su_indice() {
+        let dock = dock_con_tres_iconos();
+        for (i, (cx, cy, _)) in dock.layout().iter().enumerate() {
+            assert_eq!(dock.icon_at(*cx as f64, *cy as f64), Some(i), "ícono {i}");
+        }
+        let (_, cy, _) = dock.layout()[0];
+        assert_eq!(
+            dock.icon_at(100.0, cy as f64),
+            None,
+            "el hueco entre el 0 y el 1 no es de nadie"
+        );
+        assert_eq!(dock.icon_at(5000.0, 5000.0), None, "y bien lejos tampoco");
+    }
+
+    /// C5: `drag_to` mueve el ícono arrastrado y REORDENA al slot cuyo centro está más
+    /// cerca del puntero, dejando `dragging_index` apuntando al ícono movido (si no, el
+    /// movimiento siguiente arrastraría otro). Los centros de los slots salen de
+    /// `rest_centers()`, que es la misma cuenta que usa el reordenamiento: el test no puede
+    /// inventarse la geometría.
+    #[test]
+    fn arrastrar_reordena_y_el_indice_sigue_al_icono() {
+        let mut dock = dock_con_tres_iconos();
+        // ----- sin arrastre en curso no hace nada -----
+        dock.drag_to(999.0, 999.0);
+        assert_eq!(nombres(&dock), vec!["a", "b", "c"]);
+
+        let centros: Vec<f32> = dock.rest_centers().collect();
+        let (_, cy, _) = dock.layout()[0];
+        // ----- arrastro "a" hasta el slot de más a la derecha -----
+        let ultimo = centros.len() - 1;
+        dock.dragging_index = Some(0);
+        dock.drag_to(centros[ultimo], cy);
+        assert_eq!(
+            dock.dragging_index,
+            Some(ultimo),
+            "cae en el slot del cursor"
+        );
+        assert_eq!(
+            nombres(&dock),
+            vec!["b", "c", "a"],
+            "el arrastrado va al final y los otros conservan su orden"
+        );
+        // ----- y traerlo de vuelta lo devuelve al principio -----
+        dock.drag_to(centros[0], cy);
+        assert_eq!(dock.dragging_index, Some(0));
+        assert_eq!(nombres(&dock), vec!["a", "b", "c"]);
+    }
+}
