@@ -9,8 +9,13 @@ const CACHE_CAP: usize = 300;
 
 pub struct IconCache {
     theme: String,
-    cache: HashMap<(String, u32), Option<Rc<Pixmap>>>,
-    rounded_cache: HashMap<(String, u32), Option<Rc<Pixmap>>>,
+    /// Iconos por TAMAÑO y después por nombre: un `HashMap<String, _>` con clave
+    /// `(String, u32)` obligaba a un `to_string()` por lookup, también con hit (y un
+    /// frame de la barra mira decenas de iconos). Con el mapa anidado el `get` busca
+    /// con el `&str` que ya tiene (AUDIT.md D13) y el `String` se asigna una sola vez,
+    /// en el miss.
+    cache: HashMap<u32, HashMap<String, Option<Rc<Pixmap>>>>,
+    rounded_cache: HashMap<u32, HashMap<String, Option<Rc<Pixmap>>>>,
 }
 
 impl IconCache {
@@ -23,29 +28,37 @@ impl IconCache {
     }
 
     pub fn get(&mut self, icon_name: &str, size: u32) -> Option<Rc<Pixmap>> {
-        let key = (icon_name.to_string(), size);
-        if let Some(hit) = self.cache.get(&key) {
+        if let Some(hit) = self.cache.get(&size).and_then(|m| m.get(icon_name)) {
             return hit.clone();
         }
-        if self.cache.len() >= CACHE_CAP {
-            self.cache.clear();
-        }
+        // ----- resolver antes de tocar el mapa: `resolve` necesita `&self.theme` y el
+        // `entry` pide `&mut self.cache` -----
         let pixmap = resolve(&self.theme, icon_name, size).map(Rc::new);
-        self.cache.insert(key, pixmap.clone());
+        let del_tamano = self.cache.entry(size).or_default();
+        // ----- ahora el tope es por tamaño (antes un `clear()` global se llevaba
+        // todos los tamaños juntos) -----
+        if del_tamano.len() >= CACHE_CAP {
+            del_tamano.clear();
+        }
+        del_tamano.insert(icon_name.to_string(), pixmap.clone());
         pixmap
     }
 
     pub fn get_rounded(&mut self, icon_name: &str, size: u32) -> Option<Rc<Pixmap>> {
-        let key = (icon_name.to_string(), size);
-        if let Some(hit) = self.rounded_cache.get(&key) {
+        if let Some(hit) = self
+            .rounded_cache
+            .get(&size)
+            .and_then(|m| m.get(icon_name))
+        {
             return hit.clone();
-        }
-        if self.rounded_cache.len() >= CACHE_CAP {
-            self.rounded_cache.clear();
         }
         let base = self.get(icon_name, size);
         let rounded = base.and_then(|base| round_corners(&base, size));
-        self.rounded_cache.insert(key, rounded.clone());
+        let del_tamano = self.rounded_cache.entry(size).or_default();
+        if del_tamano.len() >= CACHE_CAP {
+            del_tamano.clear();
+        }
+        del_tamano.insert(icon_name.to_string(), rounded.clone());
         rounded
     }
 }
@@ -131,4 +144,38 @@ fn load_raster(path: &Path, size: u32) -> Option<Pixmap> {
         dst[i * 4 + 3] = a;
     }
     Some(pixmap)
+}
+
+#[cfg(test)]
+mod icon_cache_tests {
+    use super::*;
+
+    /// D13: el caché está indexado por TAMAÑO y el nombre se busca como `&str` (sin un
+    /// `to_string()` por lookup, que era el costo del hallazgo). El test mira el mapa por
+    /// dentro para poder distinguir "pegó en el caché" de "volvió a resolver".
+    #[test]
+    fn el_cache_va_por_tamano_y_no_mezcla() {
+        let mut cache = IconCache::new("Adwaita");
+        // un nombre que no existe igual se cachea (se guarda el `None`, que es el
+        // caso caro: resolve() falla y recorre los temas)
+        assert!(cache.get("no-existe-dockyrs", 16).is_none());
+        assert_eq!(
+            cache.cache.get(&16).map(|m| m.len()),
+            Some(1),
+            "el lookup quedó anotado bajo su tamaño"
+        );
+        assert!(
+            !cache.cache.contains_key(&24),
+            "y no en un mapa global: el otro tamaño ni se tocó"
+        );
+        // ----- el segundo lookup no re-resuelve: el `Rc` es el mismo -----
+        let primero = cache.get("no-existe-dockyrs", 16);
+        let segundo = cache.get("no-existe-dockyrs", 16);
+        assert!(primero.is_none() && segundo.is_none());
+        assert_eq!(cache.cache.get(&16).map(|m| m.len()), Some(1), "no se duplicó");
+        // ----- y un tamaño distinto va a su propio mapa -----
+        let _ = cache.get("no-existe-dockyrs", 22);
+        assert_eq!(cache.cache.get(&22).map(|m| m.len()), Some(1));
+        assert_eq!(cache.cache.get(&16).map(|m| m.len()), Some(1));
+    }
 }

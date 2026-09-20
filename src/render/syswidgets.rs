@@ -453,7 +453,6 @@ pub(crate) fn draw_recording_widget(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_network_widget(
     pixmap: &mut Pixmap,
-    _text_cache: &mut TextCache,
     widgets: &WidgetSnapshot,
     zx: f32,
     zy: f32,

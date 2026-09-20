@@ -4,7 +4,10 @@ use super::*;
 /// huecos entre iconos caen al más cercano: antes un click en el hueco no
 /// devolvía nada y el click derecho sobre el tray parecía roto.
 fn nearest_tray_index(rel: f32, per: f32, count: usize) -> usize {
-    ((rel.max(0.0) / per).floor() as usize).min(count - 1)
+    // ----- `saturating_sub`: con `count - 1` un conteo 0 hacia underflow (panic en
+    // debug, índice gigante en release). Los llamadores ya salen antes con el tray
+    // vacío, pero la función no tiene por qué depender de eso (AUDIT.md D9). -----
+    ((rel.max(0.0) / per).floor() as usize).min(count.saturating_sub(1))
 }
 
 pub fn tray_icon_hit(
@@ -198,5 +201,13 @@ mod tray_hit_tests {
     #[test]
     fn el_extremo_derecho_no_se_pasa() {
         assert_eq!(nearest_tray_index(PER * 5.0, PER, 3), 2);
+    }
+
+    /// D9: con el tray vacío (`count == 0`) no tiene que haber underflow. Los
+    /// llamadores ya salen antes, pero la cuenta se sostiene sola.
+    #[test]
+    fn con_el_tray_vacio_no_hay_underflow() {
+        assert_eq!(nearest_tray_index(0.0, PER, 0), 0);
+        assert_eq!(nearest_tray_index(500.0, PER, 0), 0);
     }
 }

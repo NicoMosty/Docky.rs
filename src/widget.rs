@@ -554,7 +554,6 @@ fn len_network(cx: &Ctx) -> f32 {
 fn draw_network(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
     draw_network_widget(
         canvas.pixmap,
-        canvas.text_cache,
         cx.widgets,
         r.x,
         r.y,

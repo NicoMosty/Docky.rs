@@ -474,20 +474,26 @@ impl WidgetSnapshot {
 }
 
 // ----- none first call -----
-fn read_cpu() -> Option<u8> {
-    let stat = std::fs::read_to_string("/proc/stat").ok()?;
-    let fields: Vec<u64> = stat
-        .lines()
-        .next()?
+/// Totales `(idle, total)` de la línea `cpu …` de `/proc/stat`. `guest` y `guest_nice`
+/// (campos 9 y 10) ya vienen contados dentro de `user`/`nice`, así que sumarlos otra vez
+/// inflaba el total y bajaba el porcentaje (AUDIT.md D10): se corta en `steal` (8 campos).
+fn cpu_totales(linea: &str) -> Option<(u64, u64)> {
+    let campos: Vec<u64> = linea
         .split_whitespace()
         .skip(1)
         .filter_map(|s| s.parse().ok())
         .collect();
-    if fields.len() < 4 {
+    if campos.len() < 4 {
         return None;
     }
-    let idle = fields[3] + fields.get(4).copied().unwrap_or(0);
-    let total: u64 = fields.iter().sum();
+    let idle = campos[3] + campos.get(4).copied().unwrap_or(0);
+    let total: u64 = campos.iter().take(8).sum();
+    Some((idle, total))
+}
+
+fn read_cpu() -> Option<u8> {
+    let stat = std::fs::read_to_string("/proc/stat").ok()?;
+    let (idle, total) = cpu_totales(stat.lines().next()?)?;
 
     static LAST: std::sync::OnceLock<std::sync::Mutex<Option<(u64, u64)>>> =
         std::sync::OnceLock::new();
@@ -1727,5 +1733,33 @@ mod clock_tests {
         );
         assert!(!downloaded, "cache-hit no es una descarga");
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod cpu_totales_tests {
+    use super::cpu_totales;
+
+    /// Una línea real de `/proc/stat` (10 campos después de `cpu`): los dos últimos son
+    /// `guest` y `guest_nice`, que YA están dentro de `user`/`nice`. Sumarlos otra vez
+    /// inflaba el total (AUDIT.md D10).
+    #[test]
+    fn guest_y_guest_nice_no_se_suman_dos_veces() {
+        let linea = "cpu  100 20 30 400 50 6 7 8 9 10";
+        let (idle, total) = cpu_totales(linea).expect("la línea tiene que parsear");
+        assert_eq!(idle, 450, "idle + iowait");
+        // 100+20+30+400+50+6+7+8 = 621, SIN los 9 y 10 de guest/guest_nice
+        assert_eq!(total, 621);
+        assert_eq!(total, linea[5..].split_whitespace().take(8).filter_map(|s| s.parse::<u64>().ok()).sum::<u64>());
+    }
+
+    /// Y sigue funcionando con una línea corta (sólo los cuatro campos viejos) y
+    /// devolviendo `None` con basura.
+    #[test]
+    fn los_bordes_no_paniquean() {
+        assert_eq!(cpu_totales("cpu 1 2 3 4"), Some((4, 10)));
+        assert_eq!(cpu_totales("cpu 1 2"), None);
+        assert_eq!(cpu_totales(""), None);
+        assert_eq!(cpu_totales("cpu"), None);
     }
 }

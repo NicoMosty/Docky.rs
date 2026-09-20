@@ -38,7 +38,6 @@ pub(crate) use syswidgets::{
 pub(crate) use tray::{draw_tray_widget, tray_geometry};
 pub(crate) use workspaces::draw_workspaces_widget;
 
-const ICON_OVERSAMPLE: f32 = 1.0;
 const DATE_FONT_FAMILY: &str = "JetBrains Mono";
 
 const MARQUEE_SPEED: f32 = 12.0;
@@ -705,8 +704,8 @@ fn draw_full(
         );
     }
 
-    let cache_size = (s.icon_size * s.dock_scale * s.magnify_scale * render_scale * ICON_OVERSAMPLE)
-        .ceil() as u32;
+    let cache_size =
+        (s.icon_size * s.dock_scale * s.magnify_scale * render_scale).ceil() as u32;
     let dragging = dock.dragging_index;
     let layout = dock.layout();
     let (edx, edy) = dock.elevate_dir();
