@@ -67,6 +67,25 @@ impl App {
             }
             return;
         }
+        // ----- click en la banda de pestañas del overlay: va derecho a la pestaña
+        // clickeada en vez de ciclar, y va ANTES de las ramas de cada panel para que
+        // el hit test del panel no se lo coma (la banda está fuera del frame del
+        // contenido, pero el orden lo deja explícito). Si no hay modo abierto o el
+        // punto no cae en la banda, sigue el camino de siempre. -----
+        if let PointerEventKind::Press { button, .. } = event.kind
+            && button == BTN_LEFT
+        {
+            let (px, py) = self.panel_local(event.position.0, event.position.1);
+            if let Some(index) = self.overlay_tab_hit(px, py)
+                && let Some(current) = self.current_overlay()
+            {
+                let next = OVERLAY_ORDER[index];
+                let dir = (index as i32 - current.tab_index() as i32).signum();
+                log::debug!("overlay: click en la banda ({px:.0},{py:.0}) -> {next:?}");
+                self.switch_overlay(current, next, dir, qh);
+                return;
+            }
+        }
         if self.app_search_mode.is_some() {
             self.handle_app_search_pointer_event(event, qh);
             return;

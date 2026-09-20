@@ -368,12 +368,28 @@ impl App {
         let Some(current) = self.current_overlay() else {
             return false;
         };
-        self.held_key = None;
-        let index = OVERLAY_ORDER
-            .iter()
-            .position(|m| *m == current)
-            .unwrap_or(0) as i32;
+        let index = current.tab_index() as i32;
         let next = OVERLAY_ORDER[(index + dir).rem_euclid(OVERLAY_ORDER.len() as i32) as usize];
+        self.switch_overlay(current, next, dir, qh)
+    }
+
+    /// Cambia la pestaña del overlay que está abierta: cierra la actual, abre la nueva y
+    /// anota la dirección del deslizamiento. Lo comparten el ciclo de Shift+flechas y el
+    /// click en la banda de pestañas (que no cicla: va derecho a la que se clickeó).
+    fn switch_overlay(
+        &mut self,
+        current: OverlayMode,
+        next: OverlayMode,
+        dir: i32,
+        qh: &QueueHandle<Self>,
+    ) -> bool {
+        if next == current {
+            // ----- clickear la pestaña que ya está abierta no hace nada (no cierra
+            // el panel: para eso está ESC, el click afuera o la misma pestaña de
+            // nuevo… que tampoco cierra, a propósito) -----
+            return true;
+        }
+        self.held_key = None;
         log::debug!("overlay: {current:?} -> {next:?}");
         match current {
             OverlayMode::Apps | OverlayMode::Windows => self.close_app_search_mode(qh),
@@ -392,6 +408,29 @@ impl App {
         // abren sin dirección (0) y esto la anota en el modo que acaba de abrir. -----
         self.start_overlay_slide(dir as f32);
         true
+    }
+
+    /// Índice de la pestaña de la banda bajo un punto en coordenadas del PANEL (las del
+    /// `panel_local` del evento). `None` si no está en la banda o si el modo abierto no
+    /// tiene banda (el panel de ajustes comparte la superficie pero no la dibuja).
+    ///
+    /// La geometría sale de `menu_render::overlay_tab_layout`, la MISMA función que usa
+    /// el dibujo: si se escribieran dos cuentas, el click caería en otra pestaña que la
+    /// resaltada (trampa 10).
+    pub(super) fn overlay_tab_hit(&mut self, px: f64, py: f64) -> Option<usize> {
+        self.current_overlay()?;
+        let (panel_w, panel_h) = self.overlay_panel_size()?;
+        let is_vertical = self.dock.is_vertical();
+        let layout = menu_render::overlay_tab_layout(
+            &mut self.text_cache,
+            &self.dock.config.settings,
+            panel_w,
+            panel_h,
+            self.output_scale.max(1) as f32,
+            is_vertical,
+            self.dock.band_left(),
+        );
+        menu_render::overlay_tab_at(&layout, is_vertical, px as f32, py as f32)
     }
 
     /// Con qué arranca el fundido del strip de tarjetas: 0 = se funde (lo anima
