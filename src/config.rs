@@ -500,14 +500,42 @@ fn config_path(profile: &str) -> PathBuf {
     dir
 }
 
+/// Copia al lado el config que no parsea (`config.json.bak-<ts>`) y devuelve su ruta.
+/// `None` si tampoco se pudo escribir la copia. Separado de `load` para poder probarlo
+/// con un archivo temporal sin tocar la config real del usuario.
+fn respaldar_ilegible(path: &std::path::Path, raw: &str) -> Option<PathBuf> {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let bak = path.with_extension(format!("json.bak-{ts}"));
+    std::fs::write(&bak, raw).ok()?;
+    Some(bak)
+}
+
 impl Config {
     pub fn load(profile: &str) -> Self {
         let path = config_path(profile);
         let mut cfg: Self = match std::fs::read_to_string(&path) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|err| {
-                log::warn!("failed to parse config at {path:?}, using defaults: {err}");
-                Config::default()
-            }),
+            Ok(raw) => match serde_json::from_str(&raw) {
+                Ok(cfg) => cfg,
+                Err(err) => {
+                    // ----- el archivo EXISTE pero no parsea: se arranca con los de
+                    // fábrica, pero antes se guarda una copia al lado. Sin esto el
+                    // primer `save()` (cualquier ajuste que toque el usuario) pisaba
+                    // el archivo roto y sus ajustes se perdían sin rastro
+                    // (AUDIT.md C3). -----
+                    match respaldar_ilegible(&path, &raw) {
+                        Some(bak) => log::error!(
+                            "el config {path:?} no parsea ({err}): arranco con los de fábrica y dejo copia en {bak:?}"
+                        ),
+                        None => log::error!(
+                            "el config {path:?} no parsea ({err}): arranco con los de fábrica y NO pude guardar la copia"
+                        ),
+                    }
+                    Config::default()
+                }
+            },
             Err(_) => Config::default(),
         };
         cfg.profile = profile.to_string();
@@ -522,6 +550,41 @@ impl Config {
         let raw = serde_json::to_string_pretty(self)?;
         std::fs::write(path, raw)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod config_backup_tests {
+    use super::*;
+
+    /// C3: un config que existe pero no parsea se respalda (`config.json.bak-<ts>`) y
+    /// el original NO se pisa. Antes `load()` caía a los defaults y el primer `save()`
+    /// borraba los ajustes del usuario sin dejar rastro.
+    #[test]
+    fn el_config_ilegible_se_respalda_sin_pisar_el_original() {
+        let dir = std::env::temp_dir().join(format!("dockyrs-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir temporal");
+        let path = dir.join("config.json");
+        let roto = "{ esto no es json";
+        std::fs::write(&path, roto).expect("escribir el roto");
+
+        let bak = respaldar_ilegible(&path, roto).expect("el backup tiene que salir");
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), roto, "la copia es igual");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            roto,
+            "el original queda como estaba"
+        );
+        assert!(
+            bak.to_string_lossy().contains(".json.bak-"),
+            "el backup va al lado, con el timestamp: {bak:?}"
+        );
+        // ----- y un JSON válido sigue cargando normal -----
+        let bueno = serde_json::to_string(&Config::default()).unwrap();
+        std::fs::write(&path, &bueno).unwrap();
+        assert!(serde_json::from_str::<Config>(&bueno).is_ok());
+        assert!(respaldar_ilegible(&path, &bueno).is_some());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 
