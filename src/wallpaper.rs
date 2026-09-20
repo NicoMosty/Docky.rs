@@ -152,8 +152,15 @@ fn swaybg_path_file() -> PathBuf {
 /// aparece, se decide por lo que está corriendo. Hace falta porque no hay interfaz
 /// común: swww/awww hablan por IPC y swaybg no tiene ninguna.
 fn wallpaper_program() -> Option<String> {
+    wallpaper_program_en(&dirs::home_dir()?)
+}
+
+/// El programa de fondos que usa el compositor, buscando en `.config/niri` y
+/// `.config/hypr` del `home` que se le pase (la recursión entra en los subdirectorios de
+/// config, que es como están armados los dos). Separado del `home` real para poder
+/// probarlo con un `.kdl` de mentira en un dir temporal (AUDIT.md C5).
+fn wallpaper_program_en(home: &std::path::Path) -> Option<String> {
     const KNOWN: [&str; 4] = ["swaybg", "awww", "swww", "hyprpaper"];
-    let home = dirs::home_dir()?;
     let mut pending = vec![home.join(".config/niri"), home.join(".config/hypr")];
     while let Some(dir) = pending.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -371,4 +378,60 @@ fn hex_to_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
     let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
     Some((r, g, b))
+}
+
+#[cfg(test)]
+mod wallpaper_program_tests {
+    use super::wallpaper_program_en;
+
+    fn home_temporal(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("dockyrs-wp-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".config/niri/sub")).expect("dir temporal");
+        d
+    }
+
+    /// C5: la búsqueda del programa de fondos. Entra en los subdirectorios, ignora las
+    /// líneas comentadas y devuelve el primero de la lista conocida que aparezca.
+    #[test]
+    fn encuentra_el_programa_e_ignora_lo_comentado() {
+        let home = home_temporal("find");
+        // ----- comentado NO cuenta (si no, un `// spawn-at-startup "swaybg"` viejo
+        // ganaría y el dock creería que el compositor usa swaybg) -----
+        std::fs::write(
+            home.join(".config/niri/config.kdl"),
+            "// spawn-at-startup \"swaybg\"\n",
+        )
+        .unwrap();
+        assert_eq!(wallpaper_program_en(&home), None, "lo comentado no vale");
+        // ----- en un subdirectorio, sí -----
+        std::fs::write(
+            home.join(".config/niri/sub/2_wallpaper.kdl"),
+            "spawn-at-startup \"awww-daemon\"\n",
+        )
+        .unwrap();
+        assert_eq!(wallpaper_program_en(&home).as_deref(), Some("awww"));
+        // ----- también mira .config/hypr, y el orden de KNOWN manda -----
+        std::fs::create_dir_all(home.join(".config/hypr")).unwrap();
+        std::fs::write(
+            home.join(".config/hypr/hyprpaper.conf"),
+            "preload = /tmp/x.png\n",
+        )
+        .unwrap();
+        std::fs::write(
+            home.join(".config/hypr/hyprland.conf"),
+            "exec-once = hyprpaper\n",
+        )
+        .unwrap();
+        assert_eq!(
+            wallpaper_program_en(&home).as_deref(),
+            Some("awww"),
+            "awww va antes que hyprpaper en KNOWN"
+        );
+        // ----- sin nada, None (y no paniquea) -----
+        let vacio = std::env::temp_dir().join(format!("dockyrs-wp-vacio-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&vacio);
+        assert_eq!(wallpaper_program_en(&vacio), None);
+        std::fs::remove_dir_all(&home).ok();
+    }
 }

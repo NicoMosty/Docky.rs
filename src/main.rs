@@ -362,6 +362,7 @@ fn main() -> anyhow::Result<()> {
         awaiting_frame: false,
         exit: false,
         first_configure: true,
+        configure_reconciliado: false,
         pointer_down: false,
         press_pos: None,
         press_icon_index: None,
@@ -509,7 +510,7 @@ fn main() -> anyhow::Result<()> {
 
     let notification_timeout_pending =
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    spawn_notification_timer(
+    spawn_reset_timer(
         notification_reset_rx,
         notification_timeout_pending.clone(),
         conn.clone(),
@@ -525,7 +526,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let autohide_timeout_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    spawn_autohide_timer(
+    spawn_reset_timer(
         autohide_hide_rx,
         autohide_timeout_pending.clone(),
         conn.clone(),
@@ -707,65 +708,51 @@ fn spawn_osd_timer(
     });
 }
 
-fn spawn_notification_timer(
-    reset_rx: std::sync::mpsc::Receiver<u64>,
-    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    conn: Connection,
-    qh: wayland_client::QueueHandle<App>,
+/// El patrón de los timers que se rearman (notificaciones y autohide): el primer mensaje
+/// fija el plazo; mientras lleguen mensajes el plazo se **rearma** con el nuevo valor (no
+/// se dispara); al vencer, `disparar()`. Sale cuando el canal se cierra.
+///
+/// Está separado de Wayland para poder probarlo con un canal de verdad: los cuatro timers
+/// del dock compartían este patrón sin un solo test, y el borde `plazo == 0` (que dispara
+/// en el acto) no estaba cubierto (AUDIT.md C5).
+fn correr_timer_con_reset(
+    rx: &std::sync::mpsc::Receiver<u64>,
+    mut disparar: impl FnMut(),
 ) {
     use std::sync::mpsc::RecvTimeoutError;
-    std::thread::spawn(move || {
-        let mut dur;
-        loop {
-            match reset_rx.recv() {
-                Ok(ms) => dur = ms,
-                Err(_) => return,
-            }
-            loop {
-                match reset_rx.recv_timeout(std::time::Duration::from_millis(dur)) {
-                    Ok(ms) => {
-                        dur = ms;
-                        continue;
-                    }
-                    Err(RecvTimeoutError::Timeout) => break,
-                    Err(RecvTimeoutError::Disconnected) => return,
-                }
-            }
-            flag.store(true, std::sync::atomic::Ordering::SeqCst);
-            conn.display().sync(&qh, ());
-            let _ = conn.flush();
+    let mut dur;
+    loop {
+        match rx.recv() {
+            Ok(ms) => dur = ms,
+            Err(_) => return,
         }
-    });
+        loop {
+            match rx.recv_timeout(std::time::Duration::from_millis(dur)) {
+                Ok(ms) => {
+                    dur = ms;
+                    continue;
+                }
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+        disparar();
+    }
 }
 
-fn spawn_autohide_timer(
+/// Lanza el timer en su hilo y despierta el loop de Wayland cuando vence.
+fn spawn_reset_timer(
     rx: std::sync::mpsc::Receiver<u64>,
     flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     conn: Connection,
     qh: wayland_client::QueueHandle<App>,
 ) {
-    use std::sync::mpsc::RecvTimeoutError;
     std::thread::spawn(move || {
-        let mut dur;
-        loop {
-            match rx.recv() {
-                Ok(ms) => dur = ms,
-                Err(_) => return,
-            }
-            loop {
-                match rx.recv_timeout(std::time::Duration::from_millis(dur)) {
-                    Ok(ms) => {
-                        dur = ms;
-                        continue;
-                    }
-                    Err(RecvTimeoutError::Timeout) => break,
-                    Err(RecvTimeoutError::Disconnected) => return,
-                }
-            }
+        correr_timer_con_reset(&rx, || {
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
             conn.display().sync(&qh, ());
             let _ = conn.flush();
-        }
+        });
     });
 }
 
@@ -830,5 +817,70 @@ mod reexec_tests {
             "{} tiene que existir para poder relanzar",
             bin.display()
         );
+    }
+}
+
+#[cfg(test)]
+mod timers_tests {
+    use super::correr_timer_con_reset;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    /// C5: el patrón de los timers que se rearman. Un pedido nuevo REARMA el plazo (no
+    /// dispara), y pasado el plazo dispara una sola vez.
+    #[test]
+    fn el_timer_se_rearma_con_cada_pedido() {
+        let (tx, rx) = std::sync::mpsc::channel::<u64>();
+        let disparos = Arc::new(AtomicUsize::new(0));
+        let contador = disparos.clone();
+        let hilo = std::thread::spawn(move || {
+            correr_timer_con_reset(&rx, || {
+                contador.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+        tx.send(80).unwrap();
+        std::thread::sleep(Duration::from_millis(40));
+        tx.send(80).unwrap(); // rearma: no puede haber disparado todavía
+        assert_eq!(
+            disparos.load(Ordering::SeqCst),
+            0,
+            "el pedido rearma el plazo en vez de disparar"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            disparos.load(Ordering::SeqCst),
+            1,
+            "y dispara una sola vez, pasado el plazo nuevo"
+        );
+        // ----- el siguiente pedido arma otro plazo -----
+        tx.send(20).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(disparos.load(Ordering::SeqCst), 2);
+        // ----- cerrar el canal termina el hilo (si no, el test colgaría acá) -----
+        drop(tx);
+        hilo.join().expect("el timer tiene que salir al cerrarse el canal");
+    }
+
+    /// Y el borde que el audit pedía cubrir: un plazo de 0 dispara en el acto y **no** deja
+    /// el hilo girando en vacío (el `recv_timeout(0)` vuelve enseguida; el loop tiene que
+    /// volver a esperar un pedido).
+    #[test]
+    fn un_plazo_de_cero_dispara_una_vez_y_no_gira() {
+        let (tx, rx) = std::sync::mpsc::channel::<u64>();
+        let disparos = Arc::new(AtomicUsize::new(0));
+        let contador = disparos.clone();
+        let hilo = std::thread::spawn(move || {
+            correr_timer_con_reset(&rx, || {
+                contador.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+        tx.send(0).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let n = disparos.load(Ordering::SeqCst);
+        assert!(n >= 1, "con plazo 0 dispara ya");
+        assert!(n <= 3, "no puede estar girando: disparó {n} veces en 50 ms");
+        drop(tx);
+        hilo.join().expect("sale al cerrarse el canal");
     }
 }

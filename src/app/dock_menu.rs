@@ -346,7 +346,6 @@ impl App {
             dragging_widget: None,
             anim,
             target_anim: 1.0,
-            closing: false,
             panel_w,
             panel_h,
             slide_anim: 1.0,
@@ -566,17 +565,11 @@ impl App {
         } else {
             false
         };
-        let closing = dm.closing;
-        let anim = dm.anim;
+        // ----- una sola ruta de cierre (AUDIT.md C2): el modo se cierra con
+        // `close_dock_menu`, que restaura tamaño y autohide, así que acá no hay rama de
+        // cierre (el `closing` que había era código muerto: nadie lo ponía en true). -----
         let has_stepper = dm.held_stepper.is_some();
 
-        if closing && anim <= 0.0 {
-            // ----- una sola ruta de cierre: si el cierre se duplica acá, este
-            // camino se saltea la restauración del tamaño y el reset del
-            // autohide que sí hace `close_dock_menu`. -----
-            self.close_dock_menu(qh);
-            return;
-        }
         if has_stepper {
             self.tick_dock_menu_held_stepper(qh);
             return;

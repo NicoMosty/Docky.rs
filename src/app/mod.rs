@@ -201,7 +201,6 @@ pub(crate) struct DockMenuMode {
     dragging_widget: Option<(crate::config::WidgetKind, f32, f32)>,
     anim: f32,
     target_anim: f32,
-    closing: bool,
     panel_w: f32,
     panel_h: f32,
     slide_anim: f32,
@@ -636,6 +635,10 @@ pub struct App {
     pub awaiting_frame: bool,
     pub exit: bool,
     pub first_configure: bool,
+    /// Un `configure` del compositor con OTRO tamaño que el que pedimos ya se
+    /// reconcilio una vez: si vuelve a pasar, se dibuja como vino en vez de girar en
+    /// bucle de `set_size` -> `configure` -> `set_size` (AUDIT.md B7).
+    pub configure_reconciliado: bool,
     pub pointer_down: bool,
     pub press_pos: Option<(f64, f64)>,
     pub press_icon_index: Option<usize>,
