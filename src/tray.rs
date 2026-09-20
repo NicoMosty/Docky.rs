@@ -116,7 +116,10 @@ pub fn find_menu(matches: impl Fn(&str) -> bool) -> Option<(String, String, Stri
 // ----- race winner -----
 #[derive(Default)]
 struct Watcher {
-    items: Mutex<Vec<String>>,
+    /// Items registrados, **compartidos con el hilo del poll**: es el que purga los de
+    /// servicios que ya no están en el bus. Sin la purga la lista crece para siempre y
+    /// cada vuelta de 2 s intenta resolver items que ya no existen (AUDIT.md D5).
+    items: Arc<Mutex<Vec<String>>>,
 }
 
 #[zbus::interface(name = "org.kde.StatusNotifierWatcher")]
@@ -163,6 +166,36 @@ fn split_service(raw: &str) -> (String, String) {
         Some((svc, path)) => (svc.to_string(), format!("/{path}")),
         None => (raw.to_string(), "/StatusNotifierItem".to_string()),
     }
+}
+
+/// Deja los items cuyo servicio sigue vivo y sin repetidos (el mismo servicio puede
+/// registrarse dos veces). `vivo` recibe el nombre del bus ya extraído: separado así del
+/// D-Bus para poder probarlo con un predicado falso.
+fn items_vivos(raw: &[String], vivo: impl Fn(&str) -> bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    for item in raw {
+        if out.iter().any(|s| s == item) {
+            continue;
+        }
+        let (service, _) = split_service(item);
+        if vivo(&service) {
+            out.push(item.clone());
+        }
+    }
+    out
+}
+
+/// ¿El servicio sigue en el bus? Ante error se asume que **sí**: es peor sacar de la lista
+/// un item que existe (el ícono desaparece y no vuelve hasta que la app se re-registre)
+/// que preguntar de más.
+fn nombre_tiene_dueno(conn: &Connection, service: &str) -> bool {
+    let Ok(name) = zbus::names::BusName::try_from(service.to_string()) else {
+        return false;
+    };
+    zbus::blocking::fdo::DBusProxy::new(conn)
+        .ok()
+        .and_then(|p| p.name_has_owner(name).ok())
+        .unwrap_or(true)
 }
 
 fn item_proxy<'a>(conn: &Connection, service: &str, path: &str) -> zbus::Result<Proxy<'a>> {
@@ -379,9 +412,18 @@ pub fn spawn(
     let _ = std::thread::Builder::new()
         .name("tray".into())
         .spawn(move || {
+            // ----- el Watcher y el poll comparten la lista de items: el poll purga -----
+            let items = Arc::new(Mutex::new(Vec::new()));
             let owned = zbus::blocking::connection::Builder::session()
                 .and_then(|b| b.name(WATCHER_IFACE))
-                .and_then(|b| b.serve_at(WATCHER_PATH, Watcher::default()))
+                .and_then(|b| {
+                    b.serve_at(
+                        WATCHER_PATH,
+                        Watcher {
+                            items: items.clone(),
+                        },
+                    )
+                })
                 .and_then(|b| b.build());
             let conn = match owned {
                 Ok(c) => c,
@@ -408,14 +450,25 @@ pub fn spawn(
 
             let mut last_fingerprint = 0u64;
             loop {
-                let raw: Vec<String> = watcher_proxy
+                let crudos: Vec<String> = watcher_proxy
                     .as_ref()
                     .and_then(|p| {
                         p.get_property::<Vec<String>>("RegisteredStatusNotifierItems")
                             .ok()
                     })
                     .unwrap_or_default();
-                let icons: Vec<TrayIcon> = raw
+                // ----- purga: un item de un servicio que ya no está en el bus no se puede
+                // resolver (`GetAll` falla) y si se queda en la lista se acumula para
+                // siempre, costando un round-trip cada 2 s (AUDIT.md D5) -----
+                let vivos = items_vivos(&crudos, |svc| nombre_tiene_dueno(&conn, svc));
+                if vivos.len() != crudos.len() {
+                    log::debug!(
+                        "tray: purgo {} item(s) de servicios que ya no estan",
+                        crudos.len() - vivos.len()
+                    );
+                    *items.lock().unwrap() = vivos.clone();
+                }
+                let icons: Vec<TrayIcon> = vivos
                     .iter()
                     .filter_map(|raw_svc| resolve_item(&conn, raw_svc))
                     .filter(|icon| !tray_ignored(icon))
@@ -469,5 +522,36 @@ mod tray_ignore_tests {
         // prefijo para todos sus iconos); si un día una app paga esa deuda,
         // esto es lo que falla primero
         assert!(!tray_ignored(&icon("network-wired", "/x")));
+    }
+}
+
+#[cfg(test)]
+mod tray_purga_tests {
+    use super::items_vivos;
+
+    /// D5: la lista del watcher se queda sólo con los items que siguen vivos, sin
+    /// repetidos. Sin la purga, los de apps que ya cerraron quedan para siempre y cada
+    /// vuelta de 2 s les intenta resolver el ícono.
+    #[test]
+    fn la_lista_pierde_los_items_de_servicios_muertos() {
+        let raw = vec![
+            ":1.20/StatusNotifierItem".to_string(),
+            ":1.30/StatusNotifierItem".to_string(),
+            ":1.20/StatusNotifierItem".to_string(), // repetido
+            "org.kde.StatusNotifierItem-1234-1/StatusNotifierItem".to_string(),
+        ];
+        let vivos = items_vivos(&raw, |svc| svc != ":1.30");
+        assert_eq!(
+            vivos,
+            vec![
+                ":1.20/StatusNotifierItem".to_string(),
+                "org.kde.StatusNotifierItem-1234-1/StatusNotifierItem".to_string(),
+            ],
+            "saca el muerto y el repetido"
+        );
+        // ----- y si no hay nada muerto, la lista queda igual -----
+        assert_eq!(items_vivos(&raw, |_| true).len(), 3);
+        // ----- todos muertos: lista vacía (y el tray no dibuja nada) -----
+        assert!(items_vivos(&raw, |_| false).is_empty());
     }
 }
