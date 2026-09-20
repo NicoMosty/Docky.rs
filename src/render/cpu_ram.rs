@@ -189,6 +189,17 @@ pub(super) fn draw_percentage_widget(
     );
 }
 
+/// Texto del widget de RAM, en UN solo lugar: lo usan la medida (`len_ram`, en
+/// `widget.rs`) y el dibujo. Cuando cada uno armaba la cadena por su cuenta, cambiar el
+/// formato en un lado dejaba la pastilla midiendo otra cosa (trampa 12; era AUDIT.md D8).
+/// `None` = todavía no hay dato: el widget no se dibuja ni reserva lugar.
+pub(crate) fn ram_label(widgets: &WidgetSnapshot) -> Option<String> {
+    match widgets.ram_gb {
+        Some((used, total)) => Some(format!("{used:.1} / {total:.0} GB")),
+        None => widgets.ram.map(|pct| format!("{pct}%")),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_ram_widget(
     pixmap: &mut Pixmap,
@@ -203,12 +214,8 @@ pub(crate) fn draw_ram_widget(
     is_vertical: bool,
     text_px: f32,
 ) {
-    let label = match widgets.ram_gb {
-        Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),
-        None => match widgets.ram {
-            Some(pct) => format!("{pct}%"),
-            None => return,
-        },
+    let Some(label) = ram_label(widgets) else {
+        return;
     };
     draw_labeled_widget(
         pixmap,

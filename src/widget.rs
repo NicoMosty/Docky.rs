@@ -883,12 +883,10 @@ fn draw_cpu(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
 }
 
 fn len_ram(cx: &Ctx) -> f32 {
-    let label = match cx.widgets.ram_gb {
-        Some((used, total)) => format!("{:.1} / {:.0} GB", used, total),
-        None => match cx.widgets.ram {
-            Some(pct) => format!("{pct}%"),
-            None => return 0.0,
-        },
+    // ----- la MISMA función que usa el dibujo: antes la cadena estaba escrita en los
+    // dos lados y la pastilla podía medir una cosa y dibujar otra (AUDIT.md D8) -----
+    let Some(label) = crate::render::ram_label(cx.widgets) else {
+        return 0.0;
     };
     text_widget_len(
         &label,

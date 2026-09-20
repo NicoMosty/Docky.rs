@@ -27,7 +27,7 @@ mod syswidgets;
 // del crate puede tocar. Los que ya eran `pub` (MarqueeState, workspaces_geometry)
 // no figuran. -----
 pub(crate) use clock_battery::{draw_battery_widget, draw_clock_widget};
-pub(crate) use cpu_ram::{draw_cpu_widget, draw_ram_widget};
+pub(crate) use cpu_ram::{draw_cpu_widget, draw_ram_widget, ram_label};
 pub(crate) use layout::{WidgetRect, percentage_widget_len, text_widget_len};
 pub(crate) use media::{draw_media_widget, media_ideal_len};
 pub(crate) use power_bluetooth::{draw_bluetooth_icon, draw_power_widget};
