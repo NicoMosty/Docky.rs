@@ -60,7 +60,12 @@ pub fn overlay_tab_layout(
 /// Índice de la pestaña bajo un punto en coordenadas del PANEL. `None` fuera de la
 /// banda y, en la columna, en el tramo libre que queda debajo de la última pestaña
 /// (ahí `slot_len * 4` no llega al alto del panel: ese aire no cambia de modo).
-pub fn overlay_tab_at(layout: &OverlayTabLayout, is_vertical: bool, x: f32, y: f32) -> Option<usize> {
+pub fn overlay_tab_at(
+    layout: &OverlayTabLayout,
+    is_vertical: bool,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
     let (bx, by, bw, bh) = layout.band;
     if x < bx || x > bx + bw || y < by || y > by + bh || layout.slot_len <= 0.0 {
         return None;
@@ -332,10 +337,7 @@ mod tabs_tests {
         );
         assert_eq!(overlay_tab_at(&col, true, 13.0, 639.0), None);
         // ----- y a la derecha de la columna ya es contenido -----
-        assert_eq!(
-            overlay_tab_at(&col, true, OVERLAY_TABS_W + 1.0, 42.0),
-            None
-        );
+        assert_eq!(overlay_tab_at(&col, true, OVERLAY_TABS_W + 1.0, 42.0), None);
 
         // ----- con el dock a la derecha la banda arranca corrida: el hit test resta
         // el origen de la banda, no asume 0 -----
