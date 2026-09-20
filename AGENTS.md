@@ -2067,7 +2067,7 @@ parsea `/proc/meminfo` dos veces); (b) `total - avail` en `u64` sin chequeo: si
     mouse-out ya cierra), squish/stretch (la forma es un rounded-rect en un eje) y
     badges/Face ID/AirDrop (no hay fuente de dato).
   - **Prioridad honesta**: `AUDIT.md` quedó con **26 hallazgos abiertos** (A5 a
-    medias, 12 MEDIA y 13 BAJA) después de la limpieza del 2026-09-20; lo cerrado
+    medias, 15 MEDIA y 10 BAJA) después de la limpieza del 2026-09-20; lo cerrado
     (A1–A4, A6, A7, B3, C4, C8, D1, D2, D3, D11) vive en “Cerrado de AUDIT.md”,
     arriba. Lo más visible para el usuario hoy: **B1** (Shift+flecha en auto-repeat
     cicla los modos en bucle) y **A5** (el `catch_unwind` no cubre los drenajes de

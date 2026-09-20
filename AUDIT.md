@@ -90,7 +90,7 @@ antes de tocarlo).
 
 ## 3. Resumen ejecutivo
 
-**Pendientes: 26 hallazgos** (1 ALTA parcial, 12 MEDIA y 13 BAJA). Lo ya cerrado está en
+**Pendientes: 26 hallazgos** (1 ALTA a medias, 15 MEDIA y 10 BAJA). Lo ya cerrado está en
 `AGENTS.md` → “Cerrado de AUDIT.md”: **A1, A2, A3, A4, A6, A7, B3, C4, C8, D1, D2, D3 y
 D11**, con la evidencia de cómo se verificó cada uno. Lo que quedó a medias (A5, C5, D12)
 tiene una nota al principio de su sección.
