@@ -360,6 +360,26 @@ del dock, así que no necesita saber la geometría.
   python3 scripts/pointer.py --key escape             # cierra el panel
   ```
 
+- **`scripts/click_at.py X Y`** clickea (o deja el puntero, con `--only-move`) en una
+  coordenada ABSOLUTA. Es lo que hace falta cuando `pointer.py` no sirve, que es el caso
+  de los dos sensores de arriba: su reveal necesita una transición oculto→visible (con un
+  panel del overlay abierto el dock ya está visible y el script espera para siempre) y
+  barre la franja de arriba, pensada para el dock `Top`. Acá el puntero se parkea en la
+  esquina superior izquierda (clamping) y se mueve en deltas conocidos (~3.05 px reales
+  por paso de 3 y ~2.04 por paso de 2), así que aterriza con unos pocos px de error:
+  sirve para una banda de pestañas o un widget, no para un borde de 1 px.
+
+  ```sh
+  dockyrs --toggle-search                  # el panel abierto es lo que hace falta
+  python3 scripts/click_at.py 47 346       # 2ª pestaña con el dock en Left
+  python3 scripts/click_at.py 1720 47      # 3ª pestaña con el dock en Top (3440 de ancho)
+  python3 scripts/click_at.py 110 358 --only-move   # hover sobre una tarjeta
+  ```
+
+  Ojo con la cuenta en un setup multi-salida: las coordenadas son de la salida donde
+  quedó el puntero, y el ancho importa (`niri msg --json outputs` da el layout). En el
+  ultrawide de este setup la superficie del dock está centrada en 3440, no en 1920.
+
 - **Con el dock VERTICAL (`Left`/`Right`) `pointer.py` no sirve**: barre la franja de
   arriba con `rel(3, 0)`, y con la barra al costado el puntero nunca entra al blob
   (que está centrado en la vertical). Para eso está `scripts/sweep_vertical.py`, que
