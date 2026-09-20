@@ -310,6 +310,10 @@ del dock, así que no necesita saber la geometría.
 
 - `UI_DEV_SETUP = 0x405c5503`: el tamaño de `struct uinput_setup` es 92, no 4. Con
   el número mal el ioctl falla y no se emite nada; si redirigís stderr, es silencioso.
+- **El dispositivo tarda ~1,6 s en ser reconocido**: si emitís eventos apenas después de
+  `UI_DEV_CREATE` se pierden los primeros (o todos). `pointer.py` duerme 1.6 s y
+  `click_at.py` lo tapa con el `sleep(2.0)` de `park_away`; un script nuevo tiene que
+  esperar explícitamente o parece que "la app no recibe nada".
 - ~3.05 px reales por paso de 3 px (aceleración de libinput, medido).
 - `--extra N` recorre la barra, `--then-dx/--then-dy` encadena un segundo click,
   `--y N` fija la altura.
@@ -491,7 +495,13 @@ reordenamiento de widgets) y lo posterior:
   `OnlyShowIn`/`NotShowIn`. Tests: `desktop::entry_tests`, `usage::usage_tests`.
 - Modos del overlay: `Shift+←/→` cicla launcher → portapapeles → fondos → ventanas
   (`cycle_overlay` en `app/mod.rs`, interceptado **antes** de armar `held_key` en
-  `handlers.rs`; aunque eso NO frena el auto-repeat: cada repetición vuelve a entrar a la rama y cicla en bucle — pendiente en AUDIT.md B1). Los tres
+  `handlers.rs`). El auto-repeat de esa flecha lo traga `accion_de_la_banda`
+  (`overlay_cycle_key`): cicla la primera pulsación y las repeticiones se tragan sólo
+  con el overlay abierto, para no comerse el ←/→ repetido del panel de ajustes. Ojo:
+  **en niri 26.04 el bucle no se reproduce** — con el binario sin el guard y la flecha
+  sostenida 2,5 s por uinput el log muestra UN ciclo: el compositor no manda
+  repeticiones al cliente. El guard es para los que sí las sintetizan (sctk lo hace si
+  recibe `RepeatInfo::Repeat`). Los tres
   primeros reusan sus modos existentes y se cierran por su propio camino; "ventanas"
   es la misma lista del launcher con `SearchList::Windows`, y Enter enfoca por id de
   niri en vez de lanzar.
@@ -1478,6 +1488,9 @@ original (que describía el árbol de aquel momento) y, arriba, lo que se hizo y
 se verificó; el número entre paréntesis es la sección que tenía en `AUDIT.md`. Lo que
 sigue **abierto** vive en `AUDIT.md`, no acá.
 
+Se movieron en dos tandas el 2026-09-20: **13** en la limpieza (A1, A2, A3, A4, A6, A7,
+B3, C4, C8, D1, D2, D3, D11) y **9** al cerrar la Ronda 1 (B1, B2, B10, C3, C6, D9, D10,
+D12, D13).
 ### A1 — `wpctl` sin timeout: cuelgue indefinido (AUDIT §4.1)
 
 > **Resuelto** (§3): `read_volume()` pasó a `run_with_timeout(cmd, 500ms)`, el
@@ -1765,6 +1778,72 @@ pub fn detect() -> Self {
 **Verificación:** `env -u NIRI_SOCKET -u HYPRLAND_INSTANCE_SIGNATURE strace -f -e trace=execve ./target/release/dockyrs 2>&1 | grep -c 'niri.*workspaces'`
 en 10 s: con el fix, 1 (o 0 si el probe falla); sin el fix, ~5.
 
+### B1 — El auto-repeat de Shift+flecha cicla modos en bucle (AUDIT §5.1)
+
+> **Cerrado con medición.** `overlay_cycle_key` + `accion_de_la_banda` se tragan el
+> auto-repeat de la flecha que ya cicló (con el overlay abierto; sin overlay la flecha
+> sigue su camino, que es lo que espera el panel de ajustes). **Ojo: el bucle NO se
+> reproduce en niri 26.04** — con el binario sin el fix y Shift+→ sostenida 2,5 s por
+> uinput el log muestra **un** ciclo, no el bucle: el compositor no le manda repeticiones
+> al cliente. El guard queda como defensa para los que sí las sintetizan (sctk lo hace si
+> recibe `RepeatInfo::Repeat`) y porque cuesta un `Option<Keysym>`.
+
+**Archivo:** `src/app/handlers.rs:320-328`
+
+```rust
+// `held_key`; si no, el auto-repeat de la flecha ciclaría un modo por frame. -----
+if self.modifiers.shift && matches!(event.keysym, Keysym::Left | Keysym::Right) {
+    let dir = if event.keysym == Keysym::Right { 1 } else { -1 };
+    if self.cycle_overlay(dir, qh) {
+        return;
+    }
+}
+```
+
+**El comentario describe una protección que el código no tiene.** `held_key` se arma
+*después* de esta rama, y `cycle_overlay` (`app/mod.rs:315`) no mira `held_key` ni
+deduplica por `event.time` (que tampoco se usa en ningún lado). Cada `press_key` con
+Shift+←/→ entra a esta rama: el auto-repeat del teclado (tras ~500 ms, ~30/s) cicla
+Apps → Clipboard → Wallpapers → Windows en bucle mientras se mantenga la tecla.
+
+**Verificación pendiente (importante):** confirmar con teclado real.
+`scripts/pointer.py --shift-arrow` manda pulsaciones discretas, **no** auto-repeat,
+así que el bug no se reproduce por script. Es la razón por la que no lo detectó
+ningún test.
+
+**Fix:** deduplicar por `event.time`: guardar `last_cycle_time: u32` en `App` y
+exigir `event.time != last_cycle_time` antes de ciclar.
+
+**Verificación:** mantener Shift+→ 2 s con el launcher abierto y contar los
+`overlay: X -> Y` en el log: debe haber **uno**.
+
+### B2 — Socket IPC en `/tmp` si falta `XDG_RUNTIME_DIR` (AUDIT §5.2)
+
+> **Resuelto.** `socket_path` ya no cae en `/tmp` pelado: cuando falta
+> `XDG_RUNTIME_DIR` usa un subdirectorio por uid con 0700 (`/tmp/dockyrs-<uid>`), que
+> sigue funcionando pero no lo puede abrir otro usuario.
+
+**Archivo:** `src/ipc.rs:27-33`
+
+```rust
+let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+std::path::PathBuf::from(dir).join(if profile.is_empty() { "dockyrs.sock" … })
+```
+
+Con systemd/elogind `XDG_RUNTIME_DIR` siempre existe (`/run/user/1000`, modo 0700) y
+el socket queda protegido. Si falta (sesión lanzada a mano, contenedor, login sin
+`pam_systemd`), el socket se crea en `/tmp/dockyrs.sock` con el modo por defecto
+(0777 & ~umask → normalmente 0755): **cualquier usuario local puede conectarse** y
+enviar `toggle-search`, `notify<sep>…` (spam de notificaciones), `screenshot-region`,
+`toggle-dock-menu`.
+
+**Fix mínimo:** sin `XDG_RUNTIME_DIR`, usar un directorio propio con modo 0700
+(`~/.cache/dockyrs` o `temp_dir().join(format!("dockyrs-{}", uid))`) creado con
+`.mode(0o700)`; no seguir si el directorio no es del usuario.
+
+**Verificación:** `unset XDG_RUNTIME_DIR; ./target/release/dockyrs &` y
+`stat -c %a /tmp/dockyrs.sock` → inaccesible para otros usuarios.
+
 ### B3 — Hilo por conexión IPC, sin timeout de lectura (AUDIT §5.3)
 
 > **Resuelto** (no estaba marcado en `AUDIT.md`). `spawn_listener` lanza **un hilo por
@@ -1798,6 +1877,78 @@ leer. No hace falta thread pool ni async.
 (`python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.connect('<path>')"`), después
 `./target/release/dockyrs --toggle-search` debe seguir funcionando.
 
+### B10 — Elegir fuente pisa la config del usuario sin escritura atómica (AUDIT §5.16)
+
+> **Resuelto.** Las escrituras de `gtk-3.0/settings.ini`, `gtk-4.0/settings.ini`,
+> `kdeglobals` y `kitty.conf` pasan por `escribir_atomico()`: `.tmp` con el pid en el
+> mismo directorio + `rename`, con los permisos del original copiados y `warn` si falla.
+
+**Archivo:** `src/app/fonts.rs:63` y `:110`, invocados desde
+`app/dock_menu_input.rs:282-284`
+
+```rust
+let _ = std::fs::write(path, lines.join("\n") + "\n");
+```
+
+Las tres funciones (`apply_system_gtk_font`, `apply_system_qt_font`,
+`apply_kitty_font`) reescriben **archivos que no son del dock**:
+
+- `~/.config/gtk-3.0/settings.ini` y `~/.config/gtk-4.0/settings.ini`
+- `~/.config/kdeglobals`
+- `~/.config/kitty/kitty.conf`
+
+`fs::write` **trunca y después escribe**. Si el proceso muere en el medio (o se corta
+la luz), el usuario se queda con su config de GTK/Qt/terminal truncada o vacía — y el
+contenido se armó desde `read_to_string(...).unwrap_or_default()`, así que un archivo
+ilegible se pisa con una versión reconstruida desde cero. Errores silenciados con
+`let _ =`.
+
+Es la única escritura del repo que toca config ajena, y es justo la que no sigue el
+patrón correcto que el repo **ya tiene** en `clipboard/storage.rs:60-80` (tmp +
+rename + modo 0600).
+
+**Fix mínimo:** escribir a un temporal en el mismo directorio y renombrar:
+
+```rust
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("dockyrs-tmp");
+    std::fs::write(&tmp, contents)?;
+    std::fs::rename(&tmp, path)
+}
+```
+
+Y conservar el original si el parseo falla (no reconstruir desde cero cuando
+`read_to_string` devuelve `Err` por permisos).
+
+**Verificación:** test con un archivo temporal que simule el fallo (escribir y
+renombrar deja el original intacto); manual: elegir una fuente y verificar que
+`kitty.conf` conserva el resto de las líneas. `git diff --no-index` contra una copia
+previa sirve de evidencia.
+
+### C3 — `Config::load` descarta apps y ajustes si el JSON no parsea (AUDIT §6.3)
+
+> **Resuelto.** Un config que existe pero no parsea se respalda al lado
+> (`config.json.bak-<ts>`) y se loguea `error`, en vez de quedar a merced del primer
+> `save()`. Verificado en vivo con un `--profile` descartable.
+
+`src/config.rs:283-289`
+
+```rust
+Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|err| {
+    log::warn!("failed to parse config at {path:?}, using defaults: {err}");
+    Config::default()
+}),
+```
+
+`DockSettings` tiene `#[serde(default)]` (`config.rs:124`), así que agregar campos
+nuevos **no** rompe configs viejas (bien). El problema es un JSON corrupto o un
+`PinnedApp` con un campo faltante: se descartan silenciosamente **todos** los apps
+pinned y todos los ajustes, y el próximo `save()` pisa el archivo. El usuario ve el
+dock "reseteado" y perdió su configuración.
+
+**Fix mínimo:** no pisar el archivo. Guardar el ilegible como `config.json.bak-<ts>`
+antes de caer a los defaults, y loguear `error` en vez de `warn`.
+
 ### C4 — HECHO: AGENTS trampa 1 ya corregida en el árbol (AUDIT §6.4)
 
 > **No había nada que implementar:** la trampa 1 ya decía "superficie compartida +
@@ -1820,6 +1971,16 @@ superficie del popup y su input region.
 Corregirla a "una superficie compartida para el dock y los modos que lo acompañan
 (menú, OSD, HUD, launcher, portapapeles, fondos) + superficies propias para el popup
 del tray y el selector de screenshot".
+
+### C6 — `notify` por IPC truncado a 1024 bytes (AUDIT §6.6)
+
+> **Resuelto.** La lectura del comando sale a `leer_comando()`, con tope de 16 KB y un
+> `warn` cuando hay que cortar (antes: buffer fijo de 1024 y corte silencioso).
+
+`ipc.rs:71-80`: `read(&mut buf)` con `buf = [0u8; 1024]`, y `notify` mete título +
+cuerpo separados por `\u{1f}` en ese buffer. Un cuerpo largo se corta **en silencio**
+(no hay bucle de lectura ni longitudes). **Fix mínimo:** leer hasta EOF acumulando en
+un `Vec`, o truncar con `…` visible en vez de cortar en seco.
 
 ### C8 — HECHO: AGENTS trampa 2 ya corregida en el árbol (AUDIT §6.13)
 
@@ -1996,6 +2157,41 @@ si se quiere ser estricto).
 **Verificación:** `curl -s -L --fail --max-time 3 -o /tmp/x.jpg https://i.ytimg.com/vi/NOEXISTE000/hqdefault.jpg; echo $?`
 → 22 con `--fail` (y sin escribir el archivo).
 
+### D9 — `nearest_tray_index` resta `count - 1` (AUDIT §6.7)
+
+> **Resuelto.** `nearest_tray_index` usa `saturating_sub(1)`: con el tray vacío ya no
+> hay underflow.
+
+`src/render/tray.rs:7-9`
+
+```rust
+((rel.max(0.0) / per).floor() as usize).min(count - 1)
+```
+
+Con `count == 0` es underflow (panic en debug, `usize::MAX` en release). **Latente**:
+el único llamador es `tray_icon_hit` (ramas vertical/horizontal, `:38` y `:44`), que
+corta antes con `tray_count == 0` (`:17`); `tray_icon_center` no la llama (su guarda es
+`idx >= tray_count`). **Fix:** `.min(count.saturating_sub(1))` como defensa en
+profundidad — los tests la llaman directo. **Verificación:**
+`assert_eq!(nearest_tray_index(0.0, 26.0, 0), 0)`.
+
+### D10 — `read_cpu` suma `guest`/`guest_nice` (doble conteo) (AUDIT §6.8)
+
+> **Resuelto.** La cuenta sale a `cpu_totales()`, que corta en `steal`: `guest` y
+> `guest_nice` no se suman dos veces.
+
+`src/widgets.rs:173-174`
+
+```rust
+let idle = fields[3] + fields.get(4).copied().unwrap_or(0);
+let total: u64 = fields.iter().sum();
+```
+
+En `/proc/stat`, `guest` ya está incluido en `user` (y `guest_nice` en `nice`): sumar
+los 10 campos lo cuenta doble y sesga el porcentaje. **Fix:**
+`let total: u64 = fields.iter().take(8).sum();`. **Verificación:** test con la línea
+sintética `cpu  100 0 100 800 0 0 0 0 200 0 0 0` → total 1000, no 1200.
+
 ### D11 — `read_ram` sin saturar, y se llama dos veces por refresh (AUDIT §6.9)
 
 > **Resuelto** (no estaba marcado en `AUDIT.md`). `read_ram` calcula con `f64` y
@@ -2018,6 +2214,46 @@ parsea `/proc/meminfo` dos veces); (b) `total - avail` en `u64` sin chequeo: si
 `MemAvailable > MemTotal` (kernels/containers con contabilidad rara) es underflow.
 **Fix:** `if let Some((pct, gb)) = read_ram() { self.ram = Some(pct); self.ram_gb = Some(gb); }`
 (patrón que ya usa `refresh_cpu_ram`) y `total.saturating_sub(avail)`.
+### D12 — Código muerto / no-op en render (AUDIT §6.10)
+
+> **Resuelto del todo.** Además del `bg_margin` y el `let _ = label_len` (que ya no
+> estaban), se borraron `ICON_OVERSAMPLE = 1.0` (se multiplicaba por 1.0 en el tamaño del
+> caché de iconos) y el parámetro muerto `_text_cache` de `draw_network_widget`.
+
+> **Parcialmente resuelto.** De la tabla de abajo quedan vivos `ICON_OVERSAMPLE`
+> (`render/mod.rs:41`, multiplicado por 1.0) y el parámetro `_text_cache` muerto de
+> `draw_network_widget`. El `let _ = label_len` y `bg_margin` ya no están.
+
+| Archivo:línea | Código | Nota |
+| --- | --- | --- |
+| `render/syswidgets.rs:19,30` | `let label_len = …; draw_text_rotated(…); let _ = label_len;` | cálculo muerto, silenciado con `let _` |
+| `render/mod.rs:26` | `const ICON_OVERSAMPLE: f32 = 1.0;` | multiplicado en `:330`: no-op |
+| `render/mod.rs:277` | `let bg_margin = 0.0;` | resta de 0.0 |
+| `render/syswidgets.rs:304-306` | `draw_network_widget(…, _text_cache: &mut TextCache, …)` | parámetro que el widget nunca usa; firma divergente del resto |
+
+**Fix:** borrar los tres primeros y quitar el parámetro del cuarto (ajustar el match
+en `render/layout.rs`). **Verificación:** `cargo build --release && cargo clippy --release --all-targets`.
+
+### D13 — `IconCache::get` aloca un `String` por lookup (AUDIT §6.11)
+
+> **Resuelto.** `IconCache` pasa a `HashMap<u32, HashMap<String, _>>`: el lookup usa el
+> `&str` que ya tiene (el `String` se asigna sólo en el miss) y el tope es por tamaño, no
+> global.
+
+`src/icon_cache.rs:23-24` y `:36-37`
+
+```rust
+pub fn get(&mut self, icon_name: &str, size: u32) -> Option<Rc<Pixmap>> {
+    let key = (icon_name.to_string(), size);
+    if let Some(hit) = self.cache.get(&key) {
+```
+
+Se llama una vez por icono de tray y por carátula en **cada frame**; el hit de caché
+no debería alocar. **Fix mínimo y realista:** memo de un elemento — guardar el último
+`(name, size)` consultado y devolver el `Rc` directo cuando coincide (tray y carátulas
+repiten el mismo par en frames consecutivos). Un `HashMap` con `Borrow` para `&str`
+requeriría cambiar la key a algo tipo `Arc<str>`. **Verificación:** test con
+`#[global_allocator]` contando allocations, o `perf stat` de malloc durante hover.
 
 ## Pendientes conocidos
 
@@ -2066,12 +2302,14 @@ parsea `/proc/meminfo` dos veces); (b) `total - avail` en `u64` sin chequeo: si
   - Lo que **no** conviene: swipe para descartar (no hay detección de gestos y el
     mouse-out ya cierra), squish/stretch (la forma es un rounded-rect en un eje) y
     badges/Face ID/AirDrop (no hay fuente de dato).
-  - **Prioridad honesta**: `AUDIT.md` quedó con **26 hallazgos abiertos** (A5 a
-    medias, 15 MEDIA y 10 BAJA) después de la limpieza del 2026-09-20; lo cerrado
-    (A1–A4, A6, A7, B3, C4, C8, D1, D2, D3, D11) vive en “Cerrado de AUDIT.md”,
-    arriba. Lo más visible para el usuario hoy: **B1** (Shift+flecha en auto-repeat
-    cicla los modos en bucle) y **A5** (el `catch_unwind` no cubre los drenajes de
-    IPC posteriores al `match`).
+  - **Prioridad honesta**: `AUDIT.md` quedó con **17 hallazgos abiertos** (A5 a
+    medias, 12 MEDIA y 4 BAJA) después de cerrar la Ronda 1 el 2026-09-20; los 22
+    cerrados viven en “Cerrado de AUDIT.md”, arriba. Lo que más se siente hoy: **B4**
+    (cada evento de niri dispara un `niri msg --json workspaces`, cuando el propio
+    evento ya trae la lista) y **D5** (el tray re-resuelve todos los items cada 2 s).
+    **A5** sigue a medias: el `catch_unwind` no cubre los drenajes de IPC posteriores
+    al `match`, y ahí la decisión documentada en `main.rs` es arreglar en la fuente,
+    no envolver más código.
   - **Verificado 2026-09-20 en una pasada por los pendientes**: de los dos puntos
     marcados "sin verificar a ojo" quedó **cero**. La grabación andaba pero tarde
     (trampa 17: el tick dormía 20 s, no 1) y el widget `Mic` quedó confirmado

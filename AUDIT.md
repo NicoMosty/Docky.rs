@@ -9,10 +9,10 @@
 > `scripts/`, `install.sh`, `README.md`, `AGENTS.md`. Base: rama `niri-backend`.
 >
 > **Este documento lista SÓLO lo que sigue abierto.** Los hallazgos ya cerrados
-> (A1, A2, A3, A4, A6, A7, B3, C4, C8, D1, D2, D3, D11) se movieron a `AGENTS.md`
-> → “Cerrado de AUDIT.md” el 2026-09-20, con lo que se hizo y cómo se verificó; los
-> números de sección que faltan abajo son justamente esos. A5, C5 y D12 quedaron a
-> medias: lo pendiente sigue en su sección, con una nota arriba.
+> (A1, A2, A3, A4, A6, A7, B1, B2, B3, B10, C3, C4, C6, C8, D1, D2, D3, D9, D10, D11,
+> D12 y D13) se movieron a `AGENTS.md` → “Cerrado de AUDIT.md”, con lo que se hizo y
+> cómo se verificó; los números de sección que faltan abajo son justamente esos. A5 y C5
+> quedaron a medias: lo pendiente sigue en su sección, con una nota arriba.
 
 ---
 
@@ -31,8 +31,8 @@
 5. **No editar la config de niri del usuario** (`~/.config/niri/…`).
 6. **Un hallazgo cerrado SE MUDA**: se borra de este documento y va a `AGENTS.md` →
    “Cerrado de AUDIT.md”, con lo que se hizo, la evidencia y el commit. Este documento
-   lista **sólo lo abierto**: si algo queda acá, es que falta. (Así se hizo la limpieza
-   del 2026-09-20, que movió 13 hallazgos.)
+   lista **sólo lo abierto**: si algo queda acá, es que falta. (Así se hizo el 2026-09-20,
+   que movió 13 hallazgos en la limpieza y 9 más al cerrar la Ronda 1.)
 7. **Estado del árbol de trabajo** (ver §2): limpio y pusheado. Si encontrás algo sin
    commitear, primero mirá si `AGENTS.md` lo describe: puede ser trabajo a medias de
    otra sesión. No lo reviertas sin leerlo.
@@ -90,22 +90,18 @@ antes de tocarlo).
 
 ## 3. Resumen ejecutivo
 
-**Pendientes: 26 hallazgos** (1 ALTA a medias, 15 MEDIA y 10 BAJA). Lo ya cerrado está en
-`AGENTS.md` → “Cerrado de AUDIT.md”: **A1, A2, A3, A4, A6, A7, B3, C4, C8, D1, D2, D3 y
-D11**, con la evidencia de cómo se verificó cada uno. Lo que quedó a medias (A5, C5, D12)
-tiene una nota al principio de su sección.
+**Pendientes: 17 hallazgos** (1 ALTA a medias, 12 MEDIA y 4 BAJA). Lo ya cerrado está en
+`AGENTS.md` → “Cerrado de AUDIT.md” (22 hallazgos, con la evidencia de cómo se verificó
+cada uno). Lo que quedó a medias (A5 y C5) tiene una nota al principio de su sección.
 
 | ID | Sev. | Título | Archivo |
 | --- | --- | --- | --- |
 | **A5** | ALTA | Cualquier panic mata el dock; no hay recuperación ni supervisión | varios (§4.7) |
-| **B1** | MEDIA | Shift+flecha en auto-repeat cicla los 4 modos en bucle | `handlers.rs:323` |
-| **B2** | MEDIA | Socket IPC en `/tmp` si falta `XDG_RUNTIME_DIR` (accesible a otros usuarios) | `ipc.rs:28` |
 | **B4** | MEDIA | Watcher de niri: `niri msg` por cada evento de ventana | `ipc.rs:303` |
 | **B5** | MEDIA | Conexión D-Bus del tray cacheada sin reconexión → tray muerto permanente | `tray.rs:187` |
 | **B6** | MEDIA | `repo_dir()` depende de la ruta del binario: theming se pierde sin aviso | `app/mod.rs:494` |
 | **B7** | MEDIA | `configure` no reconcilia `new_size` con lo dibujado → clicks corridos | `handlers.rs:154` |
 | **B8** | MEDIA | Carátula: metadata MPRIS no confiable → request saliente + escritura en caché | `widgets.rs:932` |
-| **B10** | MEDIA | Elegir fuente pisa `gtk-*.ini`/`kdeglobals`/`kitty.conf` sin escritura atómica | `app/fonts.rs:63,110` |
 | **B11** | MEDIA | `dockyrs-notifyd` ignora `--profile`: con instancias por perfil no llega ninguna notificación | `bin/dockyrs-notifyd.rs:13` |
 | **B12** | MEDIA | Pegar del portapapeles lee con `read_to_end` sin tope → OOM con texto enorme | `clipboard/paste.rs:56` |
 | **D4** | MEDIA | Caché de carátulas en disco sin tope (crece con cada tema nuevo) | `widgets.rs:925` |
@@ -115,18 +111,11 @@ tiene una nota al principio de su sección.
 | **D8** | MEDIA | Etiqueta de RAM duplicada entre reparto y dibujo (trampa 12) | `render/cpu_ram.rs:207` / `widget.rs:888` |
 | **C1** | BAJA | 12 funciones con 8-11 argumentos (síntoma: `DrawArgs` a medio migrar) | §6.1 |
 | **C2** | BAJA | `DockMenuMode.closing` es código muerto | `app/dock_menu.rs:349` |
-| **C3** | BAJA | `Config::load` descarta apps+settings si el JSON no parsea | `config.rs:506` |
 | **C5** | BAJA | Huecos de tests (watchers/timers) — el resto ya está cubierto | §6.5 |
-| **C6** | BAJA | `notify` por IPC truncado a 1024 bytes sin avisar | `ipc.rs:121` |
 | **C7** | BAJA | `dockyrs-notifyd` detiene dunst/mako/swaync/fnott/wired en cada arranque | `bin/dockyrs-notifyd.rs:78` |
-| **D9** | BAJA | `nearest_tray_index` resta `count - 1` (underflow latente) | `render/tray.rs:7` |
-| **D10** | BAJA | `read_cpu` suma `guest`/`guest_nice` (doble conteo) | `widgets.rs:477` |
-| **D12** | BAJA | Código muerto/no-op en render (`ICON_OVERSAMPLE = 1.0` sigue vivo) | §6.10 |
-| **D13** | BAJA | `IconCache::get` aloca un `String` por lookup, incluso con hit | `icon_cache.rs:26` |
 
-Prioridad de ejecución: **A5 (el resto del guard) → D2/D9/D10 (panics y aritmética) →
-B4/D5/D6/D7 (churn) → B2/B5/B6/B7/B8/B10/B11/B12/C6/C7 (E/S y seguridad) → B1 y el
-resto de C/D → D4/D8/D12/D13.** El detalle, en §8.
+Prioridad de ejecución: **B4/D5/D6/D7/D8 (churn medible) → B12/B5/B6/B7/B11/C7 (E/S) →
+A5 (el resto del guard) → C1/C2/C5 y D4.** El detalle, en §8.
 
 ---
 
@@ -135,8 +124,6 @@ resto de C/D → D4/D8/D12/D13.** El detalle, en §8.
 Los números que faltan (4.1–4.6 y 4.8) son hallazgos **ya cerrados**: ver `AGENTS.md` →
 “Cerrado de AUDIT.md”. Queda uno, y sólo en parte: el listado de abajo describe el estado
 **original**, y el guard de arriba dice qué falta.
-
----
 
 ---
 
@@ -185,65 +172,9 @@ debe devolver sólo sitios del arranque (donde fallar es correcto) y tests.
 
 ## 5. Severidad MEDIA — robustez, corrección y E/S
 
-Faltan 5.3 (B3), 5.9 (D2) y 5.10 (D3): ya cerrados, ver `AGENTS.md` → “Cerrado de
-AUDIT.md”. El resto sigue abierto, y los números se conservan para no romper las
-referencias del §10 y del anexo.
-
-### 5.1 — El auto-repeat de Shift+flecha cicla modos en bucle {#b1}
-
-**Archivo:** `src/app/handlers.rs:320-328`
-
-```rust
-// `held_key`; si no, el auto-repeat de la flecha ciclaría un modo por frame. -----
-if self.modifiers.shift && matches!(event.keysym, Keysym::Left | Keysym::Right) {
-    let dir = if event.keysym == Keysym::Right { 1 } else { -1 };
-    if self.cycle_overlay(dir, qh) {
-        return;
-    }
-}
-```
-
-**El comentario describe una protección que el código no tiene.** `held_key` se arma
-*después* de esta rama, y `cycle_overlay` (`app/mod.rs:315`) no mira `held_key` ni
-deduplica por `event.time` (que tampoco se usa en ningún lado). Cada `press_key` con
-Shift+←/→ entra a esta rama: el auto-repeat del teclado (tras ~500 ms, ~30/s) cicla
-Apps → Clipboard → Wallpapers → Windows en bucle mientras se mantenga la tecla.
-
-**Verificación pendiente (importante):** confirmar con teclado real.
-`scripts/pointer.py --shift-arrow` manda pulsaciones discretas, **no** auto-repeat,
-así que el bug no se reproduce por script. Es la razón por la que no lo detectó
-ningún test.
-
-**Fix:** deduplicar por `event.time`: guardar `last_cycle_time: u32` en `App` y
-exigir `event.time != last_cycle_time` antes de ciclar.
-
-**Verificación:** mantener Shift+→ 2 s con el launcher abierto y contar los
-`overlay: X -> Y` en el log: debe haber **uno**.
-
----
-
-### 5.2 — Socket IPC en `/tmp` si falta `XDG_RUNTIME_DIR` {#b2}
-
-**Archivo:** `src/ipc.rs:27-33`
-
-```rust
-let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-std::path::PathBuf::from(dir).join(if profile.is_empty() { "dockyrs.sock" … })
-```
-
-Con systemd/elogind `XDG_RUNTIME_DIR` siempre existe (`/run/user/1000`, modo 0700) y
-el socket queda protegido. Si falta (sesión lanzada a mano, contenedor, login sin
-`pam_systemd`), el socket se crea en `/tmp/dockyrs.sock` con el modo por defecto
-(0777 & ~umask → normalmente 0755): **cualquier usuario local puede conectarse** y
-enviar `toggle-search`, `notify<sep>…` (spam de notificaciones), `screenshot-region`,
-`toggle-dock-menu`.
-
-**Fix mínimo:** sin `XDG_RUNTIME_DIR`, usar un directorio propio con modo 0700
-(`~/.cache/dockyrs` o `temp_dir().join(format!("dockyrs-{}", uid))`) creado con
-`.mode(0o700)`; no seguir si el directorio no es del usuario.
-
-**Verificación:** `unset XDG_RUNTIME_DIR; ./target/release/dockyrs &` y
-`stat -c %a /tmp/dockyrs.sock` → inaccesible para otros usuarios.
+Faltan 5.1 (B1), 5.2 (B2), 5.3 (B3), 5.9 (D2), 5.10 (D3) y 5.16 (B10): ya cerrados, ver
+`AGENTS.md` → “Cerrado de AUDIT.md”. El resto sigue abierto, y los números se conservan
+para no romper las referencias del §10 y del anexo.
 
 ---
 
@@ -401,8 +332,6 @@ hostiles (`file:///etc/passwd`, `http://x/../../y.png`, URLs de 10 KB,
 
 ---
 
----
-
 ### 5.11 — La caché de carátulas en disco crece sin tope {#d4}
 
 **Archivo:** `src/widgets.rs:925-930` (`art_cache_dir`; `cached_remote_art` en `:932-954`)
@@ -535,52 +464,6 @@ del label rasterizado para `ram_gb = (12.34, 32.0)` y `(9.9, 8.0)`.
 
 ---
 
-### 5.16 — Elegir fuente pisa la config del usuario sin escritura atómica {#b10}
-
-**Archivo:** `src/app/fonts.rs:63` y `:110`, invocados desde
-`app/dock_menu_input.rs:282-284`
-
-```rust
-let _ = std::fs::write(path, lines.join("\n") + "\n");
-```
-
-Las tres funciones (`apply_system_gtk_font`, `apply_system_qt_font`,
-`apply_kitty_font`) reescriben **archivos que no son del dock**:
-
-- `~/.config/gtk-3.0/settings.ini` y `~/.config/gtk-4.0/settings.ini`
-- `~/.config/kdeglobals`
-- `~/.config/kitty/kitty.conf`
-
-`fs::write` **trunca y después escribe**. Si el proceso muere en el medio (o se corta
-la luz), el usuario se queda con su config de GTK/Qt/terminal truncada o vacía — y el
-contenido se armó desde `read_to_string(...).unwrap_or_default()`, así que un archivo
-ilegible se pisa con una versión reconstruida desde cero. Errores silenciados con
-`let _ =`.
-
-Es la única escritura del repo que toca config ajena, y es justo la que no sigue el
-patrón correcto que el repo **ya tiene** en `clipboard/storage.rs:60-80` (tmp +
-rename + modo 0600).
-
-**Fix mínimo:** escribir a un temporal en el mismo directorio y renombrar:
-
-```rust
-fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension("dockyrs-tmp");
-    std::fs::write(&tmp, contents)?;
-    std::fs::rename(&tmp, path)
-}
-```
-
-Y conservar el original si el parseo falla (no reconstruir desde cero cuando
-`read_to_string` devuelve `Err` por permisos).
-
-**Verificación:** test con un archivo temporal que simule el fallo (escribir y
-renombrar deja el original intacto); manual: elegir una fuente y verificar que
-`kitty.conf` conserva el resto de las líneas. `git diff --no-index` contra una copia
-previa sirve de evidencia.
-
----
-
 ### 5.17 — `dockyrs-notifyd` ignora el perfil: no entrega notificaciones {#b11}
 
 **Archivo:** `src/bin/dockyrs-notifyd.rs:13-16`
@@ -650,8 +533,8 @@ hexdigits / no-control con `take(6)` / `take(24)`): no la toques.
 
 ## 6. Severidad BAJA
 
-Faltan 6.4 (C4) y 6.13 (C8): ya cerrados. 6.5 (C5) y 6.10 (D12) quedaron a medias: en su
-sección está dicho qué falta.
+Faltan 6.3 (C3), 6.4 (C4), 6.6 (C6), 6.7 (D9), 6.8 (D10), 6.10 (D12), 6.11 (D13) y 6.13
+(C8): ya cerrados. 6.5 (C5) quedó a medias: en su sección está dicho qué falta.
 
 ### 6.1 — 12 funciones con 8-11 argumentos (clippy `too_many_arguments`) {#c1}
 
@@ -696,26 +579,6 @@ inicializa en `src/app/dock_menu.rs:130`; `dock_menu.rs:401` lo lee. Nunca se po
 `:205` lo lee). El muerto es sólo `DockMenuMode.closing`. Corregir el texto junto con
 el código: borrar el campo y la rama inalcanzable.
 
-### 6.3 — `Config::load` descarta apps y ajustes si el JSON no parsea {#c3}
-
-`src/config.rs:283-289`
-
-```rust
-Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|err| {
-    log::warn!("failed to parse config at {path:?}, using defaults: {err}");
-    Config::default()
-}),
-```
-
-`DockSettings` tiene `#[serde(default)]` (`config.rs:124`), así que agregar campos
-nuevos **no** rompe configs viejas (bien). El problema es un JSON corrupto o un
-`PinnedApp` con un campo faltante: se descartan silenciosamente **todos** los apps
-pinned y todos los ajustes, y el próximo `save()` pisa el archivo. El usuario ve el
-dock "reseteado" y perdió su configuración.
-
-**Fix mínimo:** no pisar el archivo. Guardar el ilegible como `config.json.bak-<ts>`
-antes de caer a los defaults, y loguear `error` en vez de `warn`.
-
 ### 6.5 — Huecos de tests {#c5}
 
 > **Parcialmente resuelto.** De la lista de abajo ya están cubiertos: 1 (el reparto de
@@ -751,75 +614,6 @@ Sin cobertura, ordenado por riesgo:
 7. `tray_geometry`/`tray_icon_hit` con `widget_scale ≠ 1` (hoy sólo se testea
    `nearest_tray_index`).
 8. `Dock::drag_to`/`end_drag`/`icon_at` a nivel de `Dock`.
-
-### 6.6 — `notify` por IPC truncado a 1024 bytes {#c6}
-
-`ipc.rs:71-80`: `read(&mut buf)` con `buf = [0u8; 1024]`, y `notify` mete título +
-cuerpo separados por `\u{1f}` en ese buffer. Un cuerpo largo se corta **en silencio**
-(no hay bucle de lectura ni longitudes). **Fix mínimo:** leer hasta EOF acumulando en
-un `Vec`, o truncar con `…` visible en vez de cortar en seco.
-
-### 6.7 — `nearest_tray_index` resta `count - 1` {#d9}
-
-`src/render/tray.rs:7-9`
-
-```rust
-((rel.max(0.0) / per).floor() as usize).min(count - 1)
-```
-
-Con `count == 0` es underflow (panic en debug, `usize::MAX` en release). **Latente**:
-el único llamador es `tray_icon_hit` (ramas vertical/horizontal, `:38` y `:44`), que
-corta antes con `tray_count == 0` (`:17`); `tray_icon_center` no la llama (su guarda es
-`idx >= tray_count`). **Fix:** `.min(count.saturating_sub(1))` como defensa en
-profundidad — los tests la llaman directo. **Verificación:**
-`assert_eq!(nearest_tray_index(0.0, 26.0, 0), 0)`.
-
-### 6.8 — `read_cpu` suma `guest`/`guest_nice` (doble conteo) {#d10}
-
-`src/widgets.rs:173-174`
-
-```rust
-let idle = fields[3] + fields.get(4).copied().unwrap_or(0);
-let total: u64 = fields.iter().sum();
-```
-
-En `/proc/stat`, `guest` ya está incluido en `user` (y `guest_nice` en `nice`): sumar
-los 10 campos lo cuenta doble y sesga el porcentaje. **Fix:**
-`let total: u64 = fields.iter().take(8).sum();`. **Verificación:** test con la línea
-sintética `cpu  100 0 100 800 0 0 0 0 200 0 0 0` → total 1000, no 1200.
-
-### 6.10 — Código muerto / no-op en render {#d12}
-
-> **Parcialmente resuelto.** De la tabla de abajo quedan vivos `ICON_OVERSAMPLE`
-> (`render/mod.rs:41`, multiplicado por 1.0) y el parámetro `_text_cache` muerto de
-> `draw_network_widget`. El `let _ = label_len` y `bg_margin` ya no están.
-
-| Archivo:línea | Código | Nota |
-| --- | --- | --- |
-| `render/syswidgets.rs:19,30` | `let label_len = …; draw_text_rotated(…); let _ = label_len;` | cálculo muerto, silenciado con `let _` |
-| `render/mod.rs:26` | `const ICON_OVERSAMPLE: f32 = 1.0;` | multiplicado en `:330`: no-op |
-| `render/mod.rs:277` | `let bg_margin = 0.0;` | resta de 0.0 |
-| `render/syswidgets.rs:304-306` | `draw_network_widget(…, _text_cache: &mut TextCache, …)` | parámetro que el widget nunca usa; firma divergente del resto |
-
-**Fix:** borrar los tres primeros y quitar el parámetro del cuarto (ajustar el match
-en `render/layout.rs`). **Verificación:** `cargo build --release && cargo clippy --release --all-targets`.
-
-### 6.11 — `IconCache::get` aloca un `String` por lookup {#d13}
-
-`src/icon_cache.rs:23-24` y `:36-37`
-
-```rust
-pub fn get(&mut self, icon_name: &str, size: u32) -> Option<Rc<Pixmap>> {
-    let key = (icon_name.to_string(), size);
-    if let Some(hit) = self.cache.get(&key) {
-```
-
-Se llama una vez por icono de tray y por carátula en **cada frame**; el hit de caché
-no debería alocar. **Fix mínimo y realista:** memo de un elemento — guardar el último
-`(name, size)` consultado y devolver el `Rc` directo cuando coincide (tray y carátulas
-repiten el mismo par en frames consecutivos). Un `HashMap` con `Borrow` para `&str`
-requeriría cambiar la key a algo tipo `Arc<str>`. **Verificación:** test con
-`#[global_allocator]` contando allocations, o `perf stat` de malloc durante hover.
 
 ### 6.12 — `dockyrs-notifyd` detiene los otros daemons de notificaciones {#c7}
 
@@ -880,41 +674,33 @@ se quiere conservar el comportamiento, hacerlo opt-in por env
 ## 8. Plan de implementación sugerido
 
 Cada etapa es verificable por sí sola, en orden de impacto para el usuario. Las etapas
-1 y 4 (menos B4/D4/D5) **ya están hechas**: ver `AGENTS.md` → “Cerrado de AUDIT.md”.
+de congelamientos, geometría y panics chicos **ya están hechas** (ver `AGENTS.md` →
+“Cerrado de AUDIT.md”): lo que queda es churn, E/S y limpieza.
 
-### Etapa pendiente — Panics y aritmética (A5, D9, D10)
-
-`percent_decode` con `get` (hecho), quitar los `expect`/`unwrap` de la tabla de A5,
-helper de lock del tray que sobreviva al envenenamiento, `catch_unwind` alrededor de los
-drenajes de IPC después del `match`, `saturating_sub` en `nearest_tray_index` y no sumar
-`guest`/`guest_nice` en `read_cpu`.
-
-**Guard:** `nearest_tray_index` con 0 (D9) y el test sintético de `/proc/stat` (D10).
-
-### Etapa pendiente — Churn (B4, D4, D5, D6, D7, D8)
+### Etapa pendiente — Churn medible (B4, D5, D6, D7, D8, D4)
 
 Leer los workspaces del **payload** del evento de niri (el `WorkspacesChanged` ya trae la
 lista; hoy cada evento dispara un `niri msg --json workspaces`), purga del `Watcher` por
 `name_has_owner`, Pixmap reusable en `draw_text_clipped`, layout calculado una sola vez,
-tope de la caché de carátulas y una sola `ram_label` para reparto y dibujo.
+una sola `ram_label` para reparto y dibujo y tope de la caché de carátulas. **Medir**
+antes y después (los turnos de CPU del proceso y el RPM de llamadas D-Bus): el reposo ya
+está en el piso, así que sin medición no se sabe si el cambio sirvió.
 
 **Guard:** test del tope de la caché y de la etiqueta única (D8, trampa 12).
 
-### Etapa pendiente — E/S y seguridad (B2, B5, B6, B7, B8, B10, B11, B12, C6, C7)
+### Etapa pendiente — E/S y seguridad (B5, B6, B7, B8, B11, B12, C7)
 
-Socket con permisos y timeout de lectura, reconexión D-Bus, no fallar en silencio con
-los `sync-*.sh`, `warn` en el desajuste de `configure`, validación de URLs, lectura
-completa y acotada de `notify`/paste, escritura atómica de la config de fuentes, perfil
-en `dockyrs-notifyd` y que deje de matar otros daemons.
+Reconexión D-Bus, no fallar en silencio con los `sync-*.sh`, `warn` en el desajuste de
+`configure`, validación de URLs, lectura acotada del paste, perfil en `dockyrs-notifyd` y
+que deje de matar otros daemons.
 
-**Guard:** tests de escritura atómica (el original sobrevive), del tope de paste y de
-`socket_path` con perfil.
+**Guard:** test del tope de paste, de la reconexión y de `repo_dir` sin repo.
 
-### Etapa pendiente — Limpieza (B1 y el resto de C/D: C1, C2, C3, C5, D12, D13)
+### Etapa pendiente — Limpieza y el resto (A5, C1, C2, C5)
 
-Auto-repeat de Shift+flecha, `DrawArgs` extendido a `render/`, `DockMenuMode.closing`,
-no-op de render (`ICON_OVERSAMPLE`), `IconCache` sin alloc por hit, backup del config
-ilegible y cerrar los huecos de tests que quedan (watchers/timers).
+El resto del guard de A5 (los drenajes de IPC después del `match` y el helper de lock del
+tray), `DrawArgs` extendido a `render/` (C1), `DockMenuMode.closing` (C2) y los huecos de
+tests que quedan (C5).
 
 **No empezar por acá.** Las etapas de arriba cambian lo que el usuario siente; esta sola
 no arregla nada visible.
