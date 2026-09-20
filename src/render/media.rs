@@ -1,5 +1,42 @@
 use super::*;
 
+// ----- un solo Pixmap de recorte por hilo, del tamaño que pida el último uso. Antes
+// cada llamada alocaba y zero-llenaba uno (`Pixmap::new`) por frame, y con la carátula
+// scrolleando eso es todos los frames (~30 fps, AUDIT.md D6). El dibujo corre entero en
+// el hilo principal, así que un scratch por hilo no comparte estado con nadie; se queda
+// con el tamaño más grande pedido hasta ahora para no re-alocar con cada resize.
+// ponytail: si algún día el raster se reparte en varios hilos, esto tiene que pasar a
+// ser un buffer por hilo de render (o por llamador).
+thread_local! {
+    static CLIP_SCRATCH: std::cell::RefCell<Option<Pixmap>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Corre `f` con un pixmap del tamaño pedido, reusando el scratch del hilo: el
+/// `Pixmap::new` por llamada (que además zero-llenaba el buffer) era el costo del
+/// hallazgo D6. Se limpia a transparente y sólo se re-aloca cuando cambia el tamaño
+/// (en régimen estable el título de la carátula mide siempre lo mismo).
+fn con_scratch(w: u32, h: u32, f: impl FnOnce(&mut Pixmap)) {
+    let (w, h) = (w.max(1), h.max(1));
+    CLIP_SCRATCH.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let mismo_tamano = slot
+            .as_ref()
+            .is_some_and(|p| p.width() == w && p.height() == h);
+        if !mismo_tamano {
+            let Some(nuevo) = Pixmap::new(w, h) else {
+                return;
+            };
+            *slot = Some(nuevo);
+        }
+        let Some(px) = slot.as_mut() else {
+            return;
+        };
+        // ----- lo que hacía el `Pixmap::new`: dejarlo transparente -----
+        px.data_mut().fill(0);
+        f(px);
+    });
+}
+
 pub(super) fn draw_text_clipped(
     pixmap: &mut Pixmap,
     glyphs: &Pixmap,
@@ -9,18 +46,17 @@ pub(super) fn draw_text_clipped(
     offset: f32,
 ) {
     let avail_i = avail_w.round().max(1.0) as u32;
-    let Some(mut clip) = Pixmap::new(avail_i, glyphs.height()) else {
-        return;
-    };
-    tile_text(&mut clip, glyphs, avail_w, offset);
-    pixmap.draw_pixmap(
-        0,
-        0,
-        clip.as_ref(),
-        &tiny_skia::PixmapPaint::default(),
-        Transform::from_translate(x, y),
-        None,
-    );
+    con_scratch(avail_i, glyphs.height(), |clip| {
+        tile_text(clip, glyphs, avail_w, offset);
+        pixmap.draw_pixmap(
+            0,
+            0,
+            clip.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            Transform::from_translate(x, y),
+            None,
+        );
+    });
 }
 
 pub(super) fn draw_text_clipped_rotated(
@@ -33,21 +69,20 @@ pub(super) fn draw_text_clipped_rotated(
 ) {
     let avail_i = avail_len.round().max(1.0) as u32;
     let h_i = glyphs.height();
-    let Some(mut clip) = Pixmap::new(avail_i, h_i) else {
-        return;
-    };
-    tile_text(&mut clip, glyphs, avail_len, offset);
-    let transform = Transform::from_translate(-(avail_i as f32) / 2.0, -(h_i as f32) / 2.0)
-        .post_rotate(-90.0)
-        .post_translate(cx, cy);
-    pixmap.draw_pixmap(
-        0,
-        0,
-        clip.as_ref(),
-        &tiny_skia::PixmapPaint::default(),
-        transform,
-        None,
-    );
+    con_scratch(avail_i, h_i, |clip| {
+        tile_text(clip, glyphs, avail_len, offset);
+        let transform = Transform::from_translate(-(avail_i as f32) / 2.0, -(h_i as f32) / 2.0)
+            .post_rotate(-90.0)
+            .post_translate(cx, cy);
+        pixmap.draw_pixmap(
+            0,
+            0,
+            clip.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            transform,
+            None,
+        );
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -503,4 +538,49 @@ pub(super) fn draw_media_widget_vertical(
     }
 
     title_anim
+}
+
+#[cfg(test)]
+mod clip_scratch_tests {
+    use super::*;
+
+    fn glifos() -> Pixmap {
+        let mut px = Pixmap::new(4, 3).expect("glifos");
+        for b in px.data_mut().chunks_exact_mut(4) {
+            b.copy_from_slice(&[255, 255, 255, 255]);
+        }
+        px
+    }
+
+    fn tinta(px: &Pixmap) -> usize {
+        px.data().chunks_exact(4).filter(|c| c[3] > 0).count()
+    }
+
+    /// D6: el scratch se reusa y se limpia entre llamadas. Lo que tiene que atrapar este
+    /// test es el fantasma: si el buffer compartido no se limpiara, dibujar con el texto
+    /// fuera de vista dejaría la tinta de la llamada anterior.
+    #[test]
+    fn el_scratch_no_deja_fantasmas() {
+        let glyphs = glifos();
+        let mut dst = Pixmap::new(8, 3).expect("dst");
+        // ----- con el glifo a la vista hay tinta, y dibujar dos veces da lo mismo -----
+        draw_text_clipped(&mut dst, &glyphs, 0.0, 0.0, 8.0, 0.0);
+        let primera: Vec<u8> = dst.data().to_vec();
+        assert!(tinta(&dst) > 0, "el glifo tiene que dibujarse");
+        dst.data_mut().fill(0);
+        draw_text_clipped(&mut dst, &glyphs, 0.0, 0.0, 8.0, 0.0);
+        assert_eq!(dst.data(), primera.as_slice(), "determinista");
+        // ----- con el glifo lejos, el pixmap de destino queda vacío: el scratch se limpió
+        // (sin la limpieza, acá quedaría la tinta de la llamada de arriba) -----
+        dst.data_mut().fill(0);
+        draw_text_clipped(&mut dst, &glyphs, 0.0, 0.0, 8.0, 1000.0);
+        assert_eq!(tinta(&dst), 0, "no puede quedar tinta vieja");
+        // ----- y también el de la versión rotada (comparte el mismo scratch) -----
+        let mut dst2 = Pixmap::new(8, 8).expect("dst2");
+        draw_text_clipped_rotated(&mut dst2, &glyphs, 4.0, 4.0, 8.0, 0.0);
+        assert!(tinta(&dst2) > 0, "la rotada también dibuja");
+        dst2.data_mut().fill(0);
+        draw_text_clipped_rotated(&mut dst2, &glyphs, 4.0, 4.0, 8.0, 1000.0);
+        assert_eq!(tinta(&dst2), 0, "y tampoco deja fantasmas");
+    }
 }
