@@ -11,9 +11,10 @@
 > **Este documento lista SÓLO lo que sigue abierto.** Los hallazgos ya cerrados
 > (A1, A2, A3, A4, A6, A7, B1, B2, B3, B10, C3, C4, C6, C8, D1, D2, D3, D9, D10, D11,
 > D12 y D13), los de la Ronda 2 (B4, D4, D5, D6, D7, D8) y los de la Ronda 3 (B7, B8,
-> B11, B12, C2, C7) se movieron a `AGENTS.md` → “Cerrado de AUDIT.md”, con lo que se hizo
-> y cómo se verificó; los números de sección que faltan abajo son justamente esos. Queda
-> **C5** a medias y las **decisiones** de §3 (A5 en parte, B6, C1).
+> B11, B12, C2, C7) más los dos últimos (**B5** y **C5**) se movieron a `AGENTS.md` →
+> “Cerrado de AUDIT.md”, con lo que se hizo y cómo se verificó; los números de sección que
+> faltan abajo son justamente esos. **No queda ningún pendiente**; lo abierto a propósito
+> son las decisiones de §3 (A5 en parte, B6, C1).
 
 ---
 
@@ -93,19 +94,14 @@ antes de tocarlo).
 
 ## 3. Resumen ejecutivo
 
-**Pendientes: 2 hallazgos** (B5, MEDIA, y C5, BAJA y a medias con los tests de
-`Dock::drag_to`/`icon_at`). Lo cerrado está en `AGENTS.md` → “Cerrado de AUDIT.md”,
-**34 hallazgos** con la evidencia de cómo se verificó cada uno.
+**Sin pendientes.** Los 36 hallazgos de la auditoría están cerrados y viven en `AGENTS.md`
+→ “Cerrado de AUDIT.md”, cada uno con lo que se hizo y cómo se verificó. Este documento
+queda como el registro del análisis original de cada uno.
 
-| ID | Sev. | Título | Archivo |
-| --- | --- | --- | --- |
-| **B5** | MEDIA | Conexión D-Bus del tray cacheada sin reconexión → tray muerto permanente | `tray.rs:187` |
-| **C5** | BAJA | Huecos de tests: quedan los de drag/`icon_at` | §6.5 |
+### Decisiones (abiertas a propósito)
 
-### Decisiones (no se hace, con el porqué)
-
-Estos tres quedan **abiertos a propósito**: no son trabajo pendiente, son el estado que
-eligió el repo. Si algún día cambia el supuesto, se retoman.
+Estos tres **no** son trabajo pendiente: son el estado que eligió el repo, y quedan acá con
+su porqué para que no se lean como deuda ni se pierdan. Si cambia el supuesto, se retoman.
 
 | ID | Por qué no se hace |
 | --- | --- |
@@ -166,40 +162,11 @@ debe devolver sólo sitios del arranque (donde fallar es correcto) y tests.
 
 ## 5. Severidad MEDIA — robustez, corrección y E/S
 
-Faltan 5.1 (B1), 5.2 (B2), 5.3 (B3), 5.4 (B4), 5.7 (B7), 5.8 (B8), 5.9 (D2), 5.10 (D3),
-5.11 (D4), 5.12 (D5), 5.13 (D6), 5.14 (D7), 5.15 (D8), 5.16 (B10), 5.17 (B11) y 5.18
-(B12): ya cerrados, ver `AGENTS.md` → “Cerrado de AUDIT.md”. Lo que queda de esta
-severidad es **B5** (reconexión D-Bus del tray) y **B6** (decisión, ver §3); los números se
-conservan para no romper las referencias del §10 y del anexo.
-
----
-
-### 5.5 — Conexión D-Bus del tray cacheada, sin reconexión {#b5}
-
-**Archivo:** `src/tray.rs:185-198`
-
-```rust
-fn tray_conn() -> Option<&'static Connection> {
-    static CONN: std::sync::OnceLock<Option<Connection>> = OnceLock::new();
-    CONN.get_or_init(|| match Connection::session() { … }).as_ref()
-}
-```
-
-El comentario explica bien por qué se cachea (antes cada llamada hacía el handshake
-completo). El problema es el otro extremo: si el bus de sesión se reinicia
-(`systemctl --user restart dbus`, o el bus se cae), la `Connection` cacheada queda
-muerta **para siempre**. Todo lo del tray (`fetch_menu`, `find_menu`, `activate`,
-`send_menu_event`) falla en silencio (cadenas `let … && let Ok(…)` que no hacen nada,
-más `.ok()?` que devuelve `Vec` vacío) y el tray del dock queda
-vacío hasta reiniciar dockyrs.
-
-**Fix mínimo:** guardar la conexión en un `Mutex<Option<Connection>>` y, ante el
-primer error de una llamada, descartarla y reintentar una vez con
-`Connection::session()`.
-
-**Verificación:** con el dock corriendo, reiniciar el bus de sesión y después hacer
-click derecho en un icono del tray: debe volver a funcionar sin reiniciar el dock.
-Antes del fix, no.
+Faltan 5.1 (B1), 5.2 (B2), 5.3 (B3), 5.4 (B4), 5.5 (B5), 5.7 (B7), 5.8 (B8), 5.9 (D2),
+5.10 (D3), 5.11 (D4), 5.12 (D5), 5.13 (D6), 5.14 (D7), 5.15 (D8), 5.16 (B10), 5.17 (B11)
+y 5.18 (B12): **todos cerrados**, ver `AGENTS.md` → “Cerrado de AUDIT.md”. Lo único abierto
+de esta severidad es **B6**, y es una decisión (§3). Los números se conservan para no romper
+las referencias del §10 y del anexo.
 
 ---
 
@@ -239,15 +206,11 @@ fondo con `accent_from_wallpaper` debe aparecer el warn en el log.
 
 ---
 
----
-
----
-
 ## 6. Severidad BAJA
 
-Faltan 6.2 (C2), 6.3 (C3), 6.4 (C4), 6.6 (C6), 6.7 (D9), 6.8 (D10), 6.10 (D12), 6.11 (D13),
-6.12 (C7) y 6.13 (C8): ya cerrados. 6.1 (C1) y 6.5 (C5) están en §3: C1 es decisión y C5
-quedó a medias (en su sección está dicho qué falta).
+Faltan 6.2 (C2), 6.3 (C3), 6.4 (C4), 6.5 (C5), 6.6 (C6), 6.7 (D9), 6.8 (D10), 6.10 (D12),
+6.11 (D13), 6.12 (C7) y 6.13 (C8): **todos cerrados**. De esta severidad sólo queda **C1**,
+que es una decisión (§3).
 
 ### 6.1 — 12 funciones con 8-11 argumentos (clippy `too_many_arguments`) {#c1}
 
@@ -280,43 +243,6 @@ Además hay 5 lints fuera de esta lista (verificados con
 build de tests `items_after_test_module` (`wallpaper.rs`) y `field_reassign_with_default`
 (`menu/widget_chips.rs:236`, código de test).
 
-### 6.5 — Huecos de tests {#c5}
-
-> **Casi cerrado.** De la lista de abajo están cubiertos: 1 (el reparto de `workspaces.rs`
-> tiene `workspace_hit_tests`), 2 (`percent_decode_tests` y, para `resolve_art_path`, el
-> guard de B8), 3 (`ipc.rs` tiene 3 tests, incluido el filtro del `event-stream`), 4 (el
-> filtro de niri, en el mismo test) y 5 (`timers_tests`, con el borde de plazo 0). También
-> `wallpaper_program()` (`wallpaper_program_tests`). **Lo que queda:** los tests de
-> `Dock::drag_to`/`icon_at` (hacen falta fixtures con iconos) y, si algún día se quiere
-> más, `tray_geometry` con `widget_scale ≠ 1` propio. Con todo esto los tests pasaron de 37
-> a **172** (162 en el paquete raíz, 3 del notifyd y 7 del crate del raster).
-
-37 tests cuando se escribió esto, y los que hay son buenos: geometría y hit tests con
-escala
-(`hit_layout_tests`, `tray_hit_tests`, `tabs_tests`), parseo de JSON de terceros
-(`volume_panel_tests`, `usage_tests`, `desktop::entry_tests`), lógica con signos
-(`wheel_tests`, `battery_tone_tests`), máquina de estados del popup
-(`popup_dismiss_tests`), orden del overlay (`overlay_tabs_tests`). Casi todos tienen un
-bug real detrás: es la mejor parte del repo.
-
-Sin cobertura, ordenado por riesgo:
-
-1. **`render/workspaces.rs`**: ya cubierto por `workspace_hit_tests` (era el hueco más
-   caro, el del bug D1).
-2. `resolve_art_path` (`widgets.rs`): B8. (`percent_decode` ya tiene
-   `percent_decode_tests`.)
-3. `ipc.rs`: parseo de mensajes (separador `\u{1f}`, truncado de 1024 bytes) y path
-   del socket.
-4. El filtro del `event-stream` de niri (B4): extraerlo a función pura y testearlo con
-   líneas JSON reales.
-5. Timers (`spawn_osd_timer`, `spawn_notification_timer`, `spawn_autohide_timer`,
-   `spawn_marquee_ticker`): todos comparten el patrón `recv` → `recv_timeout(dur)` →
-   `flag` y ninguno tiene test. El borde `dur == 0` es real.
-6. `wallpaper::wallpaper_program()` (búsqueda recursiva en `.kdl`).
-7. `tray_geometry`/`tray_icon_hit` con `widget_scale ≠ 1` (hoy sólo se testea
-   `nearest_tray_index`).
-8. `Dock::drag_to`/`end_drag`/`icon_at` a nivel de `Dock`.
-
 ---
 
 ## 7. Anexo — verificado sin acción (no mezclar con lo pendiente)
@@ -345,16 +271,11 @@ Sin cobertura, ordenado por riesgo:
 
 ## 8. Plan de implementación sugerido
 
-Cada etapa es verificable por sí sola, en orden de impacto para el usuario. Las etapas de
-congelamientos, geometría, panics chicos, churn y E/S **ya están hechas** (ver `AGENTS.md`
-→ “Cerrado de AUDIT.md”, con las mediciones). Queda **una** cosa:
-
-### Etapa pendiente — tests de drag (C5)
-
-`Dock::drag_to` y `Dock::icon_at` no tienen test propio: hace falta un fixture de `Dock`
-con dos o tres iconos y verificar que el centro de cada uno devuelve su índice (el mismo
-contrato que `hit_layout_tests` para los widgets, trampa 10). Es lo único que queda del
-documento; lo demás son las **decisiones** de §3 (A5 en parte, B6 y C1).
+**No queda nada por hacer.** Las seis etapas del plan original (congelamientos, geometría e
+hit tests, panics y arranque, churn, E/S y limpieza) se cerraron entre el 2026-09-20 y esta
+última pasada, y lo único abierto son las **decisiones** de §3 (A5 en parte, B6, C1), con el
+porqué de cada una. Lo que sigue de acá en adelante es producto, no auditoría: el estado del
+repo y las trampas que hay que respetar están en `AGENTS.md`.
 
 ---
 

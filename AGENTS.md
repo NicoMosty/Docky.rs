@@ -1491,7 +1491,7 @@ sigue **abierto** vive en `AUDIT.md`, no acá.
 Se movieron en dos tandas el 2026-09-20: **13** en la limpieza (A1, A2, A3, A4, A6, A7,
 B3, C4, C8, D1, D2, D3, D11) y **9** al cerrar la Ronda 1 (B1, B2, B10, C3, C6, D9, D10,
 D12, D13), 6 más en la Ronda 2 (B4, D4, D5, D6, D7, D8) y 6 en la Ronda 3
-(B7, B8, B11, B12, C2, C7).
+(B7, B8, B11, B12, C2, C7) y los 2 ultimos (B5, C5) al cerrar el audit.
 
 ### A1 — `wpctl` sin timeout: cuelgue indefinido (AUDIT §4.1)
 
@@ -1924,6 +1924,47 @@ líneas `wsflash: refresh before=… after=…`. Test: el filtro extraído a una
 pura (`fn niri_event_is_relevant(line: &str) -> bool`) con 4-5 líneas JSON reales de
 `niri msg --json event-stream` como fixture literal, incluidas dos de ventana.
 
+### B5 — Conexión D-Bus del tray cacheada, sin reconexión (AUDIT §5.5)
+
+> **Cerrado.** Tenía tres patas: (1) la conexión cacheada pasa a `CacheConexion`, que se
+> invalida donde una llamada falla (`fetch_menu`, `find_menu`, `activate`, `send_menu_event`),
+> así la próxima reconecta sola; (2) el hilo del watcher pasa a `correr_watcher_tray`, con lazo
+> de reconexión que rehace conexión + nombre + `RegisterStatusNotifierHost` si el bus no está, y
+> pide el **relanzado** del dock (`relanzar_por_bus_caido`, la red de seguridad de A6) cuando el
+> poll falla 3 veces seguidas, porque las conexiones cacheadas del resto del tray quedaron
+> muertas; (3) y ese lazo reintenta la conexión inicial, que es el caso del dock relanzado que
+> llega **antes** que el bus nuevo (se me escapó en la primera versión y el tray quedaba muerto
+> igual). **Verificado con un bus privado** (`dbus-daemon --address=unix:path=/tmp/dbus-b5.sock`,
+> nunca el de la sesión del usuario) y un dock de prueba: se registra como host (`busctl list`),
+> se mata el bus → `tray: no pude leer el bus (2)/(3): Broken pipe` → `el bus de sesión se
+> reinició: relanzo el dock` → PID nuevo → y al levantar el bus en la misma dirección el
+> relanzado **se re-registra**. Guard: `tray::tray_conexion_tests`.
+
+**Archivo:** `src/tray.rs:185-198`
+
+```rust
+fn tray_conn() -> Option<&'static Connection> {
+    static CONN: std::sync::OnceLock<Option<Connection>> = OnceLock::new();
+    CONN.get_or_init(|| match Connection::session() { … }).as_ref()
+}
+```
+
+El comentario explica bien por qué se cachea (antes cada llamada hacía el handshake
+completo). El problema es el otro extremo: si el bus de sesión se reinicia
+(`systemctl --user restart dbus`, o el bus se cae), la `Connection` cacheada queda
+muerta **para siempre**. Todo lo del tray (`fetch_menu`, `find_menu`, `activate`,
+`send_menu_event`) falla en silencio (cadenas `let … && let Ok(…)` que no hacen nada,
+más `.ok()?` que devuelve `Vec` vacío) y el tray del dock queda
+vacío hasta reiniciar dockyrs.
+
+**Fix mínimo:** guardar la conexión en un `Mutex<Option<Connection>>` y, ante el
+primer error de una llamada, descartarla y reintentar una vez con
+`Connection::session()`.
+
+**Verificación:** con el dock corriendo, reiniciar el bus de sesión y después hacer
+click derecho en un icono del tray: debe volver a funcionar sin reiniciar el dock.
+Antes del fix, no.
+
 ### B7 — `configure` no reconcilia el tamaño con lo dibujado (AUDIT §5.7)
 
 > **Cerrado.** `accion_del_configure()` (pura, con guard) decide entre adoptar el
@@ -2172,6 +2213,52 @@ superficie del popup y su input region.
 Corregirla a "una superficie compartida para el dock y los modos que lo acompañan
 (menú, OSD, HUD, launcher, portapapeles, fondos) + superficies propias para el popup
 del tray y el selector de screenshot".
+
+### C5 — Huecos de tests (AUDIT §6.5)
+
+> **Cerrado.** Lo que quedaba eran dos hit tests de la familia de la trampa 10: `Dock::icon_at`
+> (el centro que da `layout()` devuelve su índice, y el hueco entre íconos no es de ninguno) y
+> `Dock::drag_to` (reordena al slot cuyo centro está más cerca del puntero y `dragging_index`
+> sigue al ícono movido). Los centros salen de `rest_centers()`, la misma cuenta que usa el
+> reordenamiento: la primera versión del test inventaba coordenadas y pasaba por casualidad en
+> una dirección y fallaba en la otra. Guards: `dock::icon_at_y_drag_tests`. El resto de los
+> huecos se habían cubierto en la Ronda 3 (timers, `wallpaper_program`, IPC, workspaces,
+> `percent_decode`): los tests pasaron de 37 a **175** (165 + 3 del notifyd + 7 del raster).
+
+> **Casi cerrado.** De la lista de abajo están cubiertos: 1 (el reparto de `workspaces.rs`
+> tiene `workspace_hit_tests`), 2 (`percent_decode_tests` y, para `resolve_art_path`, el
+> guard de B8), 3 (`ipc.rs` tiene 3 tests, incluido el filtro del `event-stream`), 4 (el
+> filtro de niri, en el mismo test) y 5 (`timers_tests`, con el borde de plazo 0). También
+> `wallpaper_program()` (`wallpaper_program_tests`). **Lo que queda:** los tests de
+> `Dock::drag_to`/`icon_at` (hacen falta fixtures con iconos) y, si algún día se quiere
+> más, `tray_geometry` con `widget_scale ≠ 1` propio. Con todo esto los tests pasaron de 37
+> a **172** (162 en el paquete raíz, 3 del notifyd y 7 del crate del raster).
+
+37 tests cuando se escribió esto, y los que hay son buenos: geometría y hit tests con
+escala
+(`hit_layout_tests`, `tray_hit_tests`, `tabs_tests`), parseo de JSON de terceros
+(`volume_panel_tests`, `usage_tests`, `desktop::entry_tests`), lógica con signos
+(`wheel_tests`, `battery_tone_tests`), máquina de estados del popup
+(`popup_dismiss_tests`), orden del overlay (`overlay_tabs_tests`). Casi todos tienen un
+bug real detrás: es la mejor parte del repo.
+
+Sin cobertura, ordenado por riesgo:
+
+1. **`render/workspaces.rs`**: ya cubierto por `workspace_hit_tests` (era el hueco más
+   caro, el del bug D1).
+2. `resolve_art_path` (`widgets.rs`): B8. (`percent_decode` ya tiene
+   `percent_decode_tests`.)
+3. `ipc.rs`: parseo de mensajes (separador `\u{1f}`, truncado de 1024 bytes) y path
+   del socket.
+4. El filtro del `event-stream` de niri (B4): extraerlo a función pura y testearlo con
+   líneas JSON reales.
+5. Timers (`spawn_osd_timer`, `spawn_notification_timer`, `spawn_autohide_timer`,
+   `spawn_marquee_ticker`): todos comparten el patrón `recv` → `recv_timeout(dur)` →
+   `flag` y ninguno tiene test. El borde `dur == 0` es real.
+6. `wallpaper::wallpaper_program()` (búsqueda recursiva en `.kdl`).
+7. `tray_geometry`/`tray_icon_hit` con `widget_scale ≠ 1` (hoy sólo se testea
+   `nearest_tray_index`).
+8. `Dock::drag_to`/`end_drag`/`icon_at` a nivel de `Dock`.
 
 ### C6 — `notify` por IPC truncado a 1024 bytes (AUDIT §6.6)
 
@@ -2687,15 +2774,15 @@ requeriría cambiar la key a algo tipo `Arc<str>`. **Verificación:** test con
   - Lo que **no** conviene: swipe para descartar (no hay detección de gestos y el
     mouse-out ya cierra), squish/stretch (la forma es un rounded-rect en un eje) y
     badges/Face ID/AirDrop (no hay fuente de dato).
-  - **Prioridad honesta**: `AUDIT.md` quedó con **2 hallazgos abiertos** después de cerrar
-    la Ronda 3 el 2026-09-20: **B5** (la conexión D-Bus del tray se cachea sin reconexión:
-    importa si reiniciás el bus de sesión) y **C5** (los tests de `Dock::drag_to`/`icon_at`,
-    que piden un fixture con iconos). Los **34 cerrados** están en “Cerrado de AUDIT.md”,
-    arriba, con la evidencia de cada uno. Y hay **tres decisiones** documentadas en la §3
-    del audit, que no son deuda: **A5** en parte (los drenajes de IPC se arreglan en la
-    fuente, y los `.lock().unwrap()` no son alcanzables porque el `reexec` ya pasó),
-    **B6** (`repo_dir` sólo afecta a los `sync-*.sh`, que acá no se usan) y **C1**
-    (`DrawArgs` a todo `render/`: 57 sitios sin prevención real).
+  - **Prioridad honesta**: la auditoría **quedó cerrada** el 2026-09-20 — los 36 hallazgos
+    de `AUDIT.md` están resueltos y documentados en “Cerrado de AUDIT.md”, arriba, cada uno
+    con su evidencia. Los tres que quedan **abiertos a propósito** están en la §3 del audit:
+    **A5** en parte (los drenajes de IPC se arreglan en la fuente, y los `.lock().unwrap()`
+    no son alcanzables porque el `reexec` ya pasó), **B6** (`repo_dir` sólo afecta a los
+    `sync-*.sh`, que acá no se usan) y **C1** (`DrawArgs` a todo `render/`: 57 sitios sin
+    prevención real). O sea: de acá en adelante lo que hay es **producto**, no deuda — el
+    orden sugerido está en “Isla dinámica, lo que sigue” y en “Niri: qué falta usar”, acá
+    arriba.
   - **Verificado 2026-09-20 en una pasada por los pendientes**: de los dos puntos
     marcados "sin verificar a ojo" quedó **cero**. La grabación andaba pero tarde
     (trampa 17: el tick dormía 20 s, no 1) y el widget `Mic` quedó confirmado
