@@ -1580,8 +1580,9 @@ reordenamiento de widgets) y lo posterior:
     `pub(super)` para que lo compartan el portapapeles y este panel.
   - **El toast de notificaciones vive en su PROPIA superficie** (`dockyrs-notify`,
     `Layer::Overlay` anclada **arriba a la derecha** con margen 8, `exclusive_zone(-1)`,
-    teclado `None` e **input region vacía** — los clicks la atraviesan y el aviso se va
-    solo con su timeout). Se crea al primer aviso y se **suelta** al terminar el fade
+    teclado `None` e **input region = su rectángulo** — un click sobre él lo descarta y
+    el resto se lo traga la superficie del dock). Se crea al primer aviso y se **suelta**
+    al terminar el fade
     (`toast_layer = None`), como el popup: es descartable, no la compartida del dock
     (trampa 2 no aplica). Antes el aviso le pedía la superficie al dock, que es una
     franja de 26 px pegada al borde izquierdo: de ahí que apareciera encima del panel
@@ -1600,6 +1601,28 @@ reordenamiento de widgets) y lo posterior:
   - **Un click sobre el toast lo descarta**: la input region es SU rectángulo
     (`region.add(0, 0, w, h)`) y el `Press` sobre esa superficie llama a
     `close_notification_mode` desde `handlers::pointer_frame`.
+  - **Un `notification_mode = None` de otro panel dejaba el toast mapeado PARA
+    SIEMPRE** (cazado en vivo el 2026-09-20, en el equipo remoto). Los cinco `open_*`
+    del overlay (launcher, portapapeles, fondos, ajustes, notificaciones) pisaban
+    `notification_mode = None` a mano y `close_notification_mode` cortaba temprano con
+    el mismo `is_none()`: la superficie `dockyrs-notify` quedaba mapeada con su input
+    region (300x76 en la esquina) y `niri msg --json layers` la seguía listando minutos
+    después — o sea un click-blocker invisible en la esquina superior derecha hasta
+    reiniciar el dock. Medido: notificación → abrir el panel de notificaciones 1 s
+    después → `dockyrs-notify` todavía en la lista a los 10 min; **sin** abrir ningún
+    panel el camino del timeout sí la liberaba (a los 4 s). Arreglo: los `open_*` ya no
+    tocan `notification_mode` (los dos viven: el aviso termina su timeout encima del
+    panel abierto, que es lo que promete el diseño) y `close_notification_mode` suelta
+    la superficie sin corte temprano.
+  - **El toast ya no es "un modo más" de la superficie del dock**, y tres caminos
+    viejos que le apuntaban a esa superficie costaban de verdad: `pointer.rs`
+    interceptaba TODOS los eventos de puntero de la franja (Enter/Motion/Leave
+    incluidos) y devolvía sin procesarlos mientras había un aviso arriba —hover y
+    autohide del dock muertos 4 s—; `handlers::frame` consumía el frame del dock para
+    tickear la notificación (el reveal y la isla se quedaban sin reloj); y `show_osd`
+    salía temprano con `notification_mode.is_some()`, así que una tecla de volumen
+    dentro de esos 4 s no mostraba OSD. Los tres se borraron: el toast se tickea y se
+    cierra por su propia superficie (`is_toast` en `handlers::frame`).
   - **Ojo al crearla**: la superficie recién creada no tiene tamaño hasta el
     `configure`, así que el primer dibujo lo dispara `handlers::configure` (un `attach`
     antes de eso lo rechaza el compositor).
