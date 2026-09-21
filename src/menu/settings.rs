@@ -39,6 +39,14 @@ pub enum SettingId {
     MediaWidthScale,
     Autohide,
     AutohideDelay,
+    /// Tope de resultados del launcher (`DockSettings::launcher_max_results`).
+    LauncherMaxResults,
+    /// Orden del launcher por uso en vez de alfabético.
+    LauncherSortByUsage,
+    /// Tope del historial del portapapeles.
+    ClipboardItems,
+    /// Tope del historial de avisos.
+    NotificationHistory,
 }
 
 impl SettingId {
@@ -73,6 +81,10 @@ impl SettingId {
             SettingId::MediaWidthScale => "Media Widget Width",
             SettingId::Autohide => "Autohide",
             SettingId::AutohideDelay => "Hide Delay",
+            SettingId::LauncherMaxResults => "Max Results",
+            SettingId::LauncherSortByUsage => "Sort by Usage",
+            SettingId::ClipboardItems => "Clipboard Items",
+            SettingId::NotificationHistory => "Notification History",
         }
     }
 
@@ -113,6 +125,10 @@ impl SettingId {
             SettingId::Autohide => (0.0, 1.0, 1.0),
             SettingId::MediaWidthScale => (0.3, 2.0, 0.01),
             SettingId::AutohideDelay => (100.0, 2000.0, 50.0),
+            SettingId::LauncherMaxResults => (10.0, 200.0, 10.0),
+            SettingId::ClipboardItems => (10.0, 200.0, 10.0),
+            SettingId::NotificationHistory => (10.0, 200.0, 10.0),
+            SettingId::LauncherSortByUsage => (0.0, 1.0, 1.0),
         }
     }
 
@@ -127,6 +143,7 @@ impl SettingId {
                 | SettingId::MatugenApps
                 | SettingId::MatugenLight
                 | SettingId::WidgetClockFormat
+                | SettingId::LauncherSortByUsage
         )
     }
 
@@ -174,6 +191,10 @@ impl SettingId {
             SettingId::MediaWidthScale => s.media_width_scale,
             SettingId::Autohide => bool_f(s.autohide),
             SettingId::AutohideDelay => s.autohide_delay_ms as f32,
+            SettingId::LauncherMaxResults => s.launcher_max_results as f32,
+            SettingId::LauncherSortByUsage => bool_f(s.launcher_sort_by_usage),
+            SettingId::ClipboardItems => s.clipboard_items as f32,
+            SettingId::NotificationHistory => s.notif_history as f32,
         }
     }
 
@@ -228,6 +249,10 @@ impl SettingId {
             SettingId::MediaWidthScale => s.media_width_scale = clamped,
             SettingId::Autohide => s.autohide = clamped >= 0.5,
             SettingId::AutohideDelay => s.autohide_delay_ms = clamped.round() as u64,
+            SettingId::LauncherMaxResults => s.launcher_max_results = clamped.round() as usize,
+            SettingId::LauncherSortByUsage => s.launcher_sort_by_usage = clamped >= 0.5,
+            SettingId::ClipboardItems => s.clipboard_items = clamped.round() as usize,
+            SettingId::NotificationHistory => s.notif_history = clamped.round() as usize,
         }
     }
 
@@ -260,6 +285,10 @@ impl SettingId {
             SettingId::BlurBrightness | SettingId::BlurContrast => format!("{:.2}", self.get(s)),
             SettingId::BorderWidth | SettingId::MenuBorderWidth => format!("{:.2}px", self.get(s)),
             SettingId::AutohideDelay => format!("{}ms", self.get(s).round() as i32),
+            SettingId::LauncherMaxResults => format!("{} apps", self.get(s).round() as i32),
+            SettingId::ClipboardItems | SettingId::NotificationHistory => {
+                format!("{} items", self.get(s).round() as i32)
+            }
             SettingId::BlurEnabled
             | SettingId::BlurXray
             | SettingId::MediaSmoothScroll
@@ -267,7 +296,8 @@ impl SettingId {
             | SettingId::SmoothTransitions
             | SettingId::MatugenApps
             | SettingId::MatugenLight
-            | SettingId::WidgetClockFormat => String::new(),
+            | SettingId::WidgetClockFormat
+            | SettingId::LauncherSortByUsage => String::new(),
         }
     }
 
@@ -458,5 +488,78 @@ mod menu_border_tests {
         let s = DockSettings::default();
         assert_eq!(s.menu_corner_radius, s.corner_radius);
         assert_eq!(s.menu_border_width, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod launcher_settings_tests {
+    use super::*;
+
+    fn control_kinds() -> Vec<crate::menu::ControlKind> {
+        crate::menu::build_category_controls(
+            crate::menu::MenuCategory::Launcher,
+            &DockSettings::default(),
+        )
+        .into_iter()
+        .map(|c| c.kind)
+        .collect()
+    }
+
+    /// La categoría existe y expone los cuatro: los topes del launcher/portapapeles/
+    /// avisos y el orden por uso. Si falta uno, el setting existe pero nadie lo puede
+    /// tocar (el mismo caso que Menu Roundness).
+    #[test]
+    fn la_categoria_launcher_expone_sus_ajustes() {
+        assert!(crate::menu::MENU_CATEGORIES.contains(&crate::menu::MenuCategory::Launcher));
+        let kinds = control_kinds();
+        for id in [
+            SettingId::LauncherMaxResults,
+            SettingId::LauncherSortByUsage,
+            SettingId::ClipboardItems,
+            SettingId::NotificationHistory,
+        ] {
+            assert!(
+                kinds.iter().any(|k| matches!(
+                    k,
+                    crate::menu::ControlKind::Slider(x) | crate::menu::ControlKind::Toggle(x) if *x == id
+                )),
+                "falta {id:?} en la categoría Launcher"
+            );
+        }
+    }
+
+    /// El orden por uso es un toggle, arranca prendido (el comportamiento de
+    /// siempre) y no pide relayout: no cambia ninguna medida del dock.
+    #[test]
+    fn el_orden_por_uso_es_toggle_y_arranca_prendido() {
+        assert!(SettingId::LauncherSortByUsage.is_toggle());
+        assert!(!SettingId::LauncherSortByUsage.affects_layout());
+        let mut s = DockSettings::default();
+        assert!(s.launcher_sort_by_usage);
+        assert_eq!(SettingId::LauncherSortByUsage.get(&s), 1.0);
+        SettingId::LauncherSortByUsage.toggle(&mut s);
+        assert!(!s.launcher_sort_by_usage);
+        assert_eq!(SettingId::LauncherSortByUsage.get(&s), 0.0);
+        assert!(SettingId::LauncherSortByUsage.display_value(&s).is_empty());
+    }
+
+    /// Los topes arrancan en el valor histórico (las constantes de cada panel) y el
+    /// slider recorta al rango: si no, un valor fuera de rango en el JSON dejaría el
+    /// panel pidiendo más de lo que soporta.
+    #[test]
+    fn los_topes_recortan_y_arrancan_en_el_valor_de_siempre() {
+        let mut s = DockSettings::default();
+        assert_eq!(s.launcher_max_results, crate::menu::SEARCH_MAX_RESULTS);
+        assert_eq!(s.clipboard_items, crate::clipboard::MAX_ITEMS);
+        assert_eq!(s.notif_history, crate::menu::NOTIF_HISTORY_CAP);
+
+        SettingId::LauncherMaxResults.set(&mut s, 999.0);
+        assert_eq!(s.launcher_max_results, 200);
+        SettingId::LauncherMaxResults.set(&mut s, 0.0);
+        assert_eq!(s.launcher_max_results, 10);
+        SettingId::ClipboardItems.set(&mut s, 75.0);
+        assert_eq!(s.clipboard_items, 75);
+        SettingId::NotificationHistory.set(&mut s, 130.0);
+        assert_eq!(s.notif_history, 130);
     }
 }

@@ -10,7 +10,10 @@ use super::history::{ClipboardEntry, StoredEntry};
 
 const MAGIC: &[u8; 8] = b"DOCKCLP1";
 const MAX_FILE_SIZE: usize = 12 * 1024 * 1024;
-const MAX_ITEMS: usize = 50;
+/// Techo de cordura del formato en disco, NO el ajuste del usuario: el panel
+/// permite hasta 200 entradas, así que acá hay margen para ese máximo (si no,
+/// cargar un historial grande lo descartaría entero).
+const MAX_ITEMS: usize = 256;
 const MAX_TEXT_SIZE: usize = 256 * 1024;
 
 pub fn load() -> Vec<ClipboardEntry> {

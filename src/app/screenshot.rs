@@ -44,7 +44,8 @@ impl App {
             image.thumbnail,
         );
         self.set_clipboard_entry(&entry, qh);
-        self.clipboard_history.add(entry);
+        self.clipboard_history
+            .add(entry, self.dock.config.settings.clipboard_items);
         self.clipboard_history.save();
         if self.clipboard_mode.is_some() {
             self.refresh_clipboard_filter(qh);

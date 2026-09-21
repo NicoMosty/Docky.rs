@@ -206,6 +206,37 @@ pub fn build_category_controls(category: MenuCategory, settings: &DockSettings) 
                 "you might wanna be careful wtih this ... ",
             );
         }
+        MenuCategory::Launcher => {
+            // ----- el launcher y el CONTENIDO de las pestañas del overlay que
+            // viven al lado (portapapeles, avisos): cada bloque con su sección
+            // para que se lea de quién es cada tope -----
+            controls.push(Control {
+                kind: ControlKind::Section("Launcher"),
+                y,
+                height: SECTION_LABEL_HEIGHT,
+            });
+            y += SECTION_LABEL_HEIGHT;
+            push_setting_row(&mut controls, &mut y, SettingId::LauncherMaxResults);
+            push_setting_row(&mut controls, &mut y, SettingId::LauncherSortByUsage);
+            y += ROW_GAP;
+
+            controls.push(Control {
+                kind: ControlKind::Section("Clipboard"),
+                y,
+                height: SECTION_LABEL_HEIGHT,
+            });
+            y += SECTION_LABEL_HEIGHT;
+            push_setting_row(&mut controls, &mut y, SettingId::ClipboardItems);
+            y += ROW_GAP;
+
+            controls.push(Control {
+                kind: ControlKind::Section("Notifications"),
+                y,
+                height: SECTION_LABEL_HEIGHT,
+            });
+            y += SECTION_LABEL_HEIGHT;
+            push_setting_row(&mut controls, &mut y, SettingId::NotificationHistory);
+        }
         MenuCategory::System => {
             // ----- los cinco paneles del overlay, accesibles desde acá: el panel de
             // ajustes comparte la superficie y tapa la banda de pestañas, así que sin

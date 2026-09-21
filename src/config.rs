@@ -127,6 +127,21 @@ fn default_true() -> bool {
     true
 }
 
+/// Tope de resultados del launcher, el del historial del portapapeles y el del
+/// historial de avisos. Salen de las constantes que ya usaba cada panel: así el
+/// default no se puede despegar del valor histórico.
+fn default_launcher_max_results() -> usize {
+    crate::menu::SEARCH_MAX_RESULTS
+}
+
+fn default_clipboard_items() -> usize {
+    crate::clipboard::MAX_ITEMS
+}
+
+fn default_notif_history() -> usize {
+    crate::menu::NOTIF_HISTORY_CAP
+}
+
 fn default_hide_delay() -> u64 {
     1200
 }
@@ -316,6 +331,22 @@ pub struct DockSettings {
     pub autohide: bool,
     #[serde(default = "default_hide_delay")]
     pub autohide_delay_ms: u64,
+    /// Tope de resultados que lista el launcher (los `.desktop` que entran).
+    /// Ajuste "Max Results" en la categoría Launcher.
+    #[serde(default = "default_launcher_max_results")]
+    pub launcher_max_results: usize,
+    /// Ordena el launcher por uso (frecuencia + antigüedad, el criterio de rofi)
+    /// en vez de alfabético. Apagado = alfabético. Ajuste "Sort by Usage".
+    #[serde(default = "default_true")]
+    pub launcher_sort_by_usage: bool,
+    /// Tope de entradas que guarda el historial del portapapeles. Ajuste
+    /// "Clipboard Items" en la categoría Launcher.
+    #[serde(default = "default_clipboard_items")]
+    pub clipboard_items: usize,
+    /// Tope del historial de avisos (el más nuevo primero). Ajuste
+    /// "Notification History" en la categoría Launcher.
+    #[serde(default = "default_notif_history")]
+    pub notif_history: usize,
     #[serde(default = "default_widgets")]
     pub widgets: Vec<WidgetPlacement>,
     #[serde(default)]
@@ -398,6 +429,10 @@ impl Default for DockSettings {
             dock_edge: DockEdge::Top,
             autohide: true,
             autohide_delay_ms: default_hide_delay(),
+            launcher_max_results: default_launcher_max_results(),
+            launcher_sort_by_usage: true,
+            clipboard_items: default_clipboard_items(),
+            notif_history: default_notif_history(),
             widgets: default_widgets(),
             custom_palettes: Vec::new(),
             custom_widgets: Vec::new(),

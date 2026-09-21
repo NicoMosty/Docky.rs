@@ -16,7 +16,8 @@ impl App {
         let at = crate::widgets::sin_ampm(&self.widgets.time).to_string();
         self.notifications
             .insert(0, menu::NotifyEntry { title, body, at });
-        self.notifications.truncate(menu::NOTIF_HISTORY_CAP);
+        let cap = self.dock.config.settings.notif_history;
+        self.notifications.truncate(cap);
         if self.notifications_mode.is_some() {
             self.notifications_mode = None;
             self.open_notifications(qh);

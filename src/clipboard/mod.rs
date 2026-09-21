@@ -17,7 +17,10 @@ pub use paste::PasteTarget;
 
 use crate::app::App;
 
-const MAX_ITEMS: usize = 50;
+/// Tope de entradas del historial del portapapeles. Es el DEFAULT de la config
+/// (`DockSettings::clipboard_items`): el corte real sale de ahí, así que el
+/// usuario lo puede subir o bajar desde el panel.
+pub const MAX_ITEMS: usize = 50;
 const MAX_BYTES: usize = 10 * 1024 * 1024;
 const TEXT_LIMIT: usize = 256 * 1024;
 const IMAGE_LIMIT: usize = 6 * 1024 * 1024;
@@ -46,7 +49,10 @@ impl ClipboardHistory {
         &self.entries
     }
 
-    pub fn add(&mut self, entry: ClipboardEntry) {
+    /// Agrega una entrada y recorta el historial al tope del usuario
+    /// (`DockSettings::clipboard_items`). El tope entra por parámetro para no
+    /// meter la config del dock en la historia.
+    pub fn add(&mut self, entry: ClipboardEntry, max_items: usize) {
         self.ensure_loaded();
         if let Some(index) = self
             .entries
@@ -57,7 +63,7 @@ impl ClipboardHistory {
         }
         self.entries.insert(0, entry);
         let mut bytes = self.entries.iter().map(ClipboardEntry::size).sum::<usize>();
-        while self.entries.len() > MAX_ITEMS || bytes > MAX_BYTES {
+        while self.entries.len() > max_items || bytes > MAX_BYTES {
             let Some(removed) = self.entries.pop() else {
                 break;
             };
@@ -207,7 +213,8 @@ impl App {
         let Some(entry) = ClipboardEntry::from_data(mime, data) else {
             return;
         };
-        self.clipboard_history.add(entry);
+        self.clipboard_history
+            .add(entry, self.dock.config.settings.clipboard_items);
         self.clipboard_history.save();
         crate::app::trim_heap();
         if self.clipboard_mode.is_some() {

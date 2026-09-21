@@ -1481,6 +1481,37 @@ reordenamiento de widgets) y lo posterior:
     metadata, porque no se recuerda el fracaso (mismo comportamiento que antes, sólo
     que fuera del hilo que dibuja).
 
+- **Categoría `Launcher` en el panel de ajustes** (pedido: configurar el launcher y
+  el contenido de sus pestañas, no sólo abrirlas). El panel pasa a seis tabs:
+  Layout, Appearance, Themes, Widgets, **Launcher**, System.
+  - **Max Results** (10–200, default 60): tope de `.desktop` que lista el launcher.
+    `refresh_app_search` dejó de usar la constante `SEARCH_MAX_RESULTS` y lee el
+    ajuste (que es también el default de la config, así que no hay dos números).
+  - **Sort by Usage** (toggle, default prendido): orden por frecencia contra
+    alfabético. Apagado, el score es 0 para todos y manda el desempate por nombre.
+  - **Clipboard Items** (10–200, default 50): tope del historial del portapapeles.
+    Entra por parámetro a `ClipboardHistory::add` (`MAX_ITEMS` pasó a `pub`), y el
+    techo de cordura del formato en disco subió a 256: con el de antes (50) un
+    historial de 200 entradas se descartaba entero al cargar.
+  - **Notification History** (10–200, default 50): tope del historial de avisos.
+  - Los cuatro son `SettingId`/`DockSettings` comunes (ninguno pide relayout):
+    heredan slider, teclado y guardado sin código nuevo. Guard:
+    `menu::settings::launcher_settings_tests` (la categoría los expone, el toggle
+    arranca prendido y los topes recortan al rango).
+  - Verificado: la categoría dibuja los tres bloques (Launcher / Clipboard /
+    Notifications) y con `Max Results = 10` la grilla queda en 10 tarjetas (Down×40
+    satura en la 10ª, sin scroll); restaurado a 60 después de la prueba.
+
+- **Regresión de B4: el HUD de workspaces y el split de la isla no aparecían.**
+  `post_workspaces_changed` (extraído en `4a5f126`) tomaba `before` y `was_empty`
+  **después** de mutar la lista, así que `before == after` siempre y `show_ws_flash`
+  no se llamaba nunca (el log daba `wsflash: refresh before=2 after=2`, el valor
+  nuevo en los dos lados). Los dos caminos —relectura por CLI y
+  `WorkspacesChanged` con payload— ahora capturan la foto con `ws_snapshot()`
+  antes de mutar y se la pasan a la función, que documenta el contrato. Verificado
+  en vivo: `before=1 after=2` → `wsflash: show` → `split -> abrir la isla con el
+  indicador en el medio`, y la isla muestra hora + puntos + batería.
+
 ## Cerrado de AUDIT.md (movido de ahí el 2026-09-20)
 
 Los hallazgos de `AUDIT.md` que ya están resueltos. Cada uno conserva el análisis

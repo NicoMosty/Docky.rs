@@ -109,20 +109,30 @@ impl App {
 
     pub(super) fn refresh_app_search(&mut self, qh: &QueueHandle<Self>) {
         let content_anim = self.initial_content_anim();
+        // ----- los dos ajustes del launcher se leen ANTES de tomar el modo:
+        // `m` presta `app_search_mode`, y la closure de orden también los usa -----
+        let max_results = self.dock.config.settings.launcher_max_results;
+        let by_usage = self.dock.config.settings.launcher_sort_by_usage;
         let Some(m) = self.app_search_mode.as_mut() else {
             return;
         };
         let query = m.query.to_lowercase();
         // ----- como rofi: primero la calidad del match (prefijo > inicio de palabra
         // > contiene > difuso) y después lo que más usás. Con la caja vacía queda
-        // ordenado sólo por uso, que es lo que hace rofi. -----
+        // ordenado sólo por uso, que es lo que hace rofi. Con "Sort by Usage" apagado
+        // el score es 0 para todos y el desempate alfabético manda. -----
         let mut scored: Vec<(usize, u8, f64)> = m
             .all_entries
             .iter()
             .enumerate()
             .filter_map(|(i, e)| {
                 let tier = desktop::match_tier(e, &query)?;
-                Some((i, tier, crate::usage::score(&e.id)))
+                let score = if by_usage {
+                    crate::usage::score(&e.id)
+                } else {
+                    0.0
+                };
+                Some((i, tier, score))
             })
             .collect();
         scored.sort_by(|a, b| {
@@ -137,7 +147,7 @@ impl App {
         });
         m.filtered = scored
             .into_iter()
-            .take(menu::SEARCH_MAX_RESULTS)
+            .take(max_results)
             .map(|(i, _, _)| m.all_entries[i].clone())
             .collect();
         m.selected = 0;

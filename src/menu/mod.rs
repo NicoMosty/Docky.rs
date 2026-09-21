@@ -304,15 +304,19 @@ pub enum MenuCategory {
     Appearance,
     Colors,
     Widgets,
+    /// Opciones del launcher y del contenido de las pestañas del overlay
+    /// (portapapeles, avisos). Ver `LAUNCHER_SETTINGS`.
+    Launcher,
     System,
     // ----- palette button only -----
     CustomPalette,
 }
-pub const MENU_CATEGORIES: [MenuCategory; 5] = [
+pub const MENU_CATEGORIES: [MenuCategory; 6] = [
     MenuCategory::Layout,
     MenuCategory::Appearance,
     MenuCategory::Colors,
     MenuCategory::Widgets,
+    MenuCategory::Launcher,
     MenuCategory::System,
 ];
 pub fn category_order_index(c: MenuCategory) -> i32 {
@@ -321,8 +325,9 @@ pub fn category_order_index(c: MenuCategory) -> i32 {
         MenuCategory::Appearance => 1,
         MenuCategory::Colors => 2,
         MenuCategory::Widgets => 3,
-        MenuCategory::System => 4,
-        MenuCategory::CustomPalette => 5,
+        MenuCategory::Launcher => 4,
+        MenuCategory::System => 5,
+        MenuCategory::CustomPalette => 6,
     }
 }
 impl MenuCategory {
@@ -332,6 +337,7 @@ impl MenuCategory {
             MenuCategory::Appearance => "Appearance",
             MenuCategory::Colors => "Themes",
             MenuCategory::Widgets => "Widgets",
+            MenuCategory::Launcher => "Launcher",
             MenuCategory::System => "System",
             MenuCategory::CustomPalette => "Themes",
         }
