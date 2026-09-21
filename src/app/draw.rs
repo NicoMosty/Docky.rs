@@ -802,8 +802,11 @@ impl App {
             }
             self.last_ws_read = Some(std::time::Instant::now());
             self.ws_read_pending = false;
+            // ----- la foto ANTES de tocar la lista: `post_workspaces_changed` la
+            // compara con el estado nuevo para saber si el activo cambió de verdad -----
+            let (before, was_empty) = self.ws_snapshot();
             self.widgets.refresh_workspaces();
-            self.post_workspaces_changed(qh);
+            self.post_workspaces_changed(before, was_empty, qh);
         }
     }
 
@@ -817,15 +820,29 @@ impl App {
         qh: &QueueHandle<Self>,
     ) {
         if self.dock.icons.is_empty() {
+            // ----- misma foto previa que la relectura: los dos caminos tienen que
+            // comparar contra el estado VIEJO -----
+            let (before, was_empty) = self.ws_snapshot();
             self.widgets.set_workspaces(list.into_vec());
-            self.post_workspaces_changed(qh);
+            self.post_workspaces_changed(before, was_empty, qh);
         }
     }
 
-    /// Lo que sigue a tener la lista nueva, venga de donde venga.
-    fn post_workspaces_changed(&mut self, qh: &QueueHandle<Self>) {
-        let before = render::ws_target_for(&self.widgets.workspaces);
-        let was_empty = self.empty_workspace();
+    /// Foto de "qué slot está activo" y "el activo está vacío", para comparar el
+    /// estado VIEJO contra el nuevo. **Capturala antes de mutar
+    /// `widgets.workspaces`**: si se calculara después del update, `before` ya
+    /// sería el estado nuevo y `after != before` nunca daría verdadero (el HUD y
+    /// el split de la isla dejaban de aparecer, la regresión de B4).
+    fn ws_snapshot(&self) -> (f32, bool) {
+        (
+            render::ws_target_for(&self.widgets.workspaces),
+            self.empty_workspace(),
+        )
+    }
+
+    /// Lo que sigue a tener la lista nueva, venga de donde venga. `before` y
+    /// `was_empty` son la foto PREVIA (las captura el llamador con `ws_snapshot`).
+    fn post_workspaces_changed(&mut self, before: f32, was_empty: bool, qh: &QueueHandle<Self>) {
         let after = render::ws_target_for(&self.widgets.workspaces);
         self.marquee.track_ws_target(after);
         self.sync_widget_bar_len();
