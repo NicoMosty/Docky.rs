@@ -117,9 +117,9 @@ impl App {
         self.island_ws_split = if !self.dock.config.settings.smooth_transitions {
             self.island_ws_target
         } else if self.island_ws_split < self.island_ws_target {
-            (self.island_ws_split + menu::ANIM_STEP_OPEN).min(self.island_ws_target)
+            (self.island_ws_split + menu::WS_SPLIT_STEP_OPEN).min(self.island_ws_target)
         } else {
-            (self.island_ws_split - menu::ANIM_STEP_CLOSE).max(self.island_ws_target)
+            (self.island_ws_split - menu::WS_SPLIT_STEP_CLOSE).max(self.island_ws_target)
         };
         if self.dock_visible {
             self.draw(qh);

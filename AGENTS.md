@@ -1512,6 +1512,27 @@ reordenamiento de widgets) y lo posterior:
   en vivo: `before=1 after=2` → `wsflash: show` → `split -> abrir la isla con el
   indicador en el medio`, y la isla muestra hora + puntos + batería.
 
+- **La salida del indicador de workspaces de la isla es un morph, no un wipe.** El
+  split (`island_ws_split`) avanzaba con un paso lineal y el indicador se **recortaba**
+  contra la cápsula que se encogía: en la tira de frames se veían la hora y los puntos
+  "chompados" por el borde. Ahora:
+  - El split pasa por `ease_out` (la curva del reveal) en los TRES consumidores —el
+    largo y los gaps (`island_plan`), el corrimiento (`draw_island`/`draw`, vía
+    `ws_split_eased`) y la escala de los puntos—, así el morph no es mecánico y el
+    blob, los vecinos y el desplazamiento quedan en fase.
+  - Los puntos **escalan** en su lugar en vez de recortarse:
+    `ws_compact_scale(compact, natural, avail)` = `avail/natural` clampeado a [0,1]
+    (en la barra `compact = false`, así que es 1.0 y el dibujo no cambia). El clamp es
+    el contrato: `natural * escala <= avail`, o sea el contenido entra.
+  - Pasos propios del split (`WS_SPLIT_STEP_OPEN` 0.07 / `WS_SPLIT_STEP_CLOSE` 0.09):
+    el cierre ahora es más rápido que la apertura (~180 ms contra ~230 ms), al revés de
+    antes (0.05 contra 0.07).
+  - Guards: `workspace_hit_tests::el_indicador_de_la_isla_se_escala_y_entra` y el test
+    del plan `la_isla_se_parte_en_dos_con_el_indicador_al_medio`, que ahora compara
+    contra `ws_split_eased` (si se cae el easing, falla).
+  - Verificado con tiras de frames del cierre (`grim -g` sobre una región chica + ppm:
+    ~25 ms por frame, contra los ~370 ms de un PNG 1920x1080).
+
 ## Cerrado de AUDIT.md (movido de ahí el 2026-09-20)
 
 Los hallazgos de `AUDIT.md` que ya están resueltos. Cada uno conserva el análisis

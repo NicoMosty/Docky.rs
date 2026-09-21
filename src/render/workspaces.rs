@@ -31,6 +31,20 @@ pub fn workspaces_geometry(workspaces: &[crate::widgets::WorkspaceInfo], render_
     ((n - 1.0) * WS_SLOT + WS_ACTIVE) * render_scale
 }
 
+/// Escala de los puntos cuando los dibuja la ISLA. En el split, el largo disponible
+/// es el natural por el split, así que en vez de dejar que la cápsula recorte el
+/// indicador (el wipe) el widget se dibuja ESCALADO: los puntos y la separación
+/// entran exactos en el rectángulo. En la barra (`compact = false`) siempre es 1.0.
+///
+/// El clamp es el que garantiza que el contenido entre: `natural * escala <= avail`.
+pub(crate) fn ws_compact_scale(compact: bool, natural: f32, avail: f32) -> f32 {
+    if compact && natural > 0.0 {
+        (avail / natural).clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 /// Relleno de la pastilla del HUD alrededor del indicador.
 const WS_FLASH_PAD: f32 = 26.0;
 
@@ -436,5 +450,32 @@ mod workspace_hit_tests {
             "con widget_scale = 1.0 el mismo x NO debería dar el extremo"
         );
         assert_ne!(hit_scale(&con_escala), hit_scale(&sin_escala));
+    }
+
+    /// El indicador de la isla se ESCALA con el split en vez de dejarse recortar por
+    /// la cápsula (el morph). El clamp es el contrato: el contenido tiene que entrar
+    /// (`natural * escala <= disponible`), y en la barra nunca se escala.
+    #[test]
+    fn el_indicador_de_la_isla_se_escala_y_entra() {
+        // ----- en la barra (no compacto) siempre 1.0, aunque sobre lugar -----
+        assert_eq!(ws_compact_scale(false, 100.0, 50.0), 1.0);
+        assert_eq!(ws_compact_scale(false, 100.0, 250.0), 1.0);
+        // ----- en la isla, el cociente disponible/natural -----
+        assert_eq!(ws_compact_scale(true, 100.0, 100.0), 1.0);
+        assert!((ws_compact_scale(true, 100.0, 50.0) - 0.5).abs() < 1e-6);
+        assert!((ws_compact_scale(true, 100.0, 7.0) - 0.07).abs() < 1e-6);
+        // ----- nunca agranda y el 0 disponible da 0 (el indicador ya no está) -----
+        assert_eq!(ws_compact_scale(true, 100.0, 250.0), 1.0);
+        assert_eq!(ws_compact_scale(true, 100.0, 0.0), 0.0);
+        // ----- sin workspaces (`natural = 0`) no se divide por cero -----
+        assert_eq!(ws_compact_scale(true, 0.0, 50.0), 1.0);
+        // ----- y con la escala el contenido ENTRA en el rectángulo -----
+        for avail in [0.0, 3.0, 40.0, 99.0, 100.0, 250.0] {
+            let sc = ws_compact_scale(true, 100.0, avail);
+            assert!(
+                100.0 * sc <= avail + 1e-3,
+                "avail={avail} escala={sc}: el contenido se sale"
+            );
+        }
     }
 }

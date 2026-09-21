@@ -36,7 +36,7 @@ pub(crate) use syswidgets::{
     draw_text_widget, draw_volume_widget,
 };
 pub(crate) use tray::{draw_tray_widget, tray_geometry};
-pub(crate) use workspaces::draw_workspaces_widget;
+pub(crate) use workspaces::{draw_workspaces_widget, ws_compact_scale};
 
 const DATE_FONT_FAMILY: &str = "JetBrains Mono";
 
@@ -99,6 +99,14 @@ const WS_ANIM_DURATION_MS: f32 = 220.0;
 
 fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
+}
+
+/// El split de la isla con la MISMA curva que el reveal (`ease_out`). Lo leen el
+/// largo y los gaps (`island_plan`), el corrimiento (`draw_island` y `draw`) y la
+/// escala de los puntos: así el morph no es lineal —se veía mecánico— y el blob, los
+/// vecinos y el desplazamiento quedan en fase (trampa 10).
+pub(crate) fn ws_split_eased(split: f32) -> f32 {
+    ease_out(split.clamp(0.0, 1.0))
 }
 
 fn marquee_step(
@@ -494,7 +502,8 @@ pub fn draw_island(
     let vertical = dock.is_vertical();
     // ----- la isla entera se corre a la altura del indicador de workspaces mientras
     // el split está abierto (físico: el blob se dibuja en píxeles del buffer) -----
-    let shift = island_ws_shift(dock, widgets, tray.len()) * ws_split * render_scale;
+    let shift =
+        island_ws_shift(dock, widgets, tray.len()) * ws_split_eased(ws_split) * render_scale;
     let blob = reveal_capsule(w, h, vertical, plan.compact, 0.0, shift);
     draw_capsule(pixmap, dock, render_scale, blob);
     let Some(mut content) = Pixmap::new(pixmap.width(), pixmap.height()) else {
@@ -638,7 +647,8 @@ pub fn draw(
     let compact = island_plan(dock, widgets, tray.len(), render_scale, ws_split).compact;
     // ----- el piso del colapso también usa el desplazamiento: si el split está
     // abierto, el dock se encoge HACIA el indicador, no al centro -----
-    let shift = island_ws_shift(dock, widgets, tray.len()) * ws_split * render_scale;
+    let shift =
+        island_ws_shift(dock, widgets, tray.len()) * ws_split_eased(ws_split) * render_scale;
     if let Some(mask) = reveal_mask(
         dock,
         render_scale,
@@ -1233,13 +1243,19 @@ mod reveal_tests {
             cerrada.compact
         );
 
-        // ----- a medias: el indicador mide la mitad y la isla queda entre las dos -----
+        // ----- a medias: el indicador sigue la CURVA del split (`ease_out`), no el
+        // valor crudo, y la isla queda entre las dos -----
         let media = island_plan(&dock, &w, 0, 1.0, 0.5);
+        let esperado = abierta.items[1].1 * ws_split_eased(0.5);
         assert!(
-            (media.items[1].1 - abierta.items[1].1 / 2.0).abs() < 0.01,
-            "el indicador a medias mide la mitad: {} contra {}",
+            (media.items[1].1 - esperado).abs() < 0.01,
+            "el indicador sigue la curva: {} contra {}",
             media.items[1].1,
-            abierta.items[1].1
+            esperado
+        );
+        assert!(
+            media.items[1].1 > abierta.items[1].1 / 2.0,
+            "con ease_out, a mitad de camino ya está más cerca de abierto"
         );
         assert!(
             cerrada.compact < media.compact && media.compact < abierta.compact,

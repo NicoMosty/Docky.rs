@@ -20,7 +20,7 @@ use crate::render::{
     draw_text_widget, draw_tray_widget, draw_volume_widget, draw_widget_button_bg,
     draw_workspaces_widget, media_ideal_len, percentage_widget_len, text_widget_len,
     text_width_estimate_render, tray_geometry, volume_content_len, volume_icon_r, widget_text_px,
-    workspaces_geometry,
+    workspaces_geometry, ws_compact_scale,
 };
 use crate::widgets::WidgetSnapshot;
 use dockyrs_canvas::{IconCache, TextCache};
@@ -838,6 +838,12 @@ fn len_workspaces(cx: &Ctx) -> f32 {
 }
 
 fn draw_workspaces(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    // ----- en la isla el largo disponible es el natural ESCALADO por el split: el
+    // indicador se dibuja a escala (morph) en vez de quedar recortado por la cápsula
+    // (el wipe). En la barra `cx.compact` es false, así que la escala es 1.0 y el
+    // dibujo no cambia. -----
+    let avail = if cx.is_vertical { r.h } else { r.w };
+    let scale = ws_compact_scale(cx.compact, len_workspaces(cx), avail);
     draw_workspaces_widget(
         canvas.pixmap,
         &cx.widgets.workspaces,
@@ -847,7 +853,7 @@ fn draw_workspaces(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
         r.y,
         r.w,
         r.h,
-        cx.render_scale,
+        cx.render_scale * scale,
         canvas.colors,
         cx.is_vertical,
     );

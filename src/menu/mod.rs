@@ -73,6 +73,14 @@ pub const CUSTOM_HEX_LABELS: [&str; 5] = ["Accent", "Accent 2", "Panel", "Text",
 pub const ANIM_STEP_OPEN: f32 = 0.07;
 pub const ANIM_STEP_CLOSE: f32 = 0.05;
 
+/// Paso del split de la isla (el indicador de workspaces que entra y sale del blob).
+/// Son propios y no los `ANIM_STEP_*` generales: el split ABRE con calma y CIERRA
+/// más rápido —es un indicador transitorio, tiene que irse antes de lo que llegó— y
+/// encima va `ease_out`. A 60 fps: 0.07 abre en ~14 frames (~230 ms) y 0.09 cierra
+/// en ~11 (~180 ms). Ver `App::tick_island_split_frame`.
+pub const WS_SPLIT_STEP_OPEN: f32 = 0.07;
+pub const WS_SPLIT_STEP_CLOSE: f32 = 0.09;
+
 pub const OSD_MIN_PANEL_H: f32 = 36.0;
 pub const OSD_TIMEOUT_MS: u64 = 1400;
 /// Cuánto tiempo se queda el HUD del indicador de workspaces.

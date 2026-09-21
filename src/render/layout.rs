@@ -549,6 +549,10 @@ pub(super) fn island_plan(
     ws_split: f32,
 ) -> IslandPlan {
     let s = &dock.config.settings;
+    // ----- el split entra con la curva del reveal (`ease_out`): su largo y los dos
+    // gaps que abre van juntos, así el indicador no aparece/desaparece en línea recta
+    // (era la queja: se veía mecánico) -----
+    let ws_split = super::ws_split_eased(ws_split);
     let (base_w, base_h) = dock.base_size();
     let (w, h) = (base_w as f32 * render_scale, base_h as f32 * render_scale);
     let is_vertical = dock.is_vertical();
