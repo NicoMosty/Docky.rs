@@ -79,6 +79,7 @@ pub(crate) fn draw_app_search_strip(
     use crate::menu::{
         APP_CARD_ICON, APP_CARD_LABEL_GAP, APP_CARD_PAD, MENU_PADDING, app_search_card_offset,
         app_search_card_w, app_search_row_h, app_search_strip_h, app_search_strip_origin,
+        app_search_strip_pos,
     };
     let s = args.render_scale;
     let settings = &args.dock.config.settings;
@@ -90,7 +91,9 @@ pub(crate) fn draw_app_search_strip(
     // scrollea es la página entera (`app_search_viewport_along`) -----
     let viewport_w = frame.w * s;
     let viewport_h = strip_h * s;
-    let scroll = args.wallpaper_scroll_x * s;
+    // ----- el scroll va en unidades lógicas: `app_search_strip_pos` es la MISMA
+    // cuenta que usa el hit test, y la escala se aplica después -----
+    let scroll = args.wallpaper_scroll_x;
 
     if args.app_entries.is_empty() {
         let ty = oy0 * s + centered_text_y(crate::menu::APP_CARD_ROW_H, 9.0) * s;
@@ -130,15 +133,12 @@ pub(crate) fn draw_app_search_strip(
     } else {
         13
     };
-    // ----- la pastilla del resaltado: misma cuenta que las tarjetas -----
-    let pill_at = |hl: (f32, f32)| {
-        if is_vertical {
-            (MENU_PADDING * s + hl.0 * s, hl.1 * s - scroll)
-        } else {
-            (MENU_PADDING * s + hl.0 * s - scroll, hl.1 * s)
-        }
+    // ----- la pastilla del resaltado: misma cuenta que las tarjetas (y que el
+    // hit test), o se corre 10px de lo dibujado (trampa 10) -----
+    let (px, py) = {
+        let (rx, ry) = app_search_strip_pos(highlight, is_vertical, scroll);
+        (rx * s, ry * s)
     };
-    let (px, py) = pill_at(highlight);
     fill_rrect(
         &mut strip,
         px,
@@ -158,10 +158,9 @@ pub(crate) fn draw_app_search_strip(
         crate::menu::app_search_hot_card(args.app_entries.len(), frame, is_vertical, highlight);
     for (i, entry) in args.app_entries.iter().enumerate() {
         let (ox, oy) = app_search_card_offset(i, frame, is_vertical);
-        let (cx0, cy0) = if is_vertical {
-            (MENU_PADDING * s + ox * s, oy * s - scroll)
-        } else {
-            (MENU_PADDING * s + ox * s - scroll, oy * s)
+        let (cx0, cy0) = {
+            let (rx, ry) = app_search_strip_pos((ox, oy), is_vertical, scroll);
+            (rx * s, ry * s)
         };
         if cx0 + card_w * s < 0.0 || cx0 > viewport_w || cy0 + card_h * s < 0.0 || cy0 > viewport_h
         {

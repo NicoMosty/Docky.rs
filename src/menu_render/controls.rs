@@ -373,13 +373,16 @@ pub(crate) fn draw_search_box(
     } else {
         args.search_query
     };
+    let frame = args.dock.panel_frame(args.panel_width, args.content_height);
+    let box_x = (frame.x + MENU_PADDING) * s;
+    let box_w = (frame.w - MENU_PADDING * 2.0) * s;
     draw_search_field(
         pixmap,
         text_cache,
         settings,
-        MENU_PADDING * s,
+        box_x,
         y,
-        (args.panel_width - MENU_PADDING * 2.0) * s,
+        box_w,
         control.height * s,
         text,
         placeholder,

@@ -78,6 +78,19 @@ pub fn app_search_strip_origin(frame: PanelFrame) -> (f32, f32) {
     (frame.x + MENU_PADDING, app_search_strip_y(frame))
 }
 
+/// Posición de una tarjeta DENTRO del pixmap del strip (el que se pega en
+/// `app_search_strip_origin`). El hit test le suma el origen; el dibujo la usa tal
+/// cual. Una sola cuenta para las dos: si cualquiera vuelve a sumar `MENU_PADDING`
+/// por su lado, el click se corre de lo dibujado (pasó en el launcher vertical:
+/// las tarjetas quedaban 10px a la derecha de su propio hit test).
+pub fn app_search_strip_pos(offset: (f32, f32), is_vertical: bool, scroll: f32) -> (f32, f32) {
+    if is_vertical {
+        (offset.0, offset.1 - scroll)
+    } else {
+        (offset.0 - scroll, offset.1)
+    }
+}
+
 /// Alto del strip: la grilla entera en el horizontal (no scrollea en el cross), el
 /// tramo visible de la grilla en el vertical. No depende del frame: son las filas
 /// que se ven.
@@ -254,11 +267,8 @@ pub fn app_search_strip_hit_test(
     // ----- se recorre con la MISMA función que dibuja -----
     for i in 0..count {
         let (ox, oy) = app_search_card_offset(i, frame, is_vertical);
-        let (cx, cy) = if is_vertical {
-            (sx + ox, sy + oy - scroll)
-        } else {
-            (sx + ox - scroll, sy + oy)
-        };
+        let (rx, ry) = app_search_strip_pos((ox, oy), is_vertical, scroll);
+        let (cx, cy) = (sx + rx, sy + ry);
         if x >= cx && x <= cx + card_w && y >= cy && y <= cy + card_h {
             return Some(i);
         }
@@ -486,6 +496,43 @@ mod strip_tests {
             ),
             Some(1)
         );
+    }
+
+    /// El dibujo y el hit test parten de la MISMA cuenta: el dibujo pone la
+    /// tarjeta dentro del pixmap del strip con `app_search_strip_pos` (donde el
+    /// origen ya trae `MENU_PADDING`) y el hit test le suma ese origen.
+    ///
+    /// Si el relativo volviera a incluir el origen, el dibujo quedaría 10px a la
+    /// derecha del click (era el bug del launcher vertical).
+    #[test]
+    fn la_tarjeta_dibujada_y_el_hit_test_usan_la_misma_cuenta() {
+        for f in [vertical(true), vertical(false), ancho()] {
+            // ----- el horizontal tiene la banda ARRIBA (f.y > 0); el vertical a un costado -----
+            let is_vertical = f.y == 0.0;
+            let scroll = 12.0;
+            let (sx, sy) = app_search_strip_origin(f);
+            let (ox, oy) = app_search_card_offset(3, f, is_vertical);
+            let (rx, ry) = app_search_strip_pos((ox, oy), is_vertical, scroll);
+            // ----- el relativo NO incluye el origen ni MENU_PADDING de más: sólo
+            // descuenta el scroll del eje que scrollea -----
+            let esperado_x = if is_vertical { ox } else { ox - scroll };
+            assert_eq!(
+                rx, esperado_x,
+                "el dibujo no puede agregar el inset otra vez ({is_vertical})"
+            );
+            let esperado_y = if is_vertical { oy - scroll } else { oy };
+            assert_eq!(ry, esperado_y);
+            // ----- y el click en el centro de esa tarjeta cae en ella -----
+            let card_w = app_search_card_w(is_vertical);
+            let card_h = app_search_row_h(is_vertical);
+            let x = sx + rx + card_w * 0.5;
+            let y = sy + ry + card_h * 0.5;
+            assert_eq!(
+                app_search_strip_hit_test(8, f, is_vertical, scroll, x, y),
+                Some(3),
+                "f={f:?} v={is_vertical}"
+            );
+        }
     }
 
     /// El color de la etiqueta sigue a la **pastilla**, no al hover: si sale del

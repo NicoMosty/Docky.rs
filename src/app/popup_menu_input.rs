@@ -113,7 +113,12 @@ impl App {
             // este menú (acá no hace nada) -----
             menu::ButtonKind::CreatePalette
             | menu::ButtonKind::SavePalette
-            | menu::ButtonKind::WallpaperDir => {}
+            | menu::ButtonKind::WallpaperDir
+            | menu::ButtonKind::OpenAppLauncher
+            | menu::ButtonKind::OpenWindowSwitcher
+            | menu::ButtonKind::OpenClipboard
+            | menu::ButtonKind::OpenNotifications
+            | menu::ButtonKind::OpenWallpapers => {}
         }
     }
 

@@ -233,6 +233,11 @@ pub enum OsdKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonKind {
     AddApp,
+    OpenAppLauncher,
+    OpenWindowSwitcher,
+    OpenClipboard,
+    OpenNotifications,
+    OpenWallpapers,
     QuitDock,
     ChangeIcon,
     RemoveApp,
@@ -249,6 +254,11 @@ impl ButtonKind {
     pub fn label(self) -> &'static str {
         match self {
             ButtonKind::AddApp => "Add App…",
+            ButtonKind::OpenAppLauncher => "App Launcher",
+            ButtonKind::OpenWindowSwitcher => "Window Switcher",
+            ButtonKind::OpenClipboard => "Clipboard",
+            ButtonKind::OpenNotifications => "Notifications",
+            ButtonKind::OpenWallpapers => "Wallpapers",
             ButtonKind::QuitDock => "Quit Dock",
             ButtonKind::ChangeIcon => "Change Icon…",
             ButtonKind::RemoveApp => "Remove App from Dock",

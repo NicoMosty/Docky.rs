@@ -644,6 +644,26 @@ impl App {
                 self.close_dock_menu(qh);
                 self.open_menu(menu::MenuScreen::AddApp, qh);
             }
+            menu::ButtonKind::OpenAppLauncher => {
+                self.close_dock_menu(qh);
+                self.open_app_search(qh);
+            }
+            menu::ButtonKind::OpenWindowSwitcher => {
+                self.close_dock_menu(qh);
+                self.open_windows_mode(qh);
+            }
+            menu::ButtonKind::OpenClipboard => {
+                self.close_dock_menu(qh);
+                self.open_clipboard(qh);
+            }
+            menu::ButtonKind::OpenNotifications => {
+                self.close_dock_menu(qh);
+                self.open_notifications(qh);
+            }
+            menu::ButtonKind::OpenWallpapers => {
+                self.close_dock_menu(qh);
+                self.open_wallpaper_picker(qh);
+            }
             menu::ButtonKind::QuitDock => self.exit = true,
             // ----- cicla la carpeta de fondos: el selector la usa al abrirse -----
             menu::ButtonKind::WallpaperDir => {

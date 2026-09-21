@@ -207,12 +207,25 @@ pub fn build_category_controls(category: MenuCategory, settings: &DockSettings) 
             );
         }
         MenuCategory::System => {
-            controls.push(Control {
-                kind: ControlKind::Button(ButtonKind::AddApp),
-                y,
-                height: BUTTON_HEIGHT,
-            });
-            y += BUTTON_HEIGHT + ROW_GAP;
+            // ----- los cinco paneles del overlay, accesibles desde acá: el panel de
+            // ajustes comparte la superficie y tapa la banda de pestañas, así que sin
+            // esto no hay forma de abrir el launcher/ventanas/portapapeles/notifs/fondos
+            // desde el propio panel -----
+            for kind in [
+                ButtonKind::OpenAppLauncher,
+                ButtonKind::OpenWindowSwitcher,
+                ButtonKind::OpenClipboard,
+                ButtonKind::OpenNotifications,
+                ButtonKind::OpenWallpapers,
+                ButtonKind::AddApp,
+            ] {
+                controls.push(Control {
+                    kind: ControlKind::Button(kind),
+                    y,
+                    height: BUTTON_HEIGHT,
+                });
+                y += BUTTON_HEIGHT + ROW_GAP;
+            }
             controls.push(Control {
                 kind: ControlKind::Button(ButtonKind::QuitDock),
                 y,
@@ -402,6 +415,58 @@ mod widget_editor_tests {
                 dock_menu_content_height(MenuCategory::Widgets, &settings) > 0.0,
                 "{kind:?} quedó sin alto"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod system_tab_tests {
+    use super::*;
+
+    fn botones() -> Vec<ButtonKind> {
+        build_category_controls(MenuCategory::System, &DockSettings::default())
+            .into_iter()
+            .filter_map(|c| match c.kind {
+                ControlKind::Button(b) => Some(b),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// El panel de ajustes comparte la superficie y tapa la banda de pestañas del
+    /// overlay, así que los cinco paneles tienen que poder abrirse desde acá: si
+    /// falta uno, no hay ninguna otra forma de llegar (era el caso de Clipboard,
+    /// Notifs y Wallpapers).
+    #[test]
+    fn el_tab_system_expone_los_cinco_paneles_del_overlay() {
+        let b = botones();
+        for kind in [
+            ButtonKind::OpenAppLauncher,
+            ButtonKind::OpenWindowSwitcher,
+            ButtonKind::OpenClipboard,
+            ButtonKind::OpenNotifications,
+            ButtonKind::OpenWallpapers,
+        ] {
+            assert!(b.contains(&kind), "falta {kind:?}: {b:?}");
+        }
+        // ----- y siguen estando los de siempre -----
+        assert!(b.contains(&ButtonKind::AddApp));
+        assert!(b.contains(&ButtonKind::QuitDock));
+    }
+
+    /// `label()` es un `match` sin `_`, así que compilar ya obliga a darle texto a
+    /// cada variante nueva; acá se fija el contrato y que ninguno sea destructivo.
+    #[test]
+    fn los_botones_nuevos_tienen_label() {
+        for kind in [
+            ButtonKind::OpenAppLauncher,
+            ButtonKind::OpenWindowSwitcher,
+            ButtonKind::OpenClipboard,
+            ButtonKind::OpenNotifications,
+            ButtonKind::OpenWallpapers,
+        ] {
+            assert!(!kind.label().is_empty(), "{kind:?} sin label");
+            assert!(!kind.is_destructive(), "{kind:?} no es destructivo");
         }
     }
 }
