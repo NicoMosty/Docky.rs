@@ -17,7 +17,7 @@ mod wallpaper;
 mod widget;
 mod widgets;
 
-use app::{App, IslandActivities};
+use app::{App, BatteryActivity, BluetoothActivity, IslandActivities};
 use config::Config;
 use dock::Dock;
 use dockyrs_canvas::{IconCache, TextCache, ThumbnailCache};
@@ -357,11 +357,8 @@ fn main() -> anyhow::Result<()> {
         needs_repaint: false,
         frame_dt_ms: 16.7,
         last_frame_at: None,
-        battery_activity_ready: false,
-        battery_warned: 101,
-        battery_on_power: false,
-        bluetooth_activity_ready: false,
-        bluetooth_connected: None,
+        battery_activity: BatteryActivity::default(),
+        bluetooth_activity: BluetoothActivity::default(),
         reveal_anim: 1.0,
         reveal_target: 1.0,
         autohide_armed: false,

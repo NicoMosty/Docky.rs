@@ -79,6 +79,70 @@ fn battery_threshold(pct: u8) -> u8 {
     }
 }
 
+/// Estado de la actividad de batería: warm-up del primer dato, umbral ya avisado (101 =
+/// ninguno) y si estaba enchufada en la lectura previa. Está acá y no en `App` para poder
+/// testear la transición sin construir el dock (el cargador no siempre está a mano).
+#[derive(Default)]
+pub(crate) struct BatteryActivity {
+    ready: bool,
+    warned: u8,
+    on_power: bool,
+}
+
+impl BatteryActivity {
+    /// Registra una lectura y dice si hay que anunciar. `None` (sin dato) no toca nada.
+    pub(crate) fn note(&mut self, battery: Option<(u8, BatteryState)>) -> bool {
+        let Some((pct, state)) = battery else {
+            return false;
+        };
+        let on_power = !matches!(state, BatteryState::Discharging);
+        if !self.ready {
+            // ----- warm-up: el estado con el que arranca el dock no es novedad -----
+            self.ready = true;
+            self.on_power = on_power;
+            self.warned = battery_threshold(pct);
+            return false;
+        }
+        let avisar = if on_power && !self.on_power {
+            // ----- enchufada: una vez por episodio, y rearma los umbrales de descarga -----
+            self.warned = 101;
+            true
+        } else if !on_power {
+            // ----- descargando: 20 % y 10 %, cada umbral una sola vez -----
+            let threshold = battery_threshold(pct);
+            if threshold < self.warned {
+                self.warned = threshold;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        self.on_power = on_power;
+        avisar
+    }
+}
+
+/// Estado de la actividad de Bluetooth: warm-up del primer dato y último dispositivo
+/// conectado visto. Está acá por la misma razón que `BatteryActivity`.
+#[derive(Default)]
+pub(crate) struct BluetoothActivity {
+    ready: bool,
+    connected: Option<String>,
+}
+
+impl BluetoothActivity {
+    /// Registra el dispositivo conectado (`None` = ninguno) y dice si hay que anunciar. El
+    /// primer dato nunca lo es: es el estado con el que arranca el dock.
+    pub(crate) fn note(&mut self, ahora: Option<String>) -> bool {
+        let avisar = self.ready && ahora != self.connected;
+        self.ready = true;
+        self.connected = ahora;
+        avisar
+    }
+}
+
 impl App {
     /// Anuncia una actividad viva en la isla. Se descarta si no hay isla que la muestre
     /// (dock a la vista, o un panel/menú/popup ocupando la superficie): la actividad es
@@ -129,36 +193,31 @@ impl App {
     }
 
     /// Anuncia la actividad de batería al **enchufar** o al cruzar **20 % / 10 %**
-    /// descargando. El primer dato sólo se registra (warm-up): el estado con el que
-    /// arranca el dock no es una novedad, igual que los 3 s de island.
+    /// descargando. La transición la decide `BatteryActivity` (con test).
     pub(crate) fn note_battery_activity(
         &mut self,
         battery: Option<(u8, BatteryState)>,
         qh: &QueueHandle<Self>,
     ) {
-        let Some((pct, state)) = battery else {
-            return;
-        };
-        let on_power = !matches!(state, BatteryState::Discharging);
-        if !self.battery_activity_ready {
-            self.battery_activity_ready = true;
-            self.battery_on_power = on_power;
-            self.battery_warned = battery_threshold(pct);
+        if !self.battery_activity.note(battery) {
             return;
         }
-        if on_power && !self.battery_on_power {
-            // ----- enchufada: una vez por episodio, y rearma los umbrales de descarga -----
-            self.battery_warned = 101;
-            self.announce_island_activity(WidgetKind::Battery, qh);
-        } else if !on_power {
-            // ----- descargando: 20 % y 10 %, cada umbral una sola vez -----
-            let threshold = battery_threshold(pct);
-            if threshold < self.battery_warned {
-                self.battery_warned = threshold;
-                self.announce_island_activity(WidgetKind::Battery, qh);
-            }
+        log::debug!("island: bateria -> anuncio");
+        self.announce_island_activity(WidgetKind::Battery, qh);
+    }
+
+    /// Anuncia el cambio de dispositivo Bluetooth (conectar, desconectar, cambiar). La
+    /// transición la decide `BluetoothActivity` (con test).
+    pub(crate) fn note_bluetooth_activity(
+        &mut self,
+        ahora: Option<String>,
+        qh: &QueueHandle<Self>,
+    ) {
+        if !self.bluetooth_activity.note(ahora) {
+            return;
         }
-        self.battery_on_power = on_power;
+        log::debug!("island: bluetooth -> anuncio");
+        self.announce_island_activity(WidgetKind::Bluetooth, qh);
     }
 
     /// Anuncia la captura guardada. `path = None` significa que fue SÓLO al portapapeles
@@ -290,5 +349,49 @@ mod island_activity_tests {
         assert_eq!(screenshot_label(Some("")), "Portapapeles");
         // ----- un path que termina en barra no deja la etiqueta vacía -----
         assert_eq!(screenshot_label(Some("/tmp/")), "Captura");
+    }
+
+    /// La transición de la actividad de batería: warm-up, el enchufe, los dos umbrales una
+    /// sola vez, y el rearme al enchufar. Es lo que no se puede probar sin cargador.
+    #[test]
+    fn la_bateria_anuncia_al_enchufar_y_en_los_umbrales() {
+        use crate::widgets::BatteryState::{Charging, Discharging};
+        let mut a = BatteryActivity::default();
+        // ----- warm-up: el primer dato no anuncia -----
+        assert!(!a.note(Some((50, Discharging))));
+        // ----- descargando: 50 y 21 no; 20 sí; repetir el 20 no; 10 sí; 5 no -----
+        assert!(!a.note(Some((50, Discharging))));
+        assert!(!a.note(Some((21, Discharging))));
+        assert!(a.note(Some((20, Discharging))), "cruza 20");
+        assert!(!a.note(Some((19, Discharging))), "el 20 ya se aviso");
+        assert!(!a.note(Some((11, Discharging))));
+        assert!(a.note(Some((10, Discharging))), "cruza 10");
+        assert!(!a.note(Some((5, Discharging))), "el 10 ya se aviso");
+        // ----- enchufar: anuncia y rearma los umbrales -----
+        assert!(a.note(Some((15, Charging))), "enchufa");
+        assert!(!a.note(Some((20, Charging))), "ya enchufada no repite");
+        // ----- desenchufar en 20: el umbral se rearmo, asi que avisa -----
+        assert!(a.note(Some((20, Discharging))), "desenchufa en 20");
+        assert!(!a.note(Some((20, Discharging))), "y no repite");
+        assert!(a.note(Some((10, Discharging))), "baja a 10");
+        // ----- sin dato no toca nada -----
+        assert!(!a.note(None));
+        assert!(
+            !a.note(Some((10, Discharging))),
+            "el None no cambio el estado"
+        );
+    }
+
+    /// La transición de la actividad de Bluetooth: el primer dato nunca anuncia; conectar,
+    /// desconectar y cambiar de dispositivo sí.
+    #[test]
+    fn el_bluetooth_no_anuncia_el_primer_dato_y_si_los_cambios() {
+        let mut b = BluetoothActivity::default();
+        assert!(!b.note(None), "warm-up sin dispositivo");
+        assert!(!b.note(None), "mismo estado");
+        assert!(b.note(Some("headset".into())), "conecta");
+        assert!(!b.note(Some("headset".into())), "mismo dispositivo");
+        assert!(b.note(None), "desconecta");
+        assert!(b.note(Some("otro".into())), "otro dispositivo");
     }
 }

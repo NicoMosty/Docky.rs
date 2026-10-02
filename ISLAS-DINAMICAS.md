@@ -23,12 +23,15 @@ de **modelo de render** (QML/GPU, no portable sin pagar el costo).
 | RAM | 200–500 MB (media 380) | corre en el proceso de Quickshell | ~13–30 MB RSS |
 | CPU | idle 0%, media 3%, max 10% | no medido | piso (~1 tick cada 5–6 s) |
 | GPU | media 15%, max 45% | GPU | 0 |
-| Forma | barra fija + paneles/popups | **una cápsula que morphea entre vistas** | dock ↔ blob de isla |
+| Forma | barra fija + paneles/popups | **una cápsula que morphea entre vistas** | dock ↔ isla (el **núcleo** revela, el resto es hover) |
+| Interacción en reposo | hover en la barra | tap / rueda en la isla | rueda = volumen, tap = play/pause |
 
-**Conclusión de una línea:** Docky ya tiene el 70 % del motor de "isla dinámica"
-(reveal/morph + actividades compactas). Lo que falta es sobre todo **lógica**:
-actividades vivas con prioridad y duración, un par de fuentes de dato nuevas, y
-tooltips/modales. Todo eso entra sin tocar el modelo de render ni subir el piso de CPU.
+**Conclusión de una línea** (actualizada después de A–M): Docky ya tenía el 70 % del motor
+de "isla dinámica" y **ahora tiene el motor completo** — actividades vivas con cola y
+vencimiento, la isla como estado de sus modos (OSD incluido), animaciones por **tiempo** e
+interacción por **núcleo**. Lo que queda es **producto** (descargas, Ask AI, timer,
+tooltips, DND) y un puñado de eventos de niri que ya llegan al event-stream. Nada de eso
+sube el piso de CPU.
 
 **Lo que NO hay que portar:** el visualizador de audio tipo cava a 30 fps, ni el morph
 continuo de QML. Son exactamente las cosas que en QML se pagan con 15 % de GPU y acá
@@ -110,36 +113,57 @@ cliphist, mini dashboard) y OSDs. Lo portable son detalles de barra:
 
 ## 3. Estado actual de Docky.rs (para no duplicar)
 
+**Actualizado después de A–M**: lo marcado ✔ en §4 ya está en el árbol.
+
 Ya existe y se reusa:
 
-- **Motor de forma**: `reveal_capsule` (una sola cuenta de la cápsula para máscara,
-  fondo y blob), `reveal_mask`, `draw_island`, `island_spans` (una sola cuenta de
-  posición/largo), `island_plan`.
-- **Actividades**: `island_activities()` en `src/render/mod.rs` (lista fija:
-  `Recording` > `Clock` > `Workspaces` si el split está abierto > `Battery`).
-- **Reuso de dibujo**: `layout::draw_one_widget` — la isla no tiene una segunda
-  versión de cada widget.
-- **Split por workspace** con easing (`ws_split_eased`, `WS_SPLIT_STEP_*`).
-- **Widgets**: `WidgetKind` con `Recording`, `Mic`, `Custom(u16)`, `KbdLayout`, etc.
-- **Custom widgets**: `CustomWidgetSource` con intervalo y timeout
-  (`src/widgets.rs`), pero sólo texto plano, sin `stream`/JSON/tooltip.
-- **Notificaciones**: historial + toast en superficie propia + panel `Notifs`.
+- **Motor de forma**: `reveal_capsule` (una sola cuenta de la cápsula para máscara, fondo
+  y blob), `reveal_mask`, `draw_capsule`, `draw_island`, `island_spans`, `island_plan`.
+- **Motor de actividades vivas**: `IslandActivities` (`app/island_activity.rs`) — cola,
+  vencimiento y prioridad; una actividad viva **ocupa la isla** y al vencer vuelve al
+  reposo. `island_activities()` devuelve el reposo (Recording > Cast > Clock > Workspaces
+  si el split > 0 > Battery) o **sólo** la activa.
+- **Actividades ya cableadas**: portapapeles (widget `Clipboard`), layout de teclado,
+  Bluetooth, batería (enchufar / 20 % / 10 %), **captura guardada** y **compartir
+  pantalla** (las dos últimas, de `ScreenshotCaptured`/`CastsChanged` de niri).
+- **Reuso de dibujo**: `layout::draw_one_widget` — la isla no tiene una segunda versión de
+  cada widget.
+- **Interacción de la isla**: el reveal lo dispara su **núcleo** (`island_core_region`, el
+  40 % central del blob); el resto del blob es hover franco (lift) **más rueda = volumen y
+  tap = play/pause**. Un click en el núcleo revela ya; afuera rige el dwell de 120 ms.
+- **Split por workspace** con easing (`ws_split_eased`).
+- **Widgets**: `WidgetKind` + la tabla `WIDGETS` en **`src/widget.rs`** (un widget nuevo son
+  **2 lugares**: el enum y la tabla; el orden y las etiquetas de Ajustes salen de ahí). Los
+  de sólo-isla (`Screenshot`, `Cast`) los filtra `es_solo_isla`.
+- **Custom widgets**: `CustomWidgetSource` con intervalo y timeout (`src/widgets.rs`), pero
+  sólo texto plano, sin `stream`/JSON/tooltip.
+- **Notificaciones**: historial + toast en superficie propia + panel `Notifs` + dedup.
 - **Click-catcher** para cerrar al click afuera (`app/click_catcher.rs`).
-- **IPC**: canal `IpcMessage` (threads → loop), `run_with_timeout`, gates por
-  `has_widget`.
+- **Animaciones por tiempo**: `menu::Pace` + `anim_step`/`anim_towards`/`lerp_factor` con
+  `App::frame_dt_ms`, así no dependen del frame rate del compositor.
+- **OSD como estado de la isla**: píldora del grosor del dock, sin superficie prestada.
+- **IPC**: canal `IpcMessage` (threads → loop), `run_with_timeout`. El gate por `has_widget`
+  es **sólo para lo que corre en el tick**; lo event-driven (niri, D-Bus) se lee siempre,
+  porque el evento ya llegó y el spawn es uno por evento raro.
 
 Falta (y es lo que este informe prioriza):
 
-- Actividades **con prioridad, duración y cola** (hoy la lista es fija y no expira).
-- Fuentes nuevas: downloads, updates, batería-cargando/baja, bluetooth.
-- **Cola de actividades**: hoy todas las actividades se dibujan **juntas** lado a lado;
-  island muestra **una** por vez y las rota.
+- Fuentes nuevas: **downloads** y **updates de sistema**.
+- Producto: **Ask AI**, **timer**, **tooltips**, custom `stream`+JSON.
+- Deuda conocida: reloj de animación **por superficie** (hoy compartido: dos animando a la
+  vez corren hasta 2× más lento) y la input region del OSD oculto (~150 px contra los 220
+  de la píldora).
 
 ---
 
 ## 4. Qué implementar (ordenado por valor/costo)
 
 Cada fila indica **dónde tocaría** y si **sube el piso de CPU** (lo que hay que evitar).
+
+> **Cómo leer los ítems ✔**: el texto de arriba es la **propuesta original** (lo que se
+> pensó antes de implementarlo, en presente) y lo que va después de **Implementado** es lo
+> que quedó de verdad en el árbol, con lo que se desvió y por qué. Los ítems sin ✔ siguen
+> pendientes y su texto es la propuesta vigente.
 
 ### 4.1 Alta prioridad · bajo costo · no sube el piso
 
@@ -223,7 +247,7 @@ Hoy el morph usa `ease_out` + pasos por tick. Reemplazar por una tabla
 `pace → duración` y `curve → cubic-bezier` evaluada en Rust, con retarget desde el
 valor actual (ya se hace: `island_ws_split` va hacia `_target`). Beneficio: feel
 consistente en reveal, split, slide del overlay y panel de ajustes, con **una** función
-(`menu::overlay_slide_offset` y `WS_SPLIT_STEP_*` pasarían a derivar de ahí).
+(`menu::overlay_slide_offset` y los pasos del split pasarían a derivar de ahí).
 
 Costo: ~60 líneas + tests puros. No sube el piso (es matemática, no más frames).
 
@@ -394,10 +418,11 @@ la UI de conexión es un subproyecto.
 | Cava, espectro, blur, sombras | Implican GPU o costo por frame. |
 | Layout flexible con `RowLayout`/anchors | Docky tiene `layout_widgets` + `WIDGETS`; no introducir un segundo motor de layout. |
 
-**Regla de oro del port:** cada feature tiene que entrar por una de las dos puertas que
-ya existen — **un `WidgetKind` nuevo** (enum + entrada en `WIDGETS`, trampa 13) o **una
-actividad de isla** (`island_activities` + `refresh_*` gateado por `has_widget`). Nada de
-un tercer camino.
+**Regla de oro del port:** cada feature tiene que entrar por una de las **dos puertas** que
+ya existen — **un `WidgetKind` nuevo** (el enum + la entrada en `WIDGETS`, `src/widget.rs`)
+**o una actividad de isla** (`island_activities` + el `note_*`/`refresh_*` correspondiente).
+Nada de un tercer camino. Sobre el gate: `refresh_*` **gateado por `has_widget` sólo si
+corre en el tick**; lo event-driven (niri, D-Bus) se lee siempre, porque el evento ya llegó.
 
 ---
 
@@ -410,12 +435,17 @@ un tercer camino.
    desgateando las dos fuentes event-driven (batería/volumen/red siguen gateadas: corren
    en el tick). ✔ **L** (OSD como estado de isla) — hecho, el escalón estructural.
 3. ✔ **F** (ritmo por tiempo, no por frame) y ✔ **G** (hover lift con dwell de 120 ms) —
-   hechos y verificados en vivo.
-4. ✔ **M** (dedup de avisos) — hecho y verificado en vivo.
-5. **H** (descargas) — primer ítem con tick nuevo; patrón `thumbs_pending`.
-6. **I** (Ask AI) — primer ítem con worker de CLI nuevo; patrón del tray worker.
-7. **P** (tooltips) o **J/K** (timer / custom stream) — opcionales, por valor/costo.
-8. Después: **J/K/P** según ganas; **N** sólo si el dock va a `Top`; **O/Q/S** no.
+   hechos y verificados en vivo. Y el follow-up de G, ✔ el **núcleo**: el reveal lo dispara
+   sólo el centro del blob, y el resto es hover + **rueda = volumen / tap = play/pause**.
+4. ✔ **Fuera del informe, ya hecho**: **Captura guardada** y **Compartiendo pantalla**, dos
+   actividades más del event-stream de niri (`ScreenshotCaptured`/`CastsChanged`).
+5. **H** (descargas) — el primer ítem con tick nuevo; patrón `thumbs_pending`.
+6. **I** (Ask AI) — el primer ítem con worker de CLI nuevo; patrón del tray worker.
+7. **Baratos y del event-stream que YA tenemos** (no estaban en el informe): `ConfigLoaded`
+   (re-leer tema/fondo), `OutputsChanged` (perfiles por salida), `FocusedWindow` (título de
+   la ventana en la isla), `PickColor` (tomar el acento de un píxel desde Ajustes→Colors) y
+   el screenshot nativo de niri (reemplaza el selector de región propio: **borra código**).
+8. Después: **J/K/P** y **DND** según ganas; **N** sólo si el dock va a `Top`; **O/Q/R/S** no.
 
 Tests: cada ítem deja **un** guard (los módulos `*_tests` ya siguen ese patrón) y se
 verifica a mano con `scripts/pointer.py` + `niri msg --json layers` + las líneas de log,
@@ -446,11 +476,12 @@ Al cerrar cada ítem, medir contra el baseline actual:
 
 | Área | Archivos |
 | --- | --- |
-| Actividades de isla | `src/render/mod.rs` (`island_activities`, `island_spans`), `src/render/layout.rs` (`island_plan`), `src/app/draw.rs` (tick + `draw_island`) |
-| Estado de la app | `src/app/mod.rs` (campo `island_activity`/cola, análogo a `island_ws_split`) |
-| Widget nuevo | `src/config.rs` (`WidgetKind`), `src/render/widget_spec.rs` (`WIDGETS`), `src/menu/widget_chips.rs` (`widget_label`), `src/widgets.rs` (`refresh_*`) |
+| Actividades de isla | `src/app/island_activity.rs` (`IslandActivities`, los `note_*`, la transición), `src/render/mod.rs` (`island_activities`, `island_spans`, `island_core_region`), `src/render/layout.rs` (`island_plan`), `src/app/draw.rs` (`draw_island`, ticks) |
+| Estado de la app | `src/app/mod.rs` (`island_activity`, `battery_activity`/`bluetooth_activity`, `needs_repaint`, `island_hover_at`, `frame_dt_ms`) |
+| Widget nuevo | `src/config.rs` (`WidgetKind`) + `src/widget.rs` (`WIDGETS`: medida, dibujo y click). Son **2 lugares**: el orden y las etiquetas de Ajustes salen de la tabla |
+| Event-stream de niri | `src/ipc.rs` (`niri_mensaje` + `IpcMessage`) y el `note_*` en `src/app/island_activity.rs` |
 | Lecturas nuevas | `src/widgets.rs` (`read_*` con `run_with_timeout`/`stat`), `src/ipc.rs` si hay worker |
 | IPC nuevo | `src/ipc.rs` (`IpcMessage`), `src/main.rs` (parseo de `--flag`) |
-| Ajustes | `src/config.rs` (`DockSettings`), `src/menu/settings.rs` (categoría) |
-| Curvas | util nueva en `src/render/` o `src/menu/mod.rs` (junto a `overlay_slide_offset`) |
+| Ajustes | `src/config.rs` (`DockSettings`), `src/menu/settings.rs` (`SettingId`) y la fila en `src/menu/dock_menu.rs` |
+| Animaciones | `src/menu/mod.rs` (`Pace`, `anim_step`, `anim_towards`, `lerp_factor`) |
 | Tests | el `mod *_tests` del módulo tocado |

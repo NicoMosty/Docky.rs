@@ -64,7 +64,7 @@ mod volume_panel;
 mod wallpaper_picker;
 mod ws_flash;
 use fonts::{apply_kitty_font, apply_system_gtk_font, apply_system_qt_font};
-pub(crate) use island_activity::IslandActivities;
+pub(crate) use island_activity::{BatteryActivity, BluetoothActivity, IslandActivities};
 mod handlers;
 use self::click_catcher::ClickCatcher;
 
@@ -617,16 +617,10 @@ pub struct App {
     pub frame_dt_ms: f32,
     /// Instante del frame anterior: `frame_dt_ms` sale de acá.
     pub last_frame_at: Option<std::time::Instant>,
-    /// Actividad de batería: si ya vimos el primer dato (warm-up, para no anunciar el
-    /// estado de arranque), el umbral ya avisado (101 = ninguno) y si estaba enchufada
-    /// en la lectura previa.
-    pub battery_activity_ready: bool,
-    pub battery_warned: u8,
-    pub battery_on_power: bool,
-    /// Actividad de Bluetooth: warm-up del primer dato y último dispositivo conectado
-    /// visto (la identidad para detectar conexión/desconexión).
-    pub bluetooth_activity_ready: bool,
-    pub bluetooth_connected: Option<String>,
+    /// Actividades de batería y Bluetooth: el estado de la transición (warm-up del primer
+    /// dato, umbrales ya avisados, último dispositivo). Ver `island_activity.rs`.
+    pub battery_activity: island_activity::BatteryActivity,
+    pub bluetooth_activity: island_activity::BluetoothActivity,
     pub reveal_anim: f32,
     pub reveal_target: f32,
     /// El Overview de niri está abierto. Mientras dure, el dock se queda visible

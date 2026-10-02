@@ -51,10 +51,7 @@ impl App {
             self.refresh_clipboard_filter(qh);
         }
         // ----- la isla avisa el destino con el MISMO camino que las capturas de niri -----
-        self.note_screenshot(
-            guardada.map(|p| p.to_string_lossy().into_owned()),
-            qh,
-        );
+        self.note_screenshot(guardada.map(|p| p.to_string_lossy().into_owned()), qh);
         trim_heap();
     }
 

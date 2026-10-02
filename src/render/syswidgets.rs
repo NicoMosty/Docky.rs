@@ -587,7 +587,12 @@ fn draw_cast_icon(
     let s = icon_r;
     let alpha = if active { 230 } else { 110 };
     let mut paint = Paint::default();
-    paint.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, alpha);
+    paint.set_color_rgba8(
+        colors.text_rgb.0,
+        colors.text_rgb.1,
+        colors.text_rgb.2,
+        alpha,
+    );
     paint.anti_alias = true;
     let screen = rounded_rect_path(cx - s * 0.92, cy - s * 0.68, s * 1.84, s * 1.36, s * 0.22);
     let stroke = tiny_skia::Stroke {
@@ -658,7 +663,12 @@ fn draw_screenshot_icon(
     let s = icon_r;
     let alpha = if active { 230 } else { 110 };
     let mut paint = Paint::default();
-    paint.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, alpha);
+    paint.set_color_rgba8(
+        colors.text_rgb.0,
+        colors.text_rgb.1,
+        colors.text_rgb.2,
+        alpha,
+    );
     paint.anti_alias = true;
     let stroke = tiny_skia::Stroke {
         width: s * 0.16,

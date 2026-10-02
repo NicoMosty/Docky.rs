@@ -610,13 +610,6 @@ impl App {
         !antes.is_empty() && antes != "--" && antes != despues
     }
 
-    /// El dispositivo Bluetooth conectado que vale la pena anunciar: el warm-up
-    /// (`ready = false`, el primer dato) no lo es, y cuenta tanto conectar como
-    /// desconectar (el paso a/desde `None`).
-    fn bluetooth_es_novedad(ready: bool, antes: Option<&str>, ahora: Option<&str>) -> bool {
-        ready && antes != ahora
-    }
-
     fn should_hide(&self) -> bool {
         // El foco del puntero se pierde (Leave) cuando el compositor reconfigura
         // la superficie, y en el borde exacto el hit-test oscila. Por eso no basta
@@ -898,23 +891,12 @@ impl App {
             self.sync_widget_bar_len();
             self.relayout_dock(qh);
         }
-        let antes = self.bluetooth_connected.clone();
         let ahora = self
             .widgets
             .bluetooth
             .as_ref()
             .and_then(|b| b.connected.clone());
-        if Self::bluetooth_es_novedad(
-            self.bluetooth_activity_ready,
-            antes.as_deref(),
-            ahora.as_deref(),
-        ) {
-            self.announce_island_activity(crate::config::WidgetKind::Bluetooth, qh);
-        }
-        // ----- el primer dato es el estado con el que arranca el dock, no una novedad
-        // (mismo warm-up que la batería) -----
-        self.bluetooth_activity_ready = true;
-        self.bluetooth_connected = ahora;
+        self.note_bluetooth_activity(ahora, qh);
     }
 
     /// Relee los workspaces lanzando `niri msg` (o `hyprctl`) y aplica el cambio. Va
@@ -1174,24 +1156,6 @@ mod island_activity_source_tests {
         assert!(!App::kblayout_es_novedad("EN", "EN"));
     }
 
-    #[test]
-    fn el_primer_bluetooth_no_es_novedad_y_conectar_si() {
-        // ----- warm-up: el primer dato nunca es novedad -----
-        assert!(!App::bluetooth_es_novedad(false, None, Some("headset")));
-        assert!(!App::bluetooth_es_novedad(false, None, None));
-        // ----- conectar y desconectar sí -----
-        assert!(App::bluetooth_es_novedad(true, None, Some("headset")));
-        assert!(App::bluetooth_es_novedad(true, Some("headset"), None));
-        // ----- cambiar de dispositivo también -----
-        assert!(App::bluetooth_es_novedad(true, Some("a"), Some("b")));
-        // ----- y el mismo no -----
-        assert!(!App::bluetooth_es_novedad(true, Some("a"), Some("a")));
-        assert!(!App::bluetooth_es_novedad(true, None, None));
-    }
-
-    /// El dwell del hover sobre la isla (G): sólo revela con el dock oculto, el autohide
-    /// encendido, el puntero encima y el plazo vencido. Es el borde de los 120 ms y las
-    /// tres condiciones juntas.
     #[test]
     fn el_dwell_revela_solo_con_las_tres_condiciones_y_el_plazo() {
         use super::{ISLAND_HOVER_MS, hover_due};
