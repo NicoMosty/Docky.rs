@@ -485,3 +485,56 @@ Al cerrar cada ítem, medir contra el baseline actual:
 | Ajustes | `src/config.rs` (`DockSettings`), `src/menu/settings.rs` (`SettingId`) y la fila en `src/menu/dock_menu.rs` |
 | Animaciones | `src/menu/mod.rs` (`Pace`, `anim_step`, `anim_towards`, `lerp_factor`) |
 | Tests | el `mod *_tests` del módulo tocado |
+
+---
+
+## 9. Ideas sin minar de los dos repos
+
+Sección agregada **después** de la propuesta original, al releer §2 contra lo que ya está en
+el árbol. Nada de esto se implementó: son las features de las dos fuentes que **no** figuran
+en §4 ni como “ya está”. Verificado contra el código que Docky hoy **no** las tiene (no hay
+emoji picker, ni búsqueda de keybinds, ni preview grande del portapapeles, ni panel-lista
+del tray, ni confirmación en el menú de energía, ni eventos de calendario, ni ajustes de
+velocidad/tope/duración).
+
+### 9.1 De island
+
+| Idea | Qué es | Costo | Riesgo |
+| --- | --- | --- | --- |
+| **Búsqueda de keybinds** | Una pestaña del overlay que lista y **filtra los atajos** de niri (`KeybindList.qml`) | ~120: parsear `~/.config/niri/config/binds/*.kdl` (el repo ya parsea `.kdl` para `wallpaper_program()`) | niri **no** expone los binds por IPC: hay que leer el archivo del usuario |
+| **Panel-lista del tray** | Una vista con los items del SNI y sus menús (`TrayList.qml`) | ~150 | los datos ya están (`tray.rs`), pero hay que listar y navegar |
+| **Emoji picker** | Pestaña que busca y copia emojis (`EmojiPicker.qml`) | ~150 | **bloqueo duro**: el canvas rasteriza texto con una fuente normal; sin una **fuente de emoji en color** saldrían cuadraditos. Verificar **antes** de empezar |
+| **`motionScale`** | Multiplicador de la **velocidad** de todas las animaciones (`IslandSettings.qml`). Docky sólo tiene `smooth_transitions` (on/off) | ~20: multiplica las duraciones de `menu::Pace` | — |
+| **Duración del aviso** | `bannerSeconds` (island) / `notificationDisplayTime` (ChillPill). Hoy el timeout del toast es fijo (4 s + 0,9 s por línea) | ~15: una fila más, y que el label la lea | — |
+| **SoundWave / SiriDots** | Onda animada con la música y puntitos de “pensando” | ~80 | **descartado por CPU**: necesita el loop de frames vivo, la misma razón que cava (Q) |
+
+### 9.2 De ChillPill-Shell
+
+| Idea | Qué es | Costo | Riesgo |
+| --- | --- | --- | --- |
+| **VPN como estado** | Widget/indicador de VPN (como Network) — `Vpn.qml` | ~40: `nmcli`/`wg` + `read_*` en el tick | la fuente depende del setup (NetworkManager vs WireGuard) |
+| **Portapapeles: preview grande + multi-select** | `Tab` para ver la imagen/texto completo, `Shift+↑↓` rango, `Shift+Space` elegir y `Del` borrar varios (`Cliphist.qml`) | ~200 | es la que más se siente en el uso diario y la más cara; hoy hay miniaturas y borrado de a uno |
+| **Calendario con eventos** | Además del mes, marcar los días con eventos (`CalendarBox.qml` + `scripts/calendar_events.py`) | ~150 | hace falta una **fuente** de eventos (el script del repo); hoy `menu/calendar.rs` es sólo aritmética de fechas |
+| **Confirmación en el menú de energía** | `confirmPowerActions`: un paso extra antes de apagar/reiniciar | ~40: un estado más en el popup de energía | — |
+| **`maxVolume`** | Tope del volumen (barra, rueda y pasos) | ~20 | — |
+| **`showSensitiveInfo`** | Ocultar el SSID (y la IP) por defecto | ~15 | — |
+| **Popup de media automático** | `mediaPopupDuration`: al empezar a sonar, abrir el reproductor solo | ~30 | hoy se abre por click; ojo con no pelearse con el autohide |
+| **`IpStatus`** | IP local en la barra | ~30 | lo cubre el pill de Network con un campo más |
+
+### 9.3 Lo que ya está (no re-portar)
+
+De §4: Timer (J), Tooltips (P), Weather/DataUsage (R), Descargas (H), Ask AI (I), cava (Q),
+Notch (N), panel wifi/BT con contraseña (S), wallpaper switcher, menú de energía, portapapeles
+(con miniaturas), notificaciones con dedup, panel de ajustes, launcher y control center.
+
+### 9.4 Por dónde empezar
+
+1. **`motionScale` + duración del aviso** — dos ajustes, ~35 líneas juntos, y cierran una
+   asimetría: ya está el *on/off* de las transiciones (`smooth_transitions`) pero no la
+   **velocidad** ni la duración del aviso.
+2. **Búsqueda de keybinds** — producto nuevo y barato, del mismo tipo que el launcher.
+3. **Portapapeles: preview grande + multi-select** — la más útil en el uso diario, la más
+   cara (~200 líneas).
+
+**Antes de comprometerse con el emoji picker**: verificar que el canvas pueda pintar emoji
+en color (fuente + soporte del rasterizador). Es el único bloqueo duro de la lista.
