@@ -29,6 +29,19 @@ impl CompositorHandler for App {
         surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
+        // ----- reloj del frame: las animaciones avanzan por tiempo, no por frame, así no
+        // dependen del frame rate del compositor (ver `menu::anim_step`) -----
+        let now = std::time::Instant::now();
+        let gap_ms = self
+            .last_frame_at
+            .map(|t| now.duration_since(t).as_secs_f32() * 1000.0);
+        self.frame_dt_ms = match gap_ms {
+            // ----- un hueco largo = la animación estaba quieta: arranca con un frame
+            // nominal en vez de dar un salto (el primer paso salía 0.30 en vez de 0.05) -----
+            Some(ms) if ms <= 50.0 => ms,
+            _ => 16.7,
+        };
+        self.last_frame_at = Some(now);
         if self
             .screenshot
             .as_ref()
@@ -52,9 +65,7 @@ impl CompositorHandler for App {
             // frame (`is_toast`, arriba). Con la rama vieja, cualquier redibujado del
             // dock mientras el aviso estaba arriba consumía el frame del dock y
             // frenaba la animación del reveal/de la isla. -----
-            if self.osd_mode.is_some() {
-                self.tick_osd_frame(qh);
-            } else if self.ws_flash_mode.is_some() {
+            if self.ws_flash_mode.is_some() {
                 self.tick_ws_flash_frame(qh);
             } else if self.app_search_mode.is_some() {
                 self.tick_app_search_frame(qh);
@@ -70,7 +81,7 @@ impl CompositorHandler for App {
                 let revealing = self.tick_reveal_frame(qh);
                 if self.marquee.workspace_animating() {
                     self.tick_workspace(qh);
-                } else if !splitting && !revealing && icons_animating {
+                } else if !splitting && !revealing && (icons_animating || self.needs_repaint) {
                     self.draw(qh);
                 }
             }

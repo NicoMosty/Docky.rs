@@ -472,19 +472,18 @@ impl App {
     }
 
     pub(super) fn tick_popup_frame(&mut self, qh: &QueueHandle<Self>) {
+        let dt = self.frame_dt_ms;
         let Some(p) = self.popup_mode.as_mut() else {
             return;
         };
         p.awaiting_frame = false;
-        let animating = if p.anim < p.target_anim {
-            p.anim = (p.anim + menu::ANIM_STEP_OPEN).min(p.target_anim);
-            true
-        } else if p.anim > p.target_anim {
-            p.anim = (p.anim - menu::ANIM_STEP_CLOSE).max(p.target_anim);
-            true
-        } else {
-            false
-        };
+        let animating = menu::anim_towards(
+            &mut p.anim,
+            p.target_anim,
+            dt,
+            menu::Pace::Open,
+            menu::Pace::Close,
+        );
         let closing = p.closing;
         let anim = p.anim;
 

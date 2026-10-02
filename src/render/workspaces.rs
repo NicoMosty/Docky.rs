@@ -364,6 +364,7 @@ mod workspace_hit_tests {
                 volume: None,
                 mic: None,
                 recording: None,
+                clipboard: None,
                 network: crate::widgets::NetworkInfo {
                     label: "wifi".into(),
                     online: true,

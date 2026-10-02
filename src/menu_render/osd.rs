@@ -10,25 +10,15 @@ pub struct OsdArgs<'a> {
     pub render_scale: f32,
 }
 
+/// Contenido del OSD (icono + barra + nivel), **sin fondo**: el fondo es la cápsula
+/// del dock (`render::draw_capsule`), porque el OSD es un estado de la isla, no un
+/// panel con superficie propia. `panel_w`/`panel_h` son las medidas LÓGICAS de la
+/// píldora (el eje largo es `OSD_PILL_LEN` y el corto, el grosor del dock).
 pub fn draw_osd(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: &OsdArgs) {
     let s = args.render_scale;
     let w = args.panel_w * s;
     let h = args.panel_h * s;
     let settings = &args.dock.config.settings;
-
-    let bg = panel_bg(settings);
-    let path = rounded_rect_path(0.0, 0.0, w, h, menu_radius(settings, s));
-    let mut paint = Paint::default();
-    paint.set_color_rgba8(bg.0, bg.1, bg.2, bg.3);
-    paint.anti_alias = true;
-    pixmap.fill_path(
-        &path,
-        &paint,
-        tiny_skia::FillRule::Winding,
-        Transform::identity(),
-        None,
-    );
-    stroke_menu_border(pixmap, &path, settings, s);
 
     let acc = accent(settings);
     let icon_color = if args.muted { (255, 69, 58, 255) } else { acc };

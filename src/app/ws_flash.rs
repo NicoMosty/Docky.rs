@@ -34,7 +34,9 @@ impl App {
         // de reemplazarla (el HUD de siempre, que la hacía "desaparecer" 3 s), la isla
         // se abre en dos y el indicador entra entre la hora y la batería. El HUD queda
         // como fallback para cuando no hay isla (sin actividades no hay dónde ponerlo). -----
-        if !super::render::island_activities(&self.widgets, 0.0).is_empty() {
+        if !super::render::island_activities(&self.widgets, 0.0, self.active_island_activity())
+            .is_empty()
+        {
             log::debug!("wsflash: split -> abrir la isla con el indicador en el medio");
             self.island_ws_target = 1.0;
             // ----- el timer del HUD ya está armado a `WS_FLASH_TIMEOUT_MS`: el canal
@@ -219,19 +221,18 @@ impl App {
     }
 
     pub(super) fn tick_ws_flash_frame(&mut self, qh: &QueueHandle<Self>) {
+        let dt = self.frame_dt_ms;
         let (panel_animating, closing, anim) = {
             let Some(m) = self.ws_flash_mode.as_mut() else {
                 return;
             };
-            let animating = if m.anim < m.target_anim {
-                m.anim = (m.anim + menu::ANIM_STEP_OPEN).min(m.target_anim);
-                true
-            } else if m.anim > m.target_anim {
-                m.anim = (m.anim - menu::ANIM_STEP_CLOSE).max(m.target_anim);
-                true
-            } else {
-                false
-            };
+            let animating = menu::anim_towards(
+                &mut m.anim,
+                m.target_anim,
+                dt,
+                menu::Pace::Open,
+                menu::Pace::Close,
+            );
             (animating, m.closing, m.anim)
         };
 

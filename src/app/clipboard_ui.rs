@@ -272,21 +272,20 @@ impl App {
     pub(super) fn tick_clipboard_frame(&mut self, qh: &QueueHandle<Self>) {
         // ----- transiciones apagadas: el scroll salta, no se anima -----
         let smooth = self.dock.config.settings.smooth_transitions;
+        let dt = self.frame_dt_ms;
         let Some(cm) = self.clipboard_mode.as_mut() else {
             return;
         };
-        let fade_animating = if cm.anim < cm.target_anim {
-            cm.anim = (cm.anim + menu::ANIM_STEP_OPEN).min(cm.target_anim);
-            true
-        } else if cm.anim > cm.target_anim {
-            cm.anim = (cm.anim - menu::ANIM_STEP_CLOSE).max(cm.target_anim);
-            true
-        } else {
-            false
-        };
+        let fade_animating = menu::anim_towards(
+            &mut cm.anim,
+            cm.target_anim,
+            dt,
+            menu::Pace::Open,
+            menu::Pace::Close,
+        );
         let scroll_delta = cm.scroll_target - cm.scroll_y;
         let scroll_animating = if smooth && scroll_delta.abs() > 0.5 {
-            cm.scroll_y += scroll_delta * 0.3;
+            cm.scroll_y += scroll_delta * menu::lerp_factor(0.3, dt);
             true
         } else {
             cm.scroll_y = cm.scroll_target;

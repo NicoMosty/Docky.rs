@@ -6,6 +6,22 @@ use super::*;
 /// espurio.
 pub(crate) const LEAVE_HIDE_MS: u64 = 150;
 
+/// Dwell del hover sobre la isla (G): el puntero tiene que quedarse este plazo sobre el
+/// blob para que el dock se revele. Antes de eso la isla se ve con `HOVER_LIFT`, así que
+/// cruzar el borde de paso ya no revela el dock.
+pub(crate) const ISLAND_HOVER_MS: u64 = 120;
+
+/// Cuánto crece la isla con el puntero encima. Sólo el eje largo: el corto es el grosor
+/// del dock y no tiene holgura.
+pub(crate) const HOVER_LIFT: f32 = 1.018;
+
+/// ¿Toca revelar por el dwell del hover sobre la isla? Pura —y con test— para fijar el
+/// borde de `ISLAND_HOVER_MS` y las tres condiciones (oculto, con autohide, con puntero
+/// encima).
+fn hover_due(hidden: bool, autohide: bool, hovering: bool, elapsed_ms: Option<u128>) -> bool {
+    hidden && autohide && hovering && elapsed_ms.is_some_and(|ms| ms >= ISLAND_HOVER_MS as u128)
+}
+
 impl App {
     pub(super) fn draw(&mut self, qh: &QueueHandle<Self>) {
         self.draw_ex(qh, false, false);
@@ -21,6 +37,10 @@ impl App {
         if self.first_configure {
             return;
         }
+        // ----- el frame que se está por pintar ya incluye la actividad de la isla: el
+        // flag se limpia acá (si no, el handler de frame redibujaría en cada callback
+        // para siempre). El handler lo lee ANTES de llamar a `draw`, que pasa por acá. -----
+        self.needs_repaint = false;
         self.enforce_keyboard();
         // ----- el catcher de clicks afuera sigue al panel abierto: se crea al
         // abrir, recalcula el agujero cuando cambia el alto (cambio de pestaña) y
@@ -50,6 +70,13 @@ impl App {
         // hay ventana que justifique ocultarlo): misma regla que aplica el refresco
         // de workspaces -----
         self.reveal_dock_if_stays(qh);
+        // ----- el OSD es un ESTADO de la isla: no presta la superficie, así que se
+        // dibuja igual con el dock oculto o visible (reemplaza el contenido). Va
+        // ANTES del corte de "oculto" para que también se vea sobre la isla. -----
+        if self.osd_mode.is_some() {
+            self.draw_osd_mode(qh);
+            return;
+        }
         // ----- oculto: pinta transparente (sin desmapear; attach(NULL)
         // resetea el tamaño de la layer surface en niri y rompe el remapeo) -----
         // Con el colapso animado a medias el transparente todavía no va: la cápsula
@@ -68,9 +95,7 @@ impl App {
         }
         // ----- el toast de notificaciones NO se dibuja acá: tiene superficie propia
         // (arriba a la derecha), así que el dock sigue mostrando lo suyo -----
-        if self.osd_mode.is_some() {
-            self.draw_osd_mode(qh);
-        } else if self.ws_flash_mode.is_some() {
+        if self.ws_flash_mode.is_some() {
             self.draw_ws_flash_mode(qh);
         } else if self.app_search_mode.is_some() {
             self.draw_app_search_mode(qh);
@@ -114,13 +139,20 @@ impl App {
         if self.island_ws_split == self.island_ws_target {
             return false;
         }
-        self.island_ws_split = if !self.dock.config.settings.smooth_transitions {
-            self.island_ws_target
-        } else if self.island_ws_split < self.island_ws_target {
-            (self.island_ws_split + menu::WS_SPLIT_STEP_OPEN).min(self.island_ws_target)
+        if !self.dock.config.settings.smooth_transitions {
+            self.island_ws_split = self.island_ws_target;
         } else {
-            (self.island_ws_split - menu::WS_SPLIT_STEP_CLOSE).max(self.island_ws_target)
-        };
+            // ----- abre con el ritmo general y CIERRA más rápido (`MorphClose`): es un
+            // indicador transitorio, tiene que irse antes de lo que llegó -----
+            let dt = self.frame_dt_ms;
+            let _ = menu::anim_towards(
+                &mut self.island_ws_split,
+                self.island_ws_target,
+                dt,
+                menu::Pace::Open,
+                menu::Pace::MorphClose,
+            );
+        }
         if self.dock_visible {
             self.draw(qh);
         } else {
@@ -138,13 +170,18 @@ impl App {
         }
         let smooth = self.dock.config.settings.smooth_transitions;
         let antes = self.reveal_anim;
-        self.reveal_anim = if !smooth {
-            self.reveal_target
-        } else if self.reveal_anim < self.reveal_target {
-            (self.reveal_anim + menu::ANIM_STEP_OPEN).min(self.reveal_target)
+        if !smooth {
+            self.reveal_anim = self.reveal_target;
         } else {
-            (self.reveal_anim - menu::ANIM_STEP_CLOSE).max(self.reveal_target)
-        };
+            let dt = self.frame_dt_ms;
+            let _ = menu::anim_towards(
+                &mut self.reveal_anim,
+                self.reveal_target,
+                dt,
+                menu::Pace::Open,
+                menu::Pace::Close,
+            );
+        }
         log::debug!(
             "reveal:{} {:.2} -> {:.2} visible={}",
             crate::app::hdbg_ms(),
@@ -178,11 +215,28 @@ impl App {
     /// Sin actividad (ni media sonando, ni volumen, ni batería) NO se inventa un
     /// blob vacío: queda el buffer transparente de siempre.
     pub(super) fn draw_island(&mut self, qh: &QueueHandle<Self>) {
-        if render::island_activities(&self.widgets, self.island_ws_split).is_empty() {
+        if render::island_activities(
+            &self.widgets,
+            self.island_ws_split,
+            self.active_island_activity(),
+        )
+        .is_empty()
+        {
             self.draw_hidden();
             return;
         }
         let scale = self.output_scale.max(1) as f32;
+        // ----- la actividad viva se lee ANTES de pedir prestado `self.pool` (el
+        // préstamo mutable vive hasta el `bgra_from_rgba` y no deja llamar a un método
+        // `&self` en el medio) -----
+        let active = self.active_island_activity();
+        // ----- hover lift (G): con el puntero sobre la isla (dwell en curso) crece un
+        // poco; ver `island_hover_at` -----
+        let hover_lift = if self.island_hover_at.is_some() {
+            HOVER_LIFT
+        } else {
+            1.0
+        };
         let (base_w, base_h) = self.dock.base_size();
         let width = (base_w as f32 * scale).round() as i32;
         let height = (base_h as f32 * scale).round() as i32;
@@ -227,6 +281,8 @@ impl App {
                 &mut self.marquee,
                 scale,
                 self.island_ws_split,
+                active,
+                hover_lift,
             )
         };
         bgra_from_rgba(pixmap.data(), canvas);
@@ -303,8 +359,10 @@ impl App {
         // (el préstamo mutable vive hasta el `bgra_from_rgba` del final y no deja
         // llamar a un método &self en el medio) -----
         let reveal = self.dock_reveal();
-        // ----- el split de la isla (indicador de workspaces) viaja con el dibujo -----
+        // ----- el split de la isla (indicador de workspaces) viaja con el dibujo, y la
+        // actividad viva fija el piso del colapso -----
         let ws_split = self.island_ws_split;
+        let active = self.active_island_activity();
         let stride = width * 4;
 
         let (buffer, canvas) = self
@@ -334,6 +392,7 @@ impl App {
             scale,
             reveal,
             ws_split,
+            active,
         );
         drop(tray_icons);
         bgra_from_rgba(pixmap.data(), canvas);
@@ -362,7 +421,6 @@ impl App {
     // ----- layer borrowed -----
     pub(crate) fn layer_is_borrowed(&self) -> bool {
         self.dock_menu_mode.is_some()
-            || self.osd_mode.is_some()
             || self.ws_flash_mode.is_some()
             || self.wallpaper_mode.is_some()
             || self.app_search_mode.is_some()
@@ -370,7 +428,7 @@ impl App {
             || self.notifications_mode.is_some()
     }
 
-    pub(super) fn relayout_dock(&mut self, qh: &QueueHandle<Self>) {
+    pub(crate) fn relayout_dock(&mut self, qh: &QueueHandle<Self>) {
         self.sync_widget_bar_len();
         self.dock.relayout();
         // ----- el panel de ajustes comparte la superficie y su tamaño sale del
@@ -403,7 +461,6 @@ impl App {
     /// superficie sin que el dock tenga que mostrarse.
     fn forces_dock_visible(&self) -> bool {
         self.dock_menu_mode.is_some()
-            || self.osd_mode.is_some()
             || self.wallpaper_mode.is_some()
             || self.app_search_mode.is_some()
             || self.clipboard_mode.is_some()
@@ -522,11 +579,41 @@ impl App {
             .send(super::calendar::CALENDAR_HOVER_MS);
     }
 
+    /// ¿Toca revelar el dock porque el puntero se quedó sobre la isla el plazo del dwell?
+    /// Sólo con el dock oculto y el autohide encendido (sin autohide no hay isla).
+    fn island_hover_due(&self) -> bool {
+        hover_due(
+            !self.dock_visible,
+            self.dock.config.settings.autohide,
+            self.dock.pointer_pos.is_some(),
+            self.island_hover_at.map(|t| t.elapsed().as_millis()),
+        )
+    }
+
+    /// El dwell comparte el canal del autohide (`arm_calendar_tick` usa la misma jugada):
+    /// el envío es directo, así que también sirve con el autohide apagado.
+    pub(super) fn arm_island_hover_tick(&mut self) {
+        let _ = self.autohide_hide_tx.send(ISLAND_HOVER_MS);
+    }
+
     /// ¿Ya toca cerrar el menú? El puntero tiene que haberse ido del dock y no estar
     /// dentro del menú, y tiene que haber pasado el plazo corto: si no, el salto
     /// icono -> menú (Leave + Enter en el mismo lote de eventos) lo cerraría al pasar.
     fn popup_dismiss_due(popup_hovered: bool, ptr_on_dock: bool, left_ms: Option<u128>) -> bool {
         !popup_hovered && !ptr_on_dock && left_ms.is_some_and(|ms| ms >= LEAVE_HIDE_MS as u128)
+    }
+
+    /// El cambio de layout de teclado que vale la pena anunciar en la isla: ignora el
+    /// estado de arranque (`--`/vacío) y los "cambios" que no cambian nada.
+    fn kblayout_es_novedad(antes: &str, despues: &str) -> bool {
+        !antes.is_empty() && antes != "--" && antes != despues
+    }
+
+    /// El dispositivo Bluetooth conectado que vale la pena anunciar: el warm-up
+    /// (`ready = false`, el primer dato) no lo es, y cuenta tanto conectar como
+    /// desconectar (el paso a/desde `None`).
+    fn bluetooth_es_novedad(ready: bool, antes: Option<&str>, ahora: Option<&str>) -> bool {
+        ready && antes != ahora
     }
 
     fn should_hide(&self) -> bool {
@@ -576,6 +663,8 @@ impl App {
         // de dibujo lo prefiere a él: si no se cierra acá, el dock queda revelado
         // por dentro pero se sigue viendo sólo el indicador en lugar del dock
         // completo. -----
+        // ----- el dwell del hover termina acá: el dock pasa a visible -----
+        self.island_hover_at = None;
         self.close_ws_flash_for_dock(qh);
         self.set_dock_visible(true);
         self.autohide_armed = false;
@@ -596,6 +685,8 @@ impl App {
             if visible { "show" } else { "hide" }
         );
         self.dock_visible = visible;
+        // ----- el dwell del hover sobre la isla no sobrevive a un cambio de visibilidad -----
+        self.island_hover_at = None;
         // ----- el destino de la animación de aparición. Con las transiciones
         // apagadas no hay animación: el estado final ya es el destino. -----
         self.reveal_target = if visible { 1.0 } else { 0.0 };
@@ -625,6 +716,15 @@ impl App {
             self.menu.is_some(),
             self.popup_mode.is_some()
         );
+        // ----- vencimiento de la actividad viva de la isla: es el único tick que corre
+        // con el dock oculto (el mismo canal del autohide, `arm_island_activity_tick`) -----
+        self.tick_island_activity(qh);
+        // ----- dwell del hover sobre la isla (G): el puntero se quedó sobre el blob el
+        // plazo corto -> revelar. Es el mismo tick, agendado por `arm_island_hover_tick`. -----
+        if self.island_hover_due() {
+            self.reveal_dock(qh);
+            return;
+        }
         // ----- el menú se cierra cuando el puntero no está ni en el dock ni en él:
         // antes se cerraba sólo con un click, y ese click lo consumía, así que el
         // menú "no aparecía" a la primera y quedaba abierto para siempre. -----
@@ -682,8 +782,13 @@ impl App {
         // toda la altura de la pantalla. Sin isla (sin datos) queda la superficie
         // entera, si no el dock no se podría revelar nunca. -----
         let tray_count = self.tray.lock().unwrap().len();
-        let isla =
-            render::island_blob_region(&self.dock, &self.widgets, tray_count, self.island_ws_split);
+        let isla = render::island_blob_region(
+            &self.dock,
+            &self.widgets,
+            tray_count,
+            self.island_ws_split,
+            self.active_island_activity(),
+        );
         let want: Option<(i32, i32, i32, i32)> = if self.dock_visible { None } else { isla };
         // ----- idempotente: re-setear la región en cada frame es un `commit` de más -----
         if self.applied_input != Some(want) {
@@ -769,7 +874,11 @@ impl App {
         if !self.dock.icons.is_empty() || !self.widget_placed(crate::config::WidgetKind::Battery) {
             return;
         }
-        if !self.widgets.refresh_battery() {
+        let changed = self.widgets.refresh_battery();
+        // ----- la actividad se evalúa SIEMPRE, no sólo cuando cambió: el warm-up
+        // necesita ver el primer dato (si no, la primera conexión real se la comía) -----
+        self.note_battery_activity(self.widgets.battery, qh);
+        if !changed {
             return;
         }
         self.sync_widget_bar_len();
@@ -777,13 +886,34 @@ impl App {
     }
 
     pub(crate) fn refresh_bluetooth(&mut self, qh: &QueueHandle<Self>) {
-        if !self.dock.icons.is_empty() || !self.widget_placed(crate::config::WidgetKind::Bluetooth)
-        {
+        if !self.dock.icons.is_empty() {
             return;
         }
+        // ----- NO está gateado por el widget: el evento de D-Bus ya llegó y
+        // `read_bluetooth` son dos `bluetoothctl` SÓLO acá (no hay tick), así que la
+        // actividad de la isla funciona aunque el widget no esté colocado. -----
         self.widgets.refresh_bluetooth();
-        self.sync_widget_bar_len();
-        self.relayout_dock(qh);
+        if self.widget_placed(crate::config::WidgetKind::Bluetooth) {
+            self.sync_widget_bar_len();
+            self.relayout_dock(qh);
+        }
+        let antes = self.bluetooth_connected.clone();
+        let ahora = self
+            .widgets
+            .bluetooth
+            .as_ref()
+            .and_then(|b| b.connected.clone());
+        if Self::bluetooth_es_novedad(
+            self.bluetooth_activity_ready,
+            antes.as_deref(),
+            ahora.as_deref(),
+        ) {
+            self.announce_island_activity(crate::config::WidgetKind::Bluetooth, qh);
+        }
+        // ----- el primer dato es el estado con el que arranca el dock, no una novedad
+        // (mismo warm-up que la batería) -----
+        self.bluetooth_activity_ready = true;
+        self.bluetooth_connected = ahora;
     }
 
     /// Relee los workspaces lanzando `niri msg` (o `hyprctl`) y aplica el cambio. Va
@@ -949,12 +1079,20 @@ impl App {
     /// El layout de teclado cambió: niri lo avisa por el event-stream, así que el
     /// widget se actualiza al instante y el tick de 2 s no tiene que sondearlo.
     pub(crate) fn refresh_kblayout(&mut self, qh: &QueueHandle<Self>) {
-        if !self.widget_placed(crate::config::WidgetKind::KbdLayout) {
+        // ----- NO está gateado por el widget: el layout llega por el event-stream y
+        // `read_kblayout` es un `niri msg` SÓLO por cambio (no hay tick), así que la
+        // actividad/HUD de la isla funciona aunque el widget no esté colocado. -----
+        let antes = self.widgets.kblayout.short.clone();
+        if !self.widgets.refresh_kblayout() {
             return;
         }
-        if self.widgets.refresh_kblayout() {
+        if self.widget_placed(crate::config::WidgetKind::KbdLayout) {
             self.sync_widget_bar_len();
             self.relayout_dock(qh);
+        }
+        // ----- el primer layout real (de "--"/vacío) es el arranque, no una novedad -----
+        if Self::kblayout_es_novedad(&antes, &self.widgets.kblayout.short) {
+            self.announce_island_activity(crate::config::WidgetKind::KbdLayout, qh);
         }
     }
 
@@ -1013,5 +1151,65 @@ mod popup_dismiss_tests {
         assert!(!App::popup_dismiss_due(false, false, Some(PLAZO - 1)));
         // sin Leave registrado tampoco (el puntero nunca dejó el dock)
         assert!(!App::popup_dismiss_due(false, false, None));
+    }
+}
+
+/// La decisión de si un cambio de fuente (layout de teclado, bluetooth) es una novedad
+/// que la isla anuncia. Puro y con test: el warm-up del primer dato es el bug clásico
+/// (mostrar el estado de arranque como si acabara de pasar).
+#[cfg(test)]
+mod island_activity_source_tests {
+    use super::App;
+
+    #[test]
+    fn el_layout_de_arranque_no_es_novedad() {
+        // ----- el primer dato real (de "--" o vacío) NO se anuncia -----
+        assert!(!App::kblayout_es_novedad("--", "EN"));
+        assert!(!App::kblayout_es_novedad("", "EN"));
+        // ----- un cambio real SÍ -----
+        assert!(App::kblayout_es_novedad("EN", "ES"));
+        assert!(App::kblayout_es_novedad("ES", "EN"));
+        // ----- y el mismo layout otra vez no -----
+        assert!(!App::kblayout_es_novedad("EN", "EN"));
+    }
+
+    #[test]
+    fn el_primer_bluetooth_no_es_novedad_y_conectar_si() {
+        // ----- warm-up: el primer dato nunca es novedad -----
+        assert!(!App::bluetooth_es_novedad(false, None, Some("headset")));
+        assert!(!App::bluetooth_es_novedad(false, None, None));
+        // ----- conectar y desconectar sí -----
+        assert!(App::bluetooth_es_novedad(true, None, Some("headset")));
+        assert!(App::bluetooth_es_novedad(true, Some("headset"), None));
+        // ----- cambiar de dispositivo también -----
+        assert!(App::bluetooth_es_novedad(true, Some("a"), Some("b")));
+        // ----- y el mismo no -----
+        assert!(!App::bluetooth_es_novedad(true, Some("a"), Some("a")));
+        assert!(!App::bluetooth_es_novedad(true, None, None));
+    }
+
+    /// El dwell del hover sobre la isla (G): sólo revela con el dock oculto, el autohide
+    /// encendido, el puntero encima y el plazo vencido. Es el borde de los 120 ms y las
+    /// tres condiciones juntas.
+    #[test]
+    fn el_dwell_revela_solo_con_las_tres_condiciones_y_el_plazo() {
+        use super::{ISLAND_HOVER_MS, hover_due};
+        let plazo = ISLAND_HOVER_MS as u128;
+        // ----- el caso feliz: oculto + autohide + encima + vencido -----
+        assert!(hover_due(true, true, true, Some(plazo)));
+        assert!(hover_due(true, true, true, Some(plazo + 50)));
+        // ----- antes del plazo no -----
+        assert!(!hover_due(true, true, true, Some(plazo - 1)));
+        // ----- falta alguna condición: no -----
+        assert!(
+            !hover_due(false, true, true, Some(plazo)),
+            "dock ya visible"
+        );
+        assert!(
+            !hover_due(true, false, true, Some(plazo)),
+            "sin autohide no hay isla"
+        );
+        assert!(!hover_due(true, true, false, Some(plazo)), "puntero afuera");
+        assert!(!hover_due(true, true, true, None), "sin hover registrado");
     }
 }

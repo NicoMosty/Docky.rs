@@ -133,6 +133,8 @@ pub(super) fn draw_dock_into(
             // visible y la isla no existe. -----
             1.0,
             0.0,
+            // ----- con el panel abierto el dock está visible y la isla no existe -----
+            None,
         );
     }
     dst.draw_pixmap(
@@ -406,8 +408,8 @@ impl App {
     }
 
     pub(super) fn close_dock_menu(&mut self, qh: &QueueHandle<Self>) {
-        // ----- cierre inmediato: la animación era de 20 frames (ANIM_STEP_CLOSE
-        // = 0.05) y ese era el ~1s que tardaba en reaccionar después de Escape.
+        // ----- cierre inmediato: la animación era de ~20 frames (`Pace::Close` = 333 ms)
+        // y ese era el ~1s que tardaba en reaccionar después de Escape.
         // El teclado se suelta en el mismo paso: así no queda secuestrado -----
         if let Some(dm) = self.dock_menu_mode.as_mut() {
             dm.dragging_slider = None;
@@ -533,34 +535,31 @@ impl App {
     }
 
     pub(super) fn tick_dock_menu_frame(&mut self, qh: &QueueHandle<Self>) {
+        let dt = self.frame_dt_ms;
         let Some(dm) = self.dock_menu_mode.as_mut() else {
             return;
         };
-        let fade_animating = if dm.anim < dm.target_anim {
-            dm.anim = (dm.anim + menu::ANIM_STEP_OPEN).min(dm.target_anim);
-            true
-        } else if dm.anim > dm.target_anim {
-            dm.anim = (dm.anim - menu::ANIM_STEP_CLOSE).max(dm.target_anim);
-            true
-        } else {
-            false
-        };
+        let fade_animating = menu::anim_towards(
+            &mut dm.anim,
+            dm.target_anim,
+            dt,
+            menu::Pace::Open,
+            menu::Pace::Close,
+        );
         let dropdown_target = if dm.open_dropdown != menu::OpenDropdown::None {
             1.0
         } else {
             0.0
         };
-        let dropdown_animating = if dm.dropdown_anim < dropdown_target {
-            dm.dropdown_anim = (dm.dropdown_anim + menu::ANIM_STEP_OPEN).min(dropdown_target);
-            true
-        } else if dm.dropdown_anim > dropdown_target {
-            dm.dropdown_anim = (dm.dropdown_anim - menu::ANIM_STEP_CLOSE).max(dropdown_target);
-            true
-        } else {
-            false
-        };
+        let dropdown_animating = menu::anim_towards(
+            &mut dm.dropdown_anim,
+            dropdown_target,
+            dt,
+            menu::Pace::Open,
+            menu::Pace::Close,
+        );
         let slide_animating = if dm.slide_anim < 1.0 {
-            dm.slide_anim = (dm.slide_anim + menu::ANIM_STEP_OPEN).min(1.0);
+            dm.slide_anim = menu::anim_step(dm.slide_anim, 1.0, dt, menu::Pace::Open);
             true
         } else {
             false

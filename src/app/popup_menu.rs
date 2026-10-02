@@ -279,19 +279,18 @@ impl App {
     }
 
     pub(super) fn tick_menu_frame(&mut self, qh: &QueueHandle<Self>) {
+        let dt = self.frame_dt_ms;
         let Some(menu) = self.menu.as_mut() else {
             return;
         };
         menu.awaiting_frame = false;
-        let animating = if menu.anim < menu.target_anim {
-            menu.anim = (menu.anim + menu::ANIM_STEP_OPEN).min(menu.target_anim);
-            true
-        } else if menu.anim > menu.target_anim {
-            menu.anim = (menu.anim - menu::ANIM_STEP_CLOSE).max(menu.target_anim);
-            true
-        } else {
-            false
-        };
+        let animating = menu::anim_towards(
+            &mut menu.anim,
+            menu.target_anim,
+            dt,
+            menu::Pace::Open,
+            menu::Pace::Close,
+        );
         let closing = menu.closing;
         let anim = menu.anim;
         let has_stepper = menu.held_stepper.is_some();

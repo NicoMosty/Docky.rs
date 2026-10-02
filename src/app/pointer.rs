@@ -49,13 +49,30 @@ impl App {
         // "Isla dinámica, lo que sigue" en AGENTS.md. -----
         if !self.dock_visible {
             match event.kind {
-                PointerEventKind::Enter { .. }
-                | PointerEventKind::Motion { .. }
-                | PointerEventKind::Press { .. } => {
-                    // registrar el puntero ya en el evento que revela: si no, el
-                    // timer no ve interacción y vuelve a ocultarlo enseguida
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    // ----- dwell (G): el primer evento del hover arma el plazo y la isla se
+                    // ve con el lift; recién al vencer se revela (ver `island_hover_due`).
+                    // Registrar el puntero ya, si no el timer no ve interacción. -----
+                    self.dock.set_pointer(Some(event.position));
+                    if self.island_hover_at.is_none() {
+                        self.island_hover_at = Some(std::time::Instant::now());
+                        self.arm_island_hover_tick();
+                        log::debug!("island: hover dwell ({} ms)", super::draw::ISLAND_HOVER_MS);
+                    }
+                    self.needs_repaint = true;
+                    self.request_redraw(qh);
+                }
+                PointerEventKind::Press { .. } => {
+                    // ----- un click revela YA: no espera el dwell -----
                     self.dock.set_pointer(Some(event.position));
                     self.reveal_dock(qh);
+                }
+                PointerEventKind::Leave { .. } => {
+                    // ----- se fue antes del plazo: cancelar el dwell y el lift -----
+                    self.dock.set_pointer(None);
+                    self.island_hover_at = None;
+                    self.needs_repaint = true;
+                    self.request_redraw(qh);
                 }
                 _ => {}
             }
@@ -330,6 +347,7 @@ impl App {
                 }
             }
             A::OpenPowerMenu => self.open_power_menu(qh),
+            A::OpenClipboard => self.toggle_clipboard(qh),
             A::OpenBluetoothManager => {
                 if let Some(bt) = &self.widgets.bluetooth {
                     widgets::open_bluetooth_manager(true, bt.powered);

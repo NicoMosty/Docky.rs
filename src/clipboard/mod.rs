@@ -213,12 +213,28 @@ impl App {
         let Some(entry) = ClipboardEntry::from_data(mime, data) else {
             return;
         };
+        let preview = crate::widgets::ClipboardPreview {
+            title: entry.title.clone(),
+        };
         self.clipboard_history
             .add(entry, self.dock.config.settings.clipboard_items);
         self.clipboard_history.save();
         crate::app::trim_heap();
         if self.clipboard_mode.is_some() {
             self.refresh_clipboard_filter(qh);
+        }
+        // ----- el widget `Clipboard` (si está colocado) y la actividad de isla: una
+        // sola copia alimenta los dos. El widget cambia de ancho, así que necesita
+        // relayout; la actividad se descarta sola si el dock está a la vista o hay un
+        // panel abierto (`announce_island_activity`). -----
+        let cambio = self.widgets.clipboard.as_ref() != Some(&preview);
+        self.widgets.clipboard = Some(preview);
+        if cambio {
+            if self.widget_placed(crate::config::WidgetKind::Clipboard) {
+                self.sync_widget_bar_len();
+                self.relayout_dock(qh);
+            }
+            self.announce_island_activity(crate::config::WidgetKind::Clipboard, qh);
         }
     }
 }

@@ -70,26 +70,74 @@ pub const TRAY_ITEM_HEIGHT: f32 = 26.0;
 pub const TRAY_SEPARATOR_HEIGHT: f32 = 9.0;
 pub const CUSTOM_HEX_LABELS: [&str; 5] = ["Accent", "Accent 2", "Panel", "Text", "Text Dim"];
 
-pub const ANIM_STEP_OPEN: f32 = 0.07;
-pub const ANIM_STEP_CLOSE: f32 = 0.05;
+/// Ritmo de una animación: la **duración** de un recorrido 0→1, en ms. Reemplaza los
+/// pasos por frame (`+= 0.07`), que ataban la velocidad al frame rate: a 144 Hz todo iba
+/// 2,4x más rápido que a 60. Las duraciones son las que daban esos pasos a 60 fps
+/// (16,67 ms por frame), así el ritmo se conserva.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pace {
+    /// Apertura de un panel/overlay/reveal (~238 ms).
+    Open,
+    /// Cierre de un panel (~333 ms): más lento que la apertura.
+    Close,
+    /// Cierre del split de la isla (~185 ms): más RÁPIDO que su apertura, porque es un
+    /// indicador transitorio y tiene que irse antes de lo que llegó.
+    MorphClose,
+    /// Fades cortos de contenido (~104 ms).
+    Quick,
+}
 
-/// Paso del split de la isla (el indicador de workspaces que entra y sale del blob).
-/// Son propios y no los `ANIM_STEP_*` generales: el split ABRE con calma y CIERRA
-/// más rápido —es un indicador transitorio, tiene que irse antes de lo que llegó— y
-/// encima va `ease_out`. A 60 fps: 0.07 abre en ~14 frames (~230 ms) y 0.09 cierra
-/// en ~11 (~180 ms). Ver `App::tick_island_split_frame`.
-pub const WS_SPLIT_STEP_OPEN: f32 = 0.07;
-pub const WS_SPLIT_STEP_CLOSE: f32 = 0.09;
+impl Pace {
+    pub fn ms(self) -> f32 {
+        match self {
+            Pace::Open => 238.0,
+            Pace::Close => 333.0,
+            Pace::MorphClose => 185.0,
+            Pace::Quick => 104.0,
+        }
+    }
+}
 
-pub const OSD_MIN_PANEL_H: f32 = 36.0;
+/// Factor de un lerp exponencial por frame (`x += (target - x) * k`), corregido para
+/// que no dependa del frame rate: a 60 fps (16,67 ms) devuelve exactamente `k`. Es el
+/// equivalente temporal del `k` por frame que usaban el scroll y el resaltado.
+pub fn lerp_factor(k: f32, dt_ms: f32) -> f32 {
+    1.0 - (1.0 - k).powf(dt_ms / 16.667)
+}
+
+/// Avanza `cur` hacia `target` lo que corresponde a `dt_ms` con el ritmo dado. Es
+/// **lineal en el tiempo** —la curva la aplica el dibujo (`ease_out`, `ws_split_eased`),
+/// no el avance—, pero ya no depende del frame rate.
+pub fn anim_step(cur: f32, target: f32, dt_ms: f32, pace: Pace) -> f32 {
+    let step = dt_ms / pace.ms();
+    if target > cur {
+        (cur + step).min(target)
+    } else {
+        (cur - step).max(target)
+    }
+}
+
+/// Un frame de una animación 0..1: avanza `anim` hacia `target` con el ritmo de apertura
+/// o de cierre según la dirección y devuelve `true` si todavía hay que dibujar. Es el
+/// reemplazo del `if anim < target { … } else if anim > target { … }` repartido en cada
+/// tick.
+pub fn anim_towards(anim: &mut f32, target: f32, dt_ms: f32, open: Pace, close: Pace) -> bool {
+    if *anim == target {
+        return false;
+    }
+    let pace = if *anim < target { open } else { close };
+    *anim = anim_step(*anim, target, dt_ms, pace);
+    true
+}
+
 pub const OSD_TIMEOUT_MS: u64 = 1400;
+/// Largo de la píldora del OSD (a lo largo del dock). El grosor es el del dock: el OSD
+/// es un estado de la isla, no un panel con superficie propia.
+pub const OSD_PILL_LEN: f32 = 220.0;
 /// Cuánto tiempo se queda el HUD del indicador de workspaces.
 pub const WS_FLASH_TIMEOUT_MS: u64 = 3000;
 // ----- fixed size -----
 pub const OSD_NOTIFICATION_BASE_LEN: f32 = 240.0;
-pub const OSD_NOTIFICATION_BASE_THICKNESS: f32 = 44.0;
-pub const OSD_GROWTH_W: f32 = 40.0;
-pub const OSD_GROWTH_H: f32 = 16.0;
 pub const NOTIFICATION_MIN_PANEL_H: f32 = 52.0;
 pub const NOTIFICATION_TIMEOUT_MS: u64 = 4000;
 pub const NOTIFICATION_GROWTH_W: f32 = 60.0;
@@ -561,5 +609,79 @@ mod slide_tests {
             assert!(v <= prev, "t={i}: {v} > {prev}");
             prev = v;
         }
+    }
+}
+
+#[cfg(test)]
+mod anim_tests {
+    use super::*;
+
+    /// El avance es por TIEMPO, no por frame: la misma duración da el mismo recorrido a
+    /// 120 Hz (4 frames de 8,33 ms) que a 60 Hz (uno de 33,33 ms). Era el punto de F: los
+    /// `+= 0.07` por frame hacían que a 144 Hz todo fuera 2,4x más rápido.
+    #[test]
+    fn el_avance_no_depende_del_frame_rate() {
+        let mut a = 0.0;
+        for _ in 0..4 {
+            a = anim_step(a, 1.0, 8.333, Pace::Open);
+        }
+        let b = anim_step(0.0, 1.0, 33.333, Pace::Open);
+        assert!((a - b).abs() < 0.005, "120 Hz: {a} contra 60 Hz: {b}");
+        // ----- y a 60 fps el primer paso reproduce el `+= 0.07` de antes -----
+        assert!((anim_step(0.0, 1.0, 16.667, Pace::Open) - 0.07).abs() < 0.005);
+    }
+
+    /// El paso no se pasa del target (ni rebota) y llega exacto.
+    #[test]
+    fn el_avance_no_se_pasa_del_target() {
+        assert_eq!(anim_step(0.9, 1.0, 1000.0, Pace::Open), 1.0);
+        assert_eq!(anim_step(0.1, 0.0, 1000.0, Pace::Open), 0.0);
+        assert_eq!(anim_step(1.0, 1.0, 16.667, Pace::Open), 1.0);
+    }
+
+    /// `anim_towards` elige el ritmo por dirección y avisa si hay que seguir dibujando.
+    #[test]
+    fn el_ritmo_sale_de_la_direccion() {
+        let mut v = 0.0;
+        assert!(anim_towards(
+            &mut v,
+            1.0,
+            16.667,
+            Pace::Open,
+            Pace::MorphClose
+        ));
+        let subiendo = v;
+        // ----- bajando con MorphClose (185 ms) va MÁS rápido que subir con Open (238) -----
+        let mut w = 1.0;
+        assert!(anim_towards(
+            &mut w,
+            0.0,
+            16.667,
+            Pace::Open,
+            Pace::MorphClose
+        ));
+        assert!(
+            (1.0 - w) > subiendo,
+            "el cierre va más rápido que la apertura"
+        );
+        // ----- llegado: false, así el tick se apaga -----
+        let mut done = 1.0;
+        assert!(!anim_towards(
+            &mut done,
+            1.0,
+            16.667,
+            Pace::Open,
+            Pace::Close
+        ));
+    }
+
+    /// El lerp corregido: a 60 fps devuelve el `k` de antes, y dos frames de 120 fps dan
+    /// el mismo factor combinado que uno de 60.
+    #[test]
+    fn el_lerp_no_depende_del_frame_rate() {
+        assert!((lerp_factor(0.28, 16.667) - 0.28).abs() < 0.001);
+        let k120 = lerp_factor(0.28, 8.333);
+        let combinado = 1.0 - (1.0 - k120) * (1.0 - k120);
+        assert!((combinado - 0.28).abs() < 0.005, "combinado: {combinado}");
     }
 }

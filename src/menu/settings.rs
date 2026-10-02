@@ -47,6 +47,8 @@ pub enum SettingId {
     ClipboardItems,
     /// Tope del historial de avisos.
     NotificationHistory,
+    /// Colapsar avisos repetidos (idénticos al anterior).
+    NotifDedup,
 }
 
 impl SettingId {
@@ -85,6 +87,7 @@ impl SettingId {
             SettingId::LauncherSortByUsage => "Sort by Usage",
             SettingId::ClipboardItems => "Clipboard Items",
             SettingId::NotificationHistory => "Notification History",
+            SettingId::NotifDedup => "Avoid Duplicates",
         }
     }
 
@@ -129,6 +132,7 @@ impl SettingId {
             SettingId::ClipboardItems => (10.0, 200.0, 10.0),
             SettingId::NotificationHistory => (10.0, 200.0, 10.0),
             SettingId::LauncherSortByUsage => (0.0, 1.0, 1.0),
+            SettingId::NotifDedup => (0.0, 1.0, 1.0),
         }
     }
 
@@ -144,6 +148,7 @@ impl SettingId {
                 | SettingId::MatugenLight
                 | SettingId::WidgetClockFormat
                 | SettingId::LauncherSortByUsage
+                | SettingId::NotifDedup
         )
     }
 
@@ -195,6 +200,7 @@ impl SettingId {
             SettingId::LauncherSortByUsage => bool_f(s.launcher_sort_by_usage),
             SettingId::ClipboardItems => s.clipboard_items as f32,
             SettingId::NotificationHistory => s.notif_history as f32,
+            SettingId::NotifDedup => bool_f(s.notif_dedup),
         }
     }
 
@@ -253,6 +259,7 @@ impl SettingId {
             SettingId::LauncherSortByUsage => s.launcher_sort_by_usage = clamped >= 0.5,
             SettingId::ClipboardItems => s.clipboard_items = clamped.round() as usize,
             SettingId::NotificationHistory => s.notif_history = clamped.round() as usize,
+            SettingId::NotifDedup => s.notif_dedup = clamped >= 0.5,
         }
     }
 
@@ -297,7 +304,8 @@ impl SettingId {
             | SettingId::MatugenApps
             | SettingId::MatugenLight
             | SettingId::WidgetClockFormat
-            | SettingId::LauncherSortByUsage => String::new(),
+            | SettingId::LauncherSortByUsage
+            | SettingId::NotifDedup => String::new(),
         }
     }
 
@@ -505,9 +513,9 @@ mod launcher_settings_tests {
         .collect()
     }
 
-    /// La categoría existe y expone los cuatro: los topes del launcher/portapapeles/
-    /// avisos y el orden por uso. Si falta uno, el setting existe pero nadie lo puede
-    /// tocar (el mismo caso que Menu Roundness).
+    /// La categoría existe y expone los cinco: los topes del launcher/portapapeles/
+    /// avisos, el orden por uso y el dedup de avisos. Si falta uno, el setting existe
+    /// pero nadie lo puede tocar (el mismo caso que Menu Roundness).
     #[test]
     fn la_categoria_launcher_expone_sus_ajustes() {
         assert!(crate::menu::MENU_CATEGORIES.contains(&crate::menu::MenuCategory::Launcher));
@@ -517,6 +525,7 @@ mod launcher_settings_tests {
             SettingId::LauncherSortByUsage,
             SettingId::ClipboardItems,
             SettingId::NotificationHistory,
+            SettingId::NotifDedup,
         ] {
             assert!(
                 kinds.iter().any(|k| matches!(
@@ -541,6 +550,21 @@ mod launcher_settings_tests {
         assert!(!s.launcher_sort_by_usage);
         assert_eq!(SettingId::LauncherSortByUsage.get(&s), 0.0);
         assert!(SettingId::LauncherSortByUsage.display_value(&s).is_empty());
+    }
+
+    /// El dedup de avisos es un toggle, arranca prendido (lo común es una app
+    /// re-anunciando lo mismo) y no pide relayout: no cambia ninguna medida.
+    #[test]
+    fn el_dedup_de_avisos_es_toggle_y_arranca_prendido() {
+        assert!(SettingId::NotifDedup.is_toggle());
+        assert!(!SettingId::NotifDedup.affects_layout());
+        let mut s = DockSettings::default();
+        assert!(s.notif_dedup);
+        assert_eq!(SettingId::NotifDedup.get(&s), 1.0);
+        SettingId::NotifDedup.toggle(&mut s);
+        assert!(!s.notif_dedup);
+        assert_eq!(SettingId::NotifDedup.get(&s), 0.0);
+        assert!(SettingId::NotifDedup.display_value(&s).is_empty());
     }
 
     /// Los topes arrancan en el valor histórico (las constantes de cada panel) y el

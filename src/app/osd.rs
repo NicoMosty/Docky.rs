@@ -1,204 +1,155 @@
 use super::*;
 
 impl App {
+    /// Muestra el OSD (volumen/brillo) como un **estado de la isla**: una píldora del
+    /// grosor del dock, sin prestar la superficie ni cambiar su tamaño. Por eso no tiene
+    /// animación propia —el reloj es el timer del OSD— y entra y sale seco, como el
+    /// toast de notificaciones.
     pub(crate) fn show_osd(&mut self, kind: menu::OsdKind, qh: &QueueHandle<Self>) {
-        // ----- el toast de notificaciones NO está en esta lista: vive en su propia
-        // superficie, así que no le pelea la del dock al OSD (con el check, una tecla
-        // de volumen dentro de los 4 s de un aviso no mostraba nada) -----
+        // ----- sí sigue cediendo ante los paneles que SÍ prestan la superficie (el OSD
+        // tiene que ganarle al dock y a la isla, no a un panel que el usuario abrió) -----
         if self.wallpaper_mode.is_some()
             || self.dock_menu_mode.is_some()
             || self.app_search_mode.is_some()
             || self.menu.is_some()
             || self.clipboard_mode.is_some()
         {
+            log::debug!("osd: descartado (panel abierto)");
             return;
         }
-        // ----- el OSD toma la superficie: cancelar el HUD de workspaces -----
+        // ----- el OSD reemplaza el HUD de workspaces: los dos son estados de la misma
+        // cápsula y el OSD es el más nuevo -----
         self.ws_flash_mode = None;
         let (level, muted) = match kind {
             menu::OsdKind::Volume => match crate::widgets::read_volume() {
                 Some((v, m)) => (v, m),
-                None => return,
+                None => {
+                    log::debug!("osd: sin lectura de volumen");
+                    return;
+                }
             },
             menu::OsdKind::Brightness => match crate::widgets::read_brightness() {
                 Some(b) => (b, false),
-                None => return,
+                None => {
+                    log::debug!("osd: sin lectura de brillo");
+                    return;
+                }
             },
         };
-        let length = menu::OSD_NOTIFICATION_BASE_LEN + menu::OSD_GROWTH_W;
-        let cross =
-            menu::OSD_NOTIFICATION_BASE_THICKNESS.max(menu::OSD_MIN_PANEL_H) + menu::OSD_GROWTH_H;
-        let (panel_w, panel_h) = if self.dock.is_vertical() {
-            (cross, length)
-        } else {
-            (length, cross)
-        };
-        let needs_resize = match self.osd_mode.as_ref() {
-            None => true,
-            Some(m) => m.panel_w != panel_w || m.panel_h != panel_h,
-        };
-        if self.osd_mode.is_none() {
-            self.layer.set_layer(Layer::Overlay);
-            self.osd_mode = Some(OsdMode {
-                kind,
-                level,
-                muted,
-                anim: 0.0,
-                target_anim: 1.0,
-                closing: false,
-                panel_w,
-                panel_h,
-            });
-        } else if let Some(m) = self.osd_mode.as_mut() {
-            m.kind = kind;
-            m.level = level;
-            m.muted = muted;
-            m.closing = false;
-            m.target_anim = 1.0;
-            m.panel_w = panel_w;
-            m.panel_h = panel_h;
-        }
-        if needs_resize {
-            let s = &self.dock.config.settings;
-            let (anchor, margin) = edge_anchor_margin(s.dock_edge, s.dock_align, s.pos_y, 0);
-            self.layer.set_anchor(anchor);
-            self.layer
-                .set_margin(margin.0, margin.1, margin.2, margin.3);
-            self.layer.set_size(panel_w as u32, panel_h as u32);
-        }
+        log::debug!("osd: {kind:?} {level}% muted={muted}");
+        self.osd_mode = Some(OsdMode { kind, level, muted });
+        self.needs_repaint = true;
         let _ = self.osd_reset_tx.send(());
         self.request_redraw(qh);
     }
 
+    /// Cierra el OSD. Es inmediato a propósito: el estado no tiene animación, así que no
+    /// depende de que llegue un frame callback (misma lección que el toast).
     pub(crate) fn close_osd_mode(&mut self, qh: &QueueHandle<Self>) {
-        if let Some(m) = self.osd_mode.as_mut() {
-            m.closing = true;
-            m.target_anim = 0.0;
+        if self.osd_mode.take().is_none() {
+            return;
         }
+        self.needs_repaint = true;
         self.request_redraw(qh);
     }
 
+    /// Dibuja la píldora del OSD: la MISMA cápsula del dock recortada al largo del OSD,
+    /// con el contenido (icono + barra + nivel) adentro. No toca el tamaño de la
+    /// superficie ni su layer, así que vale igual con el dock oculto o visible.
     pub(super) fn draw_osd_mode(&mut self, qh: &QueueHandle<Self>) {
         let scale = self.output_scale.max(1) as f32;
-        let transparency = self.dock.config.settings.transparency;
-        let Some(m) = self.osd_mode.as_mut() else {
+        let Some(m) = self.osd_mode.as_ref() else {
             return;
         };
-        let linear = m.anim.clamp(0.0, 1.0);
-        let eased = (0.5 - 0.5 * (std::f32::consts::PI * linear).cos()).max(if m.closing {
-            0.0
-        } else {
-            0.04
-        });
-
-        let width = (m.panel_w * scale).round() as i32;
-        let height = (m.panel_h * scale).round() as i32;
+        let (kind, level, muted) = (m.kind, m.level, m.muted);
+        let (base_w, base_h) = self.dock.base_size();
+        let width = (base_w as f32 * scale).round() as i32;
+        let height = (base_h as f32 * scale).round() as i32;
         if width <= 0 || height <= 0 {
             return;
         }
-
+        let stride = width * 4;
+        let Ok((buffer, canvas)) =
+            self.pool
+                .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
+        else {
+            // ----- mismo criterio que la isla: si falla, queda el buffer viejo puesto
+            // (la superficie sigue mapeada) en vez de morir -----
+            log::error!("no pude crear el buffer del OSD ({width}x{height})");
+            return;
+        };
+        if self.frame_pixmap.as_ref().map(|p| (p.width(), p.height()))
+            != Some((width as u32, height as u32))
+        {
+            match tiny_skia::Pixmap::new(width as u32, height as u32) {
+                Some(p) => self.frame_pixmap = Some(p),
+                None => {
+                    log::error!("no pude crear el pixmap del OSD ({width}x{height})");
+                    return;
+                }
+            }
+        }
+        // ----- la píldora es la cápsula de la isla: MISMA cuenta (`reveal_capsule`) con
+        // el largo del OSD, sin corrimiento -----
+        let pill = menu::OSD_PILL_LEN * scale;
+        let blob = render::reveal_capsule(
+            width as f32,
+            height as f32,
+            self.dock.is_vertical(),
+            pill,
+            0.0,
+            0.0,
+        );
+        let (bx, by) = (blob.0.round() as i32, blob.1.round() as i32);
+        let (bw, bh) = (
+            blob.2.round().max(1.0) as u32,
+            blob.3.round().max(1.0) as u32,
+        );
         let args = menu_render::OsdArgs {
-            kind: m.kind,
-            level: m.level,
-            muted: m.muted,
-            panel_w: m.panel_w,
-            panel_h: m.panel_h,
+            kind,
+            level,
+            muted,
+            // ----- el contenido se dibuja en su propia píxel-map y se pega en el blob:
+            // el largo/corto sale del blob, así dibujo y medida no se pueden despegar -----
+            panel_w: bw as f32 / scale,
+            panel_h: bh as f32 / scale,
             dock: &self.dock,
             render_scale: scale,
         };
-        let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-        if !m.closing && eased >= 0.999 {
-            menu_render::draw_osd(&mut pixmap, &mut self.text_cache, &args);
-        } else {
-            let mut content = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
-            menu_render::draw_osd(&mut content, &mut self.text_cache, &args);
-            let paint = tiny_skia::PixmapPaint {
-                opacity: anim_opacity(transparency, eased),
-                ..Default::default()
-            };
-            if m.closing {
-                let (full_w, full_h) = (width as f32, height as f32);
-                let (rw, rh) = (full_w * linear, full_h * linear);
-                let rect = tiny_skia::Rect::from_xywh(
-                    (full_w - rw) / 2.0,
-                    (full_h - rh) / 2.0,
-                    rw.max(0.0),
-                    rh.max(0.0),
-                );
-                if let Some(rect) = rect {
-                    let mut mask = tiny_skia::Mask::new(width as u32, height as u32).unwrap();
-                    let path = tiny_skia::PathBuilder::from_rect(rect);
-                    mask.fill_path(
-                        &path,
-                        tiny_skia::FillRule::Winding,
-                        true,
-                        tiny_skia::Transform::identity(),
-                    );
-                    pixmap.draw_pixmap(
-                        0,
-                        0,
-                        content.as_ref(),
-                        &paint,
-                        tiny_skia::Transform::identity(),
-                        Some(&mask),
-                    );
-                }
-            } else {
-                pixmap.draw_pixmap(
-                    0,
-                    0,
-                    content.as_ref(),
-                    &paint,
-                    tiny_skia::Transform::identity(),
-                    None,
-                );
-            }
+        let dock = &self.dock;
+        let Some(pixmap) = self.frame_pixmap.as_mut() else {
+            return;
+        };
+        pixmap.fill(tiny_skia::Color::TRANSPARENT);
+        render::draw_capsule(pixmap, dock, scale, blob);
+        let Some(mut content) = tiny_skia::Pixmap::new(bw, bh) else {
+            return;
+        };
+        menu_render::draw_osd(&mut content, &mut self.text_cache, &args);
+        if let Some(mask) =
+            render::reveal_mask(dock, scale, pill, 0.0, width as f32, height as f32, 0.0)
+        {
+            pixmap.draw_pixmap(
+                bx,
+                by,
+                content.as_ref(),
+                &tiny_skia::PixmapPaint::default(),
+                tiny_skia::Transform::identity(),
+                Some(&mask),
+            );
         }
-
-        let stride = width * 4;
-        let (buffer, canvas) = self
-            .pool
-            .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
-            .expect("failed to create shm buffer");
         bgra_from_rgba(pixmap.data(), canvas);
+        log::debug!("osd: píldora {bw}x{bh} en ({bx},{by})");
 
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(self.output_scale.max(1));
-        buffer.attach_to(surface).expect("failed to attach buffer");
+        if let Err(err) = buffer.attach_to(surface) {
+            log::error!("no pude mapear el buffer del OSD: {err}");
+            return;
+        }
         surface.damage_buffer(0, 0, width, height);
         surface.frame(qh, surface.clone());
         self.awaiting_frame = true;
         surface.commit();
-    }
-
-    pub(super) fn tick_osd_frame(&mut self, qh: &QueueHandle<Self>) {
-        let Some(m) = self.osd_mode.as_mut() else {
-            return;
-        };
-        let animating = if m.anim < m.target_anim {
-            m.anim = (m.anim + menu::ANIM_STEP_OPEN).min(m.target_anim);
-            true
-        } else if m.anim > m.target_anim {
-            m.anim = (m.anim - menu::ANIM_STEP_CLOSE).max(m.target_anim);
-            true
-        } else {
-            false
-        };
-        let closing = m.closing;
-        let anim = m.anim;
-
-        if closing && anim <= 0.0 {
-            self.osd_mode = None;
-            self.layer.set_layer(Layer::Top);
-            let (w, h) = self.dock.base_size();
-            self.layer.set_size(w, h);
-            self.draw(qh);
-            trim_heap();
-            return;
-        }
-        if !animating {
-            return;
-        }
-        self.draw_osd_mode(qh);
     }
 }

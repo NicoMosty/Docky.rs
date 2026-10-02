@@ -450,6 +450,89 @@ pub(crate) fn draw_recording_widget(
     );
 }
 
+/// Última copia del portapapeles: la misma pastilla y el mismo `draw_icon_label`
+/// que el volumen/mic. La etiqueta sale de `widget::clipboard_label`, la MISMA que
+/// mide `len_clipboard` (trampa 12).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_clipboard_widget(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    widgets: &WidgetSnapshot,
+    zx: f32,
+    zy: f32,
+    zw: f32,
+    zh: f32,
+    render_scale: f32,
+    colors: &WidgetColors,
+    is_vertical: bool,
+    hovered: bool,
+    text_px: f32,
+    icon_r: f32,
+) {
+    let label = crate::widget::clipboard_label(widgets.clipboard.as_ref());
+    if label.is_empty() {
+        return;
+    }
+    draw_widget_button_bg(pixmap, zx, zy, zw, zh, render_scale, colors, hovered);
+    draw_icon_label(
+        pixmap,
+        text_cache,
+        draw_clipboard_icon,
+        icon_r,
+        true,
+        &label,
+        zx,
+        zy,
+        zw,
+        zh,
+        render_scale,
+        colors,
+        is_vertical,
+        text_px,
+    );
+}
+
+/// Portapapeles: cuerpo redondeado con el gancho de arriba, en trazo (a ~12 px de
+/// radio una silueta sólida se ve como un cuadrado). Entra en la caja de `2 * icon_r`
+/// que reserva el reparto.
+fn draw_clipboard_icon(
+    pixmap: &mut Pixmap,
+    icon_r: f32,
+    cx: f32,
+    cy: f32,
+    colors: &WidgetColors,
+    active: bool,
+) {
+    let s = icon_r;
+    let alpha = if active { 230 } else { 110 };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(
+        colors.text_rgb.0,
+        colors.text_rgb.1,
+        colors.text_rgb.2,
+        alpha,
+    );
+    paint.anti_alias = true;
+    let stroke = tiny_skia::Stroke {
+        width: s * 0.18,
+        line_cap: tiny_skia::LineCap::Round,
+        line_join: tiny_skia::LineJoin::Round,
+        ..Default::default()
+    };
+    // cuerpo
+    let body = rounded_rect_path(cx - s * 0.72, cy - s * 0.76, s * 1.44, s * 1.52, s * 0.26);
+    pixmap.stroke_path(&body, &paint, &stroke, Transform::identity(), None);
+    // gancho de arriba
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(cx - s * 0.28, cy - s * 0.76);
+    pb.line_to(cx - s * 0.28, cy - s * 0.98);
+    pb.line_to(cx + s * 0.28, cy - s * 0.98);
+    pb.line_to(cx + s * 0.28, cy - s * 0.76);
+    if let Some(path) = pb.finish() {
+        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_network_widget(
     pixmap: &mut Pixmap,

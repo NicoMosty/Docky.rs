@@ -17,7 +17,7 @@ mod wallpaper;
 mod widget;
 mod widgets;
 
-use app::App;
+use app::{App, IslandActivities};
 use config::Config;
 use dock::Dock;
 use dockyrs_canvas::{IconCache, TextCache, ThumbnailCache};
@@ -353,6 +353,15 @@ fn main() -> anyhow::Result<()> {
         dock_visible: true,
         island_ws_split: 0.0,
         island_ws_target: 0.0,
+        island_activity: IslandActivities::default(),
+        needs_repaint: false,
+        frame_dt_ms: 16.7,
+        last_frame_at: None,
+        battery_activity_ready: false,
+        battery_warned: 101,
+        battery_on_power: false,
+        bluetooth_activity_ready: false,
+        bluetooth_connected: None,
         reveal_anim: 1.0,
         reveal_target: 1.0,
         autohide_armed: false,
@@ -362,6 +371,7 @@ fn main() -> anyhow::Result<()> {
         last_ptr_event: None,
         ptr_left_at: None,
         calendar_hover_at: None,
+        island_hover_at: None,
         autohide_hide_tx,
         tray_menu_tx,
         pointer: None,

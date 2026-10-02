@@ -294,21 +294,20 @@ impl App {
         // final, así cada interacción cuesta UN frame en vez de ~8 (el lerp del
         // resaltado es el que más se paga, porque sigue al puntero) -----
         let smooth = self.dock.config.settings.smooth_transitions;
+        let dt = self.frame_dt_ms;
         let Some(m) = self.app_search_mode.as_mut() else {
             return;
         };
-        let fade_animating = if m.anim < m.target_anim {
-            m.anim = (m.anim + menu::ANIM_STEP_OPEN).min(m.target_anim);
-            true
-        } else if m.anim > m.target_anim {
-            m.anim = (m.anim - menu::ANIM_STEP_CLOSE).max(m.target_anim);
-            true
-        } else {
-            false
-        };
+        let fade_animating = menu::anim_towards(
+            &mut m.anim,
+            m.target_anim,
+            dt,
+            menu::Pace::Open,
+            menu::Pace::Close,
+        );
         let scroll_delta = m.scroll_target - m.scroll_x;
         let scroll_animating = if smooth && scroll_delta.abs() > 0.5 {
-            m.scroll_x += scroll_delta * 0.28;
+            m.scroll_x += scroll_delta * menu::lerp_factor(0.28, dt);
             true
         } else {
             m.scroll_x = m.scroll_target;
@@ -318,8 +317,9 @@ impl App {
         let highlight_delta_y = m.highlight_target_y - m.highlight_y;
         let highlight_animating =
             if smooth && (highlight_delta.abs() > 0.5 || highlight_delta_y.abs() > 0.5) {
-                m.highlight_x += highlight_delta * 0.35;
-                m.highlight_y += highlight_delta_y * 0.35;
+                let k = menu::lerp_factor(0.35, dt);
+                m.highlight_x += highlight_delta * k;
+                m.highlight_y += highlight_delta_y * k;
                 true
             } else {
                 m.highlight_x = m.highlight_target;
@@ -327,7 +327,7 @@ impl App {
                 false
             };
         let content_animating = if smooth && m.content_anim < 1.0 {
-            m.content_anim = (m.content_anim + 0.16).min(1.0);
+            m.content_anim = menu::anim_step(m.content_anim, 1.0, dt, menu::Pace::Quick);
             true
         } else {
             m.content_anim = 1.0;

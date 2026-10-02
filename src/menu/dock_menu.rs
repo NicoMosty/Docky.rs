@@ -236,6 +236,7 @@ pub fn build_category_controls(category: MenuCategory, settings: &DockSettings) 
             });
             y += SECTION_LABEL_HEIGHT;
             push_setting_row(&mut controls, &mut y, SettingId::NotificationHistory);
+            push_setting_row(&mut controls, &mut y, SettingId::NotifDedup);
         }
         MenuCategory::System => {
             // ----- los cinco paneles del overlay, accesibles desde acá: el panel de

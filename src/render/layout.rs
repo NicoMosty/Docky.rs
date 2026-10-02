@@ -547,6 +547,7 @@ pub(super) fn island_plan(
     tray_count: usize,
     render_scale: f32,
     ws_split: f32,
+    active: Option<crate::config::WidgetKind>,
 ) -> IslandPlan {
     let s = &dock.config.settings;
     // ----- el split entra con la curva del reveal (`ease_out`): su largo y los dos
@@ -567,7 +568,7 @@ pub(super) fn island_plan(
     // ----- el indicador de workspaces (si está) es el que lleva el split -----
     let es_ws = |k: crate::config::WidgetKind| k == crate::config::WidgetKind::Workspaces;
     let mut prev_ws = false;
-    for kind in super::island_activities(widgets, ws_split) {
+    for kind in super::island_activities(widgets, ws_split, active) {
         let ctx = Ctx {
             kind,
             widgets,
@@ -788,6 +789,7 @@ mod hit_layout_tests {
             volume: Some((50, false)),
             mic: None,
             recording: None,
+            clipboard: None,
             network: NetworkInfo {
                 label: "wifi".into(),
                 online: true,
@@ -992,6 +994,7 @@ mod hit_layout_tests {
             WidgetKind::Ram,
             WidgetKind::Network,
             WidgetKind::Volume,
+            WidgetKind::Clipboard,
             WidgetKind::KbdLayout,
         ] {
             assert!(spec_for(kind).is_some(), "{kind:?} falta en WIDGETS");
@@ -1012,11 +1015,11 @@ mod hit_layout_tests {
         // ----- 14 fijos + la entrada `Custom`. Cambiar estos números es la señal de
         // que se agregó un widget: hay que tocar la tabla (y nada más: el orden y las
         // etiquetas de Ajustes salen de ella) -----
-        assert_eq!(WIDGETS.len(), 15, "la tabla cambio de tamano");
-        // ----- Ajustes ofrece los 14 fijos: el índice de un `Custom` se escribe a
+        assert_eq!(WIDGETS.len(), 16, "la tabla cambio de tamano");
+        // ----- Ajustes ofrece los 15 fijos: el índice de un `Custom` se escribe a
         // mano en el JSON -----
         let orden = crate::widget::widget_kind_order();
-        assert_eq!(orden.len(), 14, "Ajustes cambio de tamano");
+        assert_eq!(orden.len(), 15, "Ajustes cambio de tamano");
         assert!(
             !orden
                 .iter()

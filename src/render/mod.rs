@@ -32,8 +32,8 @@ pub(crate) use layout::{WidgetRect, percentage_widget_len, text_widget_len};
 pub(crate) use media::{draw_media_widget, media_ideal_len};
 pub(crate) use power_bluetooth::{draw_bluetooth_icon, draw_power_widget};
 pub(crate) use syswidgets::{
-    draw_kblayout_widget, draw_mic_widget, draw_network_widget, draw_recording_widget,
-    draw_text_widget, draw_volume_widget,
+    draw_clipboard_widget, draw_kblayout_widget, draw_mic_widget, draw_network_widget,
+    draw_recording_widget, draw_text_widget, draw_volume_widget,
 };
 pub(crate) use tray::{draw_tray_widget, tray_geometry};
 pub(crate) use workspaces::{draw_workspaces_widget, ws_compact_scale};
@@ -331,7 +331,7 @@ pub(crate) fn reveal_len(max_len: f32, compact: f32, reveal: f32) -> f32 {
 /// Máscara de la cápsula en el estado `reveal`. Misma forma que el fondo del dock
 /// (`edge_rounded_rect_path`: en el borde las dos esquinas van rectas, del otro lado
 /// redondeadas).
-fn reveal_mask(
+pub(crate) fn reveal_mask(
     dock: &Dock,
     render_scale: f32,
     compact: f32,
@@ -362,7 +362,13 @@ fn reveal_mask(
 
 /// Fondo (y borde) de una cápsula: el MISMO dibujo para el dock entero y para la
 /// isla compacta, así el color, el redondeado y el borde no se pueden despegar.
-fn draw_capsule(pixmap: &mut Pixmap, dock: &Dock, render_scale: f32, rect: (f32, f32, f32, f32)) {
+/// También lo usa la píldora del OSD, que es la misma cápsula recortada.
+pub(crate) fn draw_capsule(
+    pixmap: &mut Pixmap,
+    dock: &Dock,
+    render_scale: f32,
+    rect: (f32, f32, f32, f32),
+) {
     let s = &dock.config.settings;
     let (x, y, w, h) = rect;
     if w <= 0.0 || h <= 0.0 {
@@ -408,8 +414,9 @@ pub(crate) fn island_blob_region(
     widgets: &WidgetSnapshot,
     tray_count: usize,
     ws_split: f32,
+    active: Option<crate::config::WidgetKind>,
 ) -> Option<(i32, i32, i32, i32)> {
-    let plan = island_plan(dock, widgets, tray_count, 1.0, ws_split);
+    let plan = island_plan(dock, widgets, tray_count, 1.0, ws_split, active);
     if plan.items.is_empty() {
         return None;
     }
@@ -451,8 +458,14 @@ pub(crate) fn island_blob_region(
 pub(crate) fn island_activities(
     widgets: &WidgetSnapshot,
     ws_split: f32,
+    active: Option<crate::config::WidgetKind>,
 ) -> Vec<crate::config::WidgetKind> {
     use crate::config::WidgetKind as K;
+    // ----- una actividad VIVA ocupa la isla entera: reemplaza el reparto de reposo
+    // (hora + batería) mientras dura. Al vencer, el `App` la saca y vuelve el reposo. -----
+    if let Some(kind) = active {
+        return vec![kind];
+    }
     let mut out = Vec::with_capacity(4);
     // ----- la grabación es la actividad MÁS viva que hay: va primera, aunque su widget
     // no esté colocado en la barra (el dato es un `stat`, no un spawn) -----
@@ -492,10 +505,12 @@ pub fn draw_island(
     marquee: &mut MarqueeState,
     render_scale: f32,
     ws_split: f32,
+    active: Option<crate::config::WidgetKind>,
+    hover_lift: f32,
 ) -> bool {
     pixmap.fill(Color::TRANSPARENT);
     let (w, h) = (pixmap.width() as f32, pixmap.height() as f32);
-    let plan = island_plan(dock, widgets, tray.len(), render_scale, ws_split);
+    let plan = island_plan(dock, widgets, tray.len(), render_scale, ws_split, active);
     if plan.items.is_empty() {
         return false;
     }
@@ -504,7 +519,12 @@ pub fn draw_island(
     // el split está abierto (físico: el blob se dibuja en píxeles del buffer) -----
     let shift =
         island_ws_shift(dock, widgets, tray.len()) * ws_split_eased(ws_split) * render_scale;
-    let blob = reveal_capsule(w, h, vertical, plan.compact, 0.0, shift);
+    // ----- hover lift (G): con el puntero encima la isla crece un poco (`hover_lift`).
+    // Se escala SÓLO el eje largo: el corto es el grosor del dock y no tiene holgura. Y
+    // el MISMO largo va al fondo y a la máscara, o el contenido quedaría recortado
+    // (trampa 10). -----
+    let compact = plan.compact * hover_lift;
+    let blob = reveal_capsule(w, h, vertical, compact, 0.0, shift);
     draw_capsule(pixmap, dock, render_scale, blob);
     let Some(mut content) = Pixmap::new(pixmap.width(), pixmap.height()) else {
         return false;
@@ -537,7 +557,7 @@ pub fn draw_island(
             render_scale,
         );
     }
-    if let Some(mask) = reveal_mask(dock, render_scale, plan.compact, 0.0, w, h, shift) {
+    if let Some(mask) = reveal_mask(dock, render_scale, compact, 0.0, w, h, shift) {
         pixmap.draw_pixmap(
             0,
             0,
@@ -596,6 +616,7 @@ pub fn draw(
     render_scale: f32,
     reveal: f32,
     ws_split: f32,
+    active: Option<crate::config::WidgetKind>,
 ) -> bool {
     let reveal = reveal.clamp(0.0, 1.0);
     if reveal >= 0.999 {
@@ -644,7 +665,7 @@ pub fn draw(
     // ----- el piso de la animación es la isla de la actividad de turno (mismo
     // `island_slot` que dibuja `draw_island`): sin actividad va 0 y el dock colapsa a
     // nada, como antes de la isla. -----
-    let compact = island_plan(dock, widgets, tray.len(), render_scale, ws_split).compact;
+    let compact = island_plan(dock, widgets, tray.len(), render_scale, ws_split, active).compact;
     // ----- el piso del colapso también usa el desplazamiento: si el split está
     // abierto, el dock se encoge HACIA el indicador, no al centro -----
     let shift =
@@ -1080,6 +1101,7 @@ mod reveal_tests {
             volume: None,
             mic: None,
             recording: None,
+            clipboard: None,
             network: NetworkInfo {
                 label: String::new(),
                 online: false,
@@ -1101,18 +1123,24 @@ mod reveal_tests {
         use crate::widgets::{BatteryState, MediaInfo};
         let base = vacio();
         assert!(
-            island_activities(&base, 0.0).is_empty(),
+            island_activities(&base, 0.0, None).is_empty(),
             "sin hora ni batería no hay isla"
         );
 
         let mut con_hora = vacio();
         con_hora.time = "10:37".into();
         con_hora.date = "17-Sept".into();
-        assert_eq!(island_activities(&con_hora, 0.0), vec![WidgetKind::Clock]);
+        assert_eq!(
+            island_activities(&con_hora, 0.0, None),
+            vec![WidgetKind::Clock]
+        );
 
         let mut con_bat = vacio();
         con_bat.battery = Some((39, BatteryState::Discharging));
-        assert_eq!(island_activities(&con_bat, 0.0), vec![WidgetKind::Battery]);
+        assert_eq!(
+            island_activities(&con_bat, 0.0, None),
+            vec![WidgetKind::Battery]
+        );
 
         // ----- las dos, la hora primero -----
         let mut las_dos = vacio();
@@ -1120,14 +1148,14 @@ mod reveal_tests {
         las_dos.date = "17-Sept".into();
         las_dos.battery = Some((39, BatteryState::Discharging));
         assert_eq!(
-            island_activities(&las_dos, 0.0),
+            island_activities(&las_dos, 0.0, None),
             vec![WidgetKind::Clock, WidgetKind::Battery]
         );
 
         // ----- el volumen no va a la isla: tiene su pastilla y su panel en el dock -----
         let mut con_vol = vacio();
         con_vol.volume = Some((100, false));
-        assert!(island_activities(&con_vol, 0.0).is_empty());
+        assert!(island_activities(&con_vol, 0.0, None).is_empty());
 
         // ----- y media tampoco, ni siquiera sonando -----
         let mut con_media = vacio();
@@ -1136,7 +1164,41 @@ mod reveal_tests {
             playing: true,
             art_path: None,
         });
-        assert!(island_activities(&con_media, 0.0).is_empty());
+        assert!(island_activities(&con_media, 0.0, None).is_empty());
+    }
+
+    /// Una actividad VIVA ocupa la isla entera: reemplaza el reparto de reposo (hora +
+    /// batería) mientras dura. Es lo que hace que un aviso se vea, en vez de sumarse al
+    /// lado del reloj.
+    #[test]
+    fn una_actividad_viva_reemplaza_el_reposo() {
+        use crate::config::WidgetKind;
+        use crate::widgets::BatteryState;
+        let mut w = vacio();
+        w.time = "10:37".into();
+        w.date = "17-Sept".into();
+        w.battery = Some((39, BatteryState::Discharging));
+        // ----- el reposo son las dos -----
+        assert_eq!(
+            island_activities(&w, 0.0, None),
+            vec![WidgetKind::Clock, WidgetKind::Battery]
+        );
+        // ----- con una actividad viva, SÓLO esa -----
+        assert_eq!(
+            island_activities(&w, 0.0, Some(WidgetKind::Battery)),
+            vec![WidgetKind::Battery]
+        );
+        // ----- y el plan la mide a ella, no al reposo -----
+        let dock = dock_de(crate::config::DockEdge::Left);
+        let reposo = island_plan(&dock, &w, 0, 1.0, 0.0, None);
+        let viva = island_plan(&dock, &w, 0, 1.0, 0.0, Some(WidgetKind::Battery));
+        assert_eq!(viva.items.len(), 1);
+        assert!(
+            viva.compact < reposo.compact,
+            "la isla se encoge a la actividad: {} contra {}",
+            viva.compact,
+            reposo.compact
+        );
     }
 
     /// La isla crece para que entren sus actividades (hora + batería), pegadas y **con
@@ -1159,7 +1221,7 @@ mod reveal_tests {
 
         let mut con_bat = vacio();
         con_bat.battery = Some((39, BatteryState::Discharging));
-        let plan = island_plan(&dock, &con_bat, 0, 1.0, 0.0);
+        let plan = island_plan(&dock, &con_bat, 0, 1.0, 0.0, None);
         assert_eq!(plan.items.len(), 1);
         assert!(plan.pad > 0.0, "el relleno sale del radio");
         assert!(
@@ -1173,7 +1235,7 @@ mod reveal_tests {
         las_dos.time = "10:37".into();
         las_dos.date = "17-Sept".into();
         las_dos.battery = Some((39, BatteryState::Discharging));
-        let plan_dos = island_plan(&dock, &las_dos, 0, 1.0, 0.0);
+        let plan_dos = island_plan(&dock, &las_dos, 0, 1.0, 0.0, None);
         assert_eq!(plan_dos.items.len(), 2);
         assert_eq!(plan_dos.items[0].0, crate::config::WidgetKind::Clock);
         assert!(
@@ -1193,7 +1255,7 @@ mod reveal_tests {
             plan_dos.compact
         );
         // ----- sin actividad no hay isla (y no se aplica el piso) -----
-        let vacia = island_plan(&dock, &vacio(), 0, 1.0, 0.0);
+        let vacia = island_plan(&dock, &vacio(), 0, 1.0, 0.0, None);
         assert!(vacia.items.is_empty());
         assert_eq!(vacia.compact, 0.0);
     }
@@ -1224,12 +1286,12 @@ mod reveal_tests {
             })
             .collect();
 
-        let cerrada = island_plan(&dock, &w, 0, 1.0, 0.0);
+        let cerrada = island_plan(&dock, &w, 0, 1.0, 0.0, None);
         assert_eq!(cerrada.items.len(), 2, "cerrada: hora + batería");
         assert_eq!(cerrada.items[0].0, WidgetKind::Clock);
         assert_eq!(cerrada.items[1].0, WidgetKind::Battery);
 
-        let abierta = island_plan(&dock, &w, 0, 1.0, 1.0);
+        let abierta = island_plan(&dock, &w, 0, 1.0, 1.0, None);
         assert_eq!(abierta.items.len(), 3);
         assert_eq!(
             abierta.items[1].0,
@@ -1245,7 +1307,7 @@ mod reveal_tests {
 
         // ----- a medias: el indicador sigue la CURVA del split (`ease_out`), no el
         // valor crudo, y la isla queda entre las dos -----
-        let media = island_plan(&dock, &w, 0, 1.0, 0.5);
+        let media = island_plan(&dock, &w, 0, 1.0, 0.5, None);
         let esperado = abierta.items[1].1 * ws_split_eased(0.5);
         assert!(
             (media.items[1].1 - esperado).abs() < 0.01,
@@ -1348,6 +1410,82 @@ mod reveal_tests {
     fn cobertura(mask: &tiny_skia::Mask) -> f32 {
         let d = mask.data();
         d.iter().filter(|b| **b > 0).count() as f32 / d.len() as f32
+    }
+
+    /// El hover lift (G) alarga la isla **dibujada**: se mide la tinta del bounding box, así
+    /// el guard cubre el cableado (`draw_island` recibiendo el lift), no sólo el factor.
+    #[test]
+    fn el_hover_lift_alarga_la_isla_dibujada() {
+        use crate::config::DockEdge;
+        let mut dock = dock_de(DockEdge::Top);
+        // ----- la superficie tiene que ser más larga que la isla, si no el plan la recorta -----
+        dock.widget_bar_content_len = 400.0;
+        let mut w = vacio();
+        w.time = "10:37".into();
+        w.battery = Some((50, crate::widgets::BatteryState::Discharging));
+        let ancho_de_tinta = |lift: f32| -> u32 {
+            let (bw, bh) = dock.base_size();
+            let mut pixmap = tiny_skia::Pixmap::new(bw, bh).unwrap();
+            let mut icon_cache = IconCache::new(crate::ICON_THEME);
+            let mut text_cache = TextCache::new();
+            let mut marquee = MarqueeState::default();
+            let _ = draw_island(
+                &mut pixmap,
+                &dock,
+                &mut icon_cache,
+                &mut text_cache,
+                &w,
+                &[],
+                &mut marquee,
+                1.0,
+                0.0,
+                None,
+                lift,
+            );
+            let (mut minx, mut maxx) = (bw, 0);
+            for y in 0..bh {
+                for x in 0..bw {
+                    if pixmap.pixel(x, y).unwrap().alpha() > 0 {
+                        minx = minx.min(x);
+                        maxx = maxx.max(x + 1);
+                    }
+                }
+            }
+            maxx.saturating_sub(minx)
+        };
+        let sin = ancho_de_tinta(1.0);
+        let con = ancho_de_tinta(1.018);
+        assert!(sin > 0, "la isla de base tiene que dibujar algo");
+        assert!(con > sin, "el lift alarga la isla: {con} contra {sin}");
+    }
+
+    /// El OSD es un estado de la isla: su contenido se dibuja **sin fondo propio** (el
+    /// fondo es la cápsula del dock, `draw_capsule`). Si volviera a pintar su panel, la
+    /// superficie mostraría las dos cosas: la cápsula recortada y el panel encima.
+    #[test]
+    fn el_contenido_del_osd_no_pinta_su_propio_fondo() {
+        use crate::config::DockEdge;
+        let dock = dock_de(DockEdge::Left);
+        let args = crate::menu_render::OsdArgs {
+            kind: crate::menu::OsdKind::Volume,
+            level: 50,
+            muted: false,
+            panel_w: 26.0,
+            panel_h: crate::menu::OSD_PILL_LEN,
+            dock: &dock,
+            render_scale: 1.0,
+        };
+        let mut pixmap =
+            tiny_skia::Pixmap::new(26, crate::menu::OSD_PILL_LEN.round() as u32).unwrap();
+        let mut text_cache = TextCache::new();
+        crate::menu_render::draw_osd(&mut pixmap, &mut text_cache, &args);
+        // ----- la esquina (0,0) queda fuera del icono y del texto: si el OSD pintara un
+        // panel, ahí habría tinta -----
+        assert_eq!(
+            pixmap.pixel(0, 0).unwrap().alpha(),
+            0,
+            "el OSD no debe pintar fondo propio (el fondo es la cápsula)"
+        );
     }
 
     /// La máscara es lo que recorta el reveal y la isla: si queda vacía el dock

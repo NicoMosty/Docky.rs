@@ -15,12 +15,12 @@ use crate::config::WidgetKind;
 // solo bloque: la tabla vive en la raiz, pero el dibujo sigue siendo de `render/` -----
 use crate::render::{
     MarqueeState, WidgetColors, WidgetRect, draw_battery_widget, draw_bluetooth_icon,
-    draw_clock_widget, draw_cpu_widget, draw_kblayout_widget, draw_media_widget, draw_mic_widget,
-    draw_network_widget, draw_power_widget, draw_ram_widget, draw_recording_widget,
-    draw_text_widget, draw_tray_widget, draw_volume_widget, draw_widget_button_bg,
-    draw_workspaces_widget, media_ideal_len, percentage_widget_len, text_widget_len,
-    text_width_estimate_render, tray_geometry, volume_content_len, volume_icon_r, widget_text_px,
-    workspaces_geometry, ws_compact_scale,
+    draw_clipboard_widget, draw_clock_widget, draw_cpu_widget, draw_kblayout_widget,
+    draw_media_widget, draw_mic_widget, draw_network_widget, draw_power_widget, draw_ram_widget,
+    draw_recording_widget, draw_text_widget, draw_tray_widget, draw_volume_widget,
+    draw_widget_button_bg, draw_workspaces_widget, media_ideal_len, percentage_widget_len,
+    text_widget_len, text_width_estimate_render, tray_geometry, volume_content_len, volume_icon_r,
+    widget_text_px, workspaces_geometry, ws_compact_scale,
 };
 use crate::widgets::WidgetSnapshot;
 use dockyrs_canvas::{IconCache, TextCache};
@@ -82,6 +82,8 @@ pub(crate) enum WidgetAction {
     ToggleMic,
     /// Arranca/para la grabación corriendo `record-toggle.sh` (click del widget).
     ToggleRecording,
+    /// Abre (o cierra) el historial del portapapeles (click del widget `Clipboard`).
+    OpenClipboard,
     NextKbdLayout,
     OpenDockMenu,
     /// Menu del SNI del widget (nm-applet / blueman). El ejecutor sabe el
@@ -293,6 +295,15 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
         click: Some(click_recording),
     },
     WidgetSpec {
+        kind: WidgetKind::Clipboard,
+
+        text: true,
+        label: "Clipboard",
+        natural_len: len_clipboard,
+        draw: draw_clipboard,
+        click: Some(click_clipboard),
+    },
+    WidgetSpec {
         kind: WidgetKind::KbdLayout,
 
         text: true,
@@ -436,6 +447,10 @@ fn click_mic(cx: &ClickCtx) -> Option<WidgetAction> {
 
 fn click_recording(cx: &ClickCtx) -> Option<WidgetAction> {
     (cx.click == WidgetClick::Left).then_some(WidgetAction::ToggleRecording)
+}
+
+fn click_clipboard(cx: &ClickCtx) -> Option<WidgetAction> {
+    (cx.click == WidgetClick::Left).then_some(WidgetAction::OpenClipboard)
 }
 
 fn click_kblayout(cx: &ClickCtx) -> Option<WidgetAction> {
@@ -647,6 +662,56 @@ fn len_recording(cx: &Ctx) -> f32 {
 
 fn draw_recording(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
     draw_recording_widget(
+        canvas.pixmap,
+        canvas.text_cache,
+        cx.widgets,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+        canvas.is_hovered(r),
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    );
+    false
+}
+
+// ----- portapapeles -----
+
+/// Etiqueta del widget y de la actividad de isla. El `title` del historial son
+/// hasta 18 palabras y en la pastilla no entra, así que se recorta como el SSID de
+/// Network. Vive acá y no en el dibujo porque la MEDIDA y el DIBUJO tienen que usar
+/// la MISMA cadena (trampa 12).
+pub(crate) fn clipboard_label(preview: Option<&crate::widgets::ClipboardPreview>) -> String {
+    let Some(preview) = preview else {
+        return String::new();
+    };
+    if preview.title.chars().count() > 24 {
+        format!("{}…", preview.title.chars().take(24).collect::<String>())
+    } else {
+        preview.title.clone()
+    }
+}
+
+fn len_clipboard(cx: &Ctx) -> f32 {
+    let label = clipboard_label(cx.widgets.clipboard.as_ref());
+    if label.is_empty() {
+        return 0.0;
+    }
+    // ----- misma pastilla que el volumen/mic (icono + etiqueta) -----
+    volume_content_len(
+        &label,
+        cx.render_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    )
+}
+
+fn draw_clipboard(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_clipboard_widget(
         canvas.pixmap,
         canvas.text_cache,
         cx.widgets,
@@ -1103,6 +1168,7 @@ mod clock_vertical_tests {
             volume: Some((50, false)),
             mic: None,
             recording: None,
+            clipboard: None,
             network: NetworkInfo {
                 label: "wifi".into(),
                 online: true,
@@ -1196,5 +1262,43 @@ mod clock_vertical_tests {
             "y menos que el de la barra (que lleva la fecha): {compacto} vs {}",
             largo_vertical(&s, &w)
         );
+    }
+}
+
+#[cfg(test)]
+mod clipboard_label_tests {
+    use super::*;
+    use crate::widgets::ClipboardPreview;
+
+    fn preview(title: &str) -> ClipboardPreview {
+        ClipboardPreview {
+            title: title.to_string(),
+        }
+    }
+
+    /// La etiqueta se recorta: el `title` del historial son hasta 18 palabras y en la
+    /// pastilla no entra. Es la MISMA que miden `len_clipboard` y el dibujo (trampa 12).
+    #[test]
+    fn el_titulo_largo_se_recorta_y_el_corto_queda_igual() {
+        assert_eq!(clipboard_label(None), "");
+        assert_eq!(clipboard_label(Some(&preview("hola"))), "hola");
+        // ----- 24 chars entran tal cual; 25 ya llevan la elipsis -----
+        let de24 = "x".repeat(24);
+        assert_eq!(clipboard_label(Some(&preview(&de24))), de24);
+        let de40 = "x".repeat(40);
+        let recortado = clipboard_label(Some(&preview(&de40)));
+        assert_eq!(recortado.chars().count(), 25, "24 + la elipsis");
+        assert!(recortado.ends_with('…'));
+        assert!(recortado.starts_with(&"x".repeat(24)));
+    }
+
+    /// El recorte es por CHARACTERS, no por bytes: un título con acentos no puede
+    /// partirse a la mitad (el caso de `percent_decode`, AUDIT D2).
+    #[test]
+    fn el_recorte_no_parte_un_char_multibyte() {
+        let titulo = "á".repeat(30);
+        let label = clipboard_label(Some(&preview(&titulo)));
+        assert_eq!(label.chars().count(), 25);
+        assert!(label.starts_with(&"á".repeat(24)));
     }
 }

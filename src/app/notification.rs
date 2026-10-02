@@ -1,5 +1,15 @@
 use super::*;
 
+/// ¿El aviso es un repetido del último? Se compara contra el **último** de la lista
+/// (el más nuevo), sin ventana de tiempo: `A, A` se colapsa; `A, B, A` no.
+///
+/// ponytail: sin ventana alcanza con mirar el elemento 0. Una ventana pediría un
+/// `Instant` por entrada y una política de vencimiento; el caso real (una app
+/// re-anunciando lo mismo) lo cubre igual.
+fn notif_repetido(habilitado: bool, ultimo: Option<(&str, &str)>, title: &str, body: &str) -> bool {
+    habilitado && ultimo.is_some_and(|(t, b)| t == title && b == body)
+}
+
 impl App {
     /// Guarda el aviso en el historial (el más nuevo primero, tope
     /// `NOTIF_HISTORY_CAP`) y, si el panel está abierto, lo re-abre para que el alto
@@ -30,6 +40,20 @@ impl App {
         body: String,
         qh: &QueueHandle<Self>,
     ) {
+        // ----- un repetido no se apila NI se muestra: la app que re-manda lo mismo
+        // (un recordatorio que se re-anuncia) no spamea. El ajuste `notif_dedup` lo
+        // apaga si se quieren ver todas. -----
+        if notif_repetido(
+            self.dock.config.settings.notif_dedup,
+            self.notifications
+                .first()
+                .map(|e| (e.title.as_str(), e.body.as_str())),
+            &title,
+            &body,
+        ) {
+            log::debug!("notify: repetido, no lo apilo ni muestro");
+            return;
+        }
         // ----- el historial primero: el panel tiene el aviso aunque el toast no llegue
         // a verse. Y no hay corte por modos abiertos: el toast vive en su propia
         // superficie, así que ya no le roba la suya a ningún panel -----
@@ -243,18 +267,17 @@ impl App {
     }
 
     pub(super) fn tick_notification_frame(&mut self, qh: &QueueHandle<Self>) {
+        let dt = self.frame_dt_ms;
         let Some(m) = self.notification_mode.as_mut() else {
             return;
         };
-        let animating = if m.anim < m.target_anim {
-            m.anim = (m.anim + menu::ANIM_STEP_OPEN).min(m.target_anim);
-            true
-        } else if m.anim > m.target_anim {
-            m.anim = (m.anim - menu::ANIM_STEP_CLOSE).max(m.target_anim);
-            true
-        } else {
-            false
-        };
+        let animating = menu::anim_towards(
+            &mut m.anim,
+            m.target_anim,
+            dt,
+            menu::Pace::Open,
+            menu::Pace::Close,
+        );
         let closing = m.closing;
         let anim = m.anim;
 
@@ -270,5 +293,25 @@ impl App {
             return;
         }
         self.draw_notification_mode(qh);
+    }
+}
+
+#[cfg(test)]
+mod notif_dedup_tests {
+    use super::notif_repetido;
+
+    #[test]
+    fn el_repetido_del_ultimo_se_colapsa() {
+        // ----- apagado: nada se colapsa -----
+        assert!(!notif_repetido(false, Some(("a", "b")), "a", "b"));
+        // ----- prendido y repetido: sí -----
+        assert!(notif_repetido(true, Some(("a", "b")), "a", "b"));
+        // ----- distinto título o cuerpo: no -----
+        assert!(!notif_repetido(true, Some(("a", "b")), "otro", "b"));
+        assert!(!notif_repetido(true, Some(("a", "b")), "a", "otro"));
+        // ----- lista vacía: nunca es repetido -----
+        assert!(!notif_repetido(true, None, "a", "b"));
+        // ----- sólo cuenta el ÚLTIMO: A, B, A no se colapsa (el último es B) -----
+        assert!(!notif_repetido(true, Some(("b", "x")), "a", "b"));
     }
 }

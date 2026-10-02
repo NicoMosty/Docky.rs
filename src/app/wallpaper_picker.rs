@@ -364,21 +364,20 @@ impl App {
     pub(super) fn tick_wallpaper_frame(&mut self, qh: &QueueHandle<Self>) {
         // ----- transiciones apagadas: el filmstrip salta, no se desliza -----
         let smooth = self.dock.config.settings.smooth_transitions;
+        let dt = self.frame_dt_ms;
         let Some(wp) = self.wallpaper_mode.as_mut() else {
             return;
         };
-        let fade_animating = if wp.anim < wp.target_anim {
-            wp.anim = (wp.anim + menu::ANIM_STEP_OPEN).min(wp.target_anim);
-            true
-        } else if wp.anim > wp.target_anim {
-            wp.anim = (wp.anim - menu::ANIM_STEP_CLOSE).max(wp.target_anim);
-            true
-        } else {
-            false
-        };
+        let fade_animating = menu::anim_towards(
+            &mut wp.anim,
+            wp.target_anim,
+            dt,
+            menu::Pace::Open,
+            menu::Pace::Close,
+        );
         let scroll_delta = wp.scroll_target - wp.scroll_x;
         let scroll_animating = if smooth && scroll_delta.abs() > 0.5 {
-            wp.scroll_x += scroll_delta * 0.28;
+            wp.scroll_x += scroll_delta * menu::lerp_factor(0.28, dt);
             true
         } else {
             wp.scroll_x = wp.scroll_target;

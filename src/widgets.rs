@@ -146,6 +146,14 @@ pub struct BluetoothInfo {
     pub connected: Option<String>,
 }
 
+/// Vista liviana de la última copia, para el widget `Clipboard` y su actividad de
+/// isla. No lleva los bytes (el historial ya los guarda): sólo lo que se dibuja.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipboardPreview {
+    /// El preview de la entrada: el texto recortado a ~18 palabras, o "Image".
+    pub title: String,
+}
+
 pub struct WorkspaceInfo {
     pub id: i32,
     pub active: bool,
@@ -206,6 +214,10 @@ pub struct WidgetSnapshot {
     pub mic: Option<(u8, bool)>,
     /// Segundos de grabación en curso (`None` = no hay). Se lee siempre: es un `stat`.
     pub recording: Option<u64>,
+    /// Última copia de la sesión, la baja el watcher `zwlr_data_control` (corre
+    /// desde el arranque). Es lo que muestran el widget `Clipboard` y su actividad de
+    /// isla. No se lee del historial al arrancar: `None` hasta que copies algo.
+    pub clipboard: Option<ClipboardPreview>,
     pub network: NetworkInfo,
     pub kblayout: KbLayout,
     /// Un texto opcional por widget personalizado con script, alineado por
@@ -323,6 +335,7 @@ impl WidgetSnapshot {
             // el tick lo trae enseguida (ver `App::refresh_sys`) -----
             mic: None,
             recording: None,
+            clipboard: None,
             network,
             kblayout,
             custom_texts: Vec::new(),

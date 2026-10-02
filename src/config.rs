@@ -52,6 +52,10 @@ pub enum WidgetKind {
     /// `~/.cache/dockyrs-recording-path`): punto rojo + tiempo. En la isla aparece
     /// sola, como actividad viva, aunque no esté colocada en la barra.
     Recording,
+    /// Última copia del portapapeles: el preview corto del texto (o "Image"). En la
+    /// isla aparece sola como actividad viva al copiar; el click izquierdo abre el
+    /// historial.
+    Clipboard,
     KbdLayout,
     /// Widget con script, direccionado por su posición en
     /// `DockSettings.custom_widgets`. El payload es un índice, no una
@@ -347,6 +351,11 @@ pub struct DockSettings {
     /// "Notification History" en la categoría Launcher.
     #[serde(default = "default_notif_history")]
     pub notif_history: usize,
+    /// Colapsar avisos repetidos: uno idéntico al último no se vuelve a apilar ni a
+    /// mostrar. Ajuste "Avoid Duplicates" en la categoría Launcher. Prendido por
+    /// defecto (lo común es una app re-anunciando lo mismo).
+    #[serde(default = "default_true")]
+    pub notif_dedup: bool,
     #[serde(default = "default_widgets")]
     pub widgets: Vec<WidgetPlacement>,
     #[serde(default)]
@@ -433,6 +442,7 @@ impl Default for DockSettings {
             launcher_sort_by_usage: true,
             clipboard_items: default_clipboard_items(),
             notif_history: default_notif_history(),
+            notif_dedup: true,
             widgets: default_widgets(),
             custom_palettes: Vec::new(),
             custom_widgets: Vec::new(),

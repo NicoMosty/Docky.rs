@@ -52,6 +52,7 @@ mod dock_menu_input;
 mod dock_popup;
 mod draw;
 mod fonts;
+mod island_activity;
 mod notification;
 mod notifications_ui;
 mod osd;
@@ -63,6 +64,7 @@ mod volume_panel;
 mod wallpaper_picker;
 mod ws_flash;
 use fonts::{apply_kitty_font, apply_system_gtk_font, apply_system_qt_font};
+pub(crate) use island_activity::IslandActivities;
 mod handlers;
 use self::click_catcher::ClickCatcher;
 
@@ -536,15 +538,13 @@ impl App {
     }
 }
 
+/// El OSD (volumen/brillo) como estado de la isla: una píldora del grosor del dock,
+/// sin superficie ni tamaño propios. Por eso no guarda animación: entra y sale seco
+/// con el timer (`osd_reset_tx`), como el toast de notificaciones.
 pub(crate) struct OsdMode {
     kind: menu::OsdKind,
     level: u8,
     muted: bool,
-    anim: f32,
-    target_anim: f32,
-    closing: bool,
-    panel_w: f32,
-    panel_h: f32,
 }
 
 /// Panel de notificaciones: el historial y el scroll. Sin selección ni animación —
@@ -593,6 +593,40 @@ pub struct App {
     /// workspace) y el paso por frame `tick_island_split_frame`.
     pub island_ws_split: f32,
     pub island_ws_target: f32,
+    /// Actividades vivas de la isla: la isla las muestra EN LUGAR del reposo (hora +
+    /// batería) mientras duran. Ver `island_activity.rs`.
+    pub island_activity: IslandActivities,
+    /// Hay una actividad nueva/rotada sin pintar: el frame que llega la pinta. Sin
+    /// esto, un anuncio mientras hay un frame en vuelo quedaba invisible (`request_redraw`
+    /// se saltea con `awaiting_frame`; trampa 15).
+    /// El contenido de la superficie cambió (actividad de isla, OSD) y el repintado pudo
+    /// saltearse por tener un frame en vuelo (`request_redraw` no hace nada con
+    /// `awaiting_frame`): el frame que llegue lo pinta. Sin esto, un cambio en esa
+    /// ventana de ~1 frame se perdía (trampa 15).
+    pub needs_repaint: bool,
+    /// Tiempo (ms) desde el frame anterior. Las animaciones avanzan por tiempo, no por
+    /// frame (ver `menu::anim_step`). Lo llena `handlers::frame`; los ticks lo leen. Un
+    /// hueco mayor a 50 ms se toma como frame nominal: el primer frame después de un
+    /// rato quieto no puede saltar la animación entera.
+    ///
+    /// ponytail: es un reloj COMPARTIDO entre superficies. Con una sola animando (el
+    /// caso normal) es exacto; si dos reciben frames a la vez (un toast y el reveal -
+    /// por el frame callback de cada una) ambas corren hasta 2x más lento. Se acepta:
+    /// solo se ralentiza, nunca se acelera, y el cruce es raro. Un reloj por superficie
+    /// lo arreglaría (4 campos más).
+    pub frame_dt_ms: f32,
+    /// Instante del frame anterior: `frame_dt_ms` sale de acá.
+    pub last_frame_at: Option<std::time::Instant>,
+    /// Actividad de batería: si ya vimos el primer dato (warm-up, para no anunciar el
+    /// estado de arranque), el umbral ya avisado (101 = ninguno) y si estaba enchufada
+    /// en la lectura previa.
+    pub battery_activity_ready: bool,
+    pub battery_warned: u8,
+    pub battery_on_power: bool,
+    /// Actividad de Bluetooth: warm-up del primer dato y último dispositivo conectado
+    /// visto (la identidad para detectar conexión/desconexión).
+    pub bluetooth_activity_ready: bool,
+    pub bluetooth_connected: Option<String>,
     pub reveal_anim: f32,
     pub reveal_target: f32,
     /// El Overview de niri está abierto. Mientras dure, el dock se queda visible
@@ -614,6 +648,10 @@ pub struct App {
     /// ventana de `CALENDAR_HOVER_MS` el calendario se abre. Lo limpia cualquier
     /// Enter/Motion que caiga fuera del reloj.
     pub calendar_hover_at: Option<std::time::Instant>,
+    /// Instante en que el puntero llegó al blob de la isla (dock oculto) y se quedó: pasado
+    /// `ISLAND_HOVER_MS` el dock se revela. Antes de eso la isla se ve con el hover lift
+    /// (G). Lo limpia el `Leave` y el revelado.
+    pub island_hover_at: Option<std::time::Instant>,
     pub autohide_hide_tx: std::sync::mpsc::Sender<u64>,
     /// Peticiones de menú del tray: las resuelve el hilo de `tray::spawn_menu_worker`
     /// porque `GetLayout` es bloqueante (A3 de AUDIT.md). El resultado vuelve por el

@@ -1381,13 +1381,16 @@ reordenamiento de widgets) y lo posterior:
     revelar nunca. Efecto lateral: la franja de 26x~500 que antes se comía el dock le
     llega ahora a la ventana de abajo. Se re-aplica sólo cuando cambia (`applied_input`),
     que cada `set_input_region` es un `commit` de más.
-  - **La isla NO recibe puntero, y no es un olvido**: al entrar al **blob** (que es lo
-    único que el dock oculto tiene activo) el `Enter` revela el dock en el mismo handler y `should_hide()` exige `pointer_pos` en `None`,
-    así que la isla existe **sólo con el puntero lejos de la superficie**. Se probó
-    cablearle rueda = volumen y tap = play/pause (`island_hit` sobre `island_spans`) y
-    hubo que revertirlo: era código inalcanzable. Para darle interacción hay que
-    **achicar el disparador al blob** (se pierde tirar el mouse al borde) o aceptar que
-    scrollear revele el dock: decisión de diseño, no de código.
+  - **La isla recibe puntero SÓLO durante el dwell (G)** (actualizado: antes revelaba en
+    el mismo `Enter`). Al entrar al blob el handler guarda `island_hover_at` y arma un
+    tick de `ISLAND_HOVER_MS` (120 ms); recién al vencer `island_hover_due()` revela el
+    dock (`autohide_timeout`). Antes de eso la isla se dibuja con `HOVER_LIFT` (1,018, sólo
+    el eje largo: el corto es el grosor y no tiene holgura). Un `Press` revela YA (no
+    espera), y un `Leave` cancela el dwell. Efecto buscado: cruzar el borde de paso ya no
+    revela. Se probó cablearle rueda = volumen y tap = play/pause (`island_hit` sobre
+    `island_spans`): eso sigue sin llegar, porque el dwell termina revelando el dock. Para
+    interacción de verdad hay que achicar el disparador a un núcleo o aceptar que scrollear
+    revele: decisión de diseño, no de código.
   - **La isla entera SE CORRE a la altura del indicador** con el split abierto:
     `island_ws_shift` (del MISMO reparto del dock, `layout_widgets`) devuelve cuánto
     hay que desplazar el blob sobre el eje largo para quedar centrado donde el dock
@@ -1532,6 +1535,186 @@ reordenamiento de widgets) y lo posterior:
     contra `ws_split_eased` (si se cae el easing, falla).
   - Verificado con tiras de frames del cierre (`grim -g` sobre una región chica + ppm:
     ~25 ms por frame, contra los ~370 ms de un PNG 1920x1080).
+
+- **Motor de actividades vivas de la isla** (primer escalón de `ISLAS-DINAMICAS.md`, el
+  informe que compara con ChillPill-Shell y island). Una actividad viva **ocupa** la
+  isla —reemplaza el reparto de reposo (hora + batería)— en vez de sumarse al lado del
+  reloj.
+  - `app::island_activity::IslandActivities` es la cola: `announce` la pone a la vista,
+    `expire` rota a la siguiente (o al reposo). Estado **puro**, sin Wayland, así que se
+    testea sin construir el `App` (mismo criterio que `popup_dismiss_due` y
+    `accion_del_configure`). Una segunda actividad **espera** en la cola en vez de pisar
+    la que está, y un repetido se ignora.
+  - `island_activities(widgets, ws_split, active)` —y con eso `island_plan`,
+    `island_blob_region`, `draw_island` y `draw`— reciben la actividad activa: con una
+    viva devuelve **sólo** esa. La región de input de la isla encogida sale del MISMO
+    plan, así que el disparador del reveal sigue calzando con el blob.
+  - El vencimiento va por el canal del autohide (`arm_island_activity_tick`, la misma
+    jugada que `arm_calendar_tick`) y se cobra en `autohide_timeout`, el único tick que
+    corre con el dock oculto. **Sin timer ni thread nuevos.**
+  - `island_activity_dirty` cubre la trampa 15 del caso chico: un anuncio mientras hay
+    un frame en vuelo no se puede perder (`request_redraw` se saltea con
+    `awaiting_frame`), así que el frame que llega lo pinta.
+  - Primera fuente: **batería** al enchufar o al cruzar 20 % / 10 % descargando
+    (`note_battery_activity`, con el `battery_warned` de island y un warm-up del primer
+    dato para no anunciar el estado de arranque). El dato ya lo trae `refresh_battery`
+    (cada 3 s) y la actividad dibuja el MISMO widget de batería: cero código de dibujo.
+  - Sensor: `island: actividad <Kind>` al mostrarla y `island: fin de actividad -> …` al
+    rotar/volver al reposo, en `RUST_LOG=debug`. Para verlo en vivo: con el dock oculto,
+    enchufar/desenchufar el cargador (o `wpctl`/ACPI-equivalente) y mirar la isla 3,2 s.
+  - Guards: `app::island_activity::island_activity_tests` (vida y vencimiento, cola y
+    rotación, no-repetición, umbrales 20/10) y
+    `render::reveal_tests::una_actividad_viva_reemplaza_el_reposo` (el plan mide la
+    actividad, no el reposo). Tests 175 → 177.
+  - **Pendiente de verificar en vivo**: la batería (B, hace falta el cargador) y el
+    Bluetooth (D, no hay dispositivo conectado en esta máquina). El motor (A), el
+    portapapeles (C) y el layout de teclado (E) SÍ están verificados (ver abajo).
+
+- **Actividad de portapapeles** (C de `ISLAS-DINAMICAS.md`): copiar en cualquier app
+  muestra la última copia en la isla por 3,2 s.
+  - El dato sale del watcher `zwlr_data_control` que el dock ya tenía: TODA copia (de
+    cualquier app) pasa por `App::ingest_clipboard_capture`, el ÚNICO sitio que
+    alimenta el historial. Al agregar la entrada se guarda una vista liviana
+    (`WidgetSnapshot::clipboard: Option<ClipboardPreview>`, sólo el `title`) y se
+    anuncia `WidgetKind::Clipboard`.
+  - **Es la única actividad que no necesita ningún widget colocado**: el watcher es
+    global (batería/bluetooth/teclado están gateados por `has_widget`).
+  - `WidgetKind::Clipboard` es un widget nuevo (enum + `WIDGETS`, trampa 13): la misma
+    pastilla icono+etiqueta que volumen/mic, con el icono de portapapeles en trazo.
+    Ofrecido en Ajustes como los demás (actividad de isla **y** widget de barra, como
+    `Recording`); colocado en la barra muestra la última copia. El click izquierdo abre
+    el historial (`WidgetAction::OpenClipboard` → `toggle_clipboard`).
+  - `widget::clipboard_label` recorta el `title` a 24 caracteres + `…` y es la MISMA
+    cadena que miden `len_clipboard` y el dibujo (trampa 12). El recorte es por
+    CHARACTERS, no por bytes.
+  - **Lo que NO hace**: no lee el historial al arrancar (widget y actividad quedan
+    vacíos hasta la primera copia de la sesión), así que no paga el parseo del JSON en
+    el arranque en frío. Copiar dos veces lo mismo no re-anuncia (`add` deduplica y el
+    preview queda igual).
+  - Verificado en vivo (reinicio + `printf … | wl-copy`): `island: actividad Clipboard`
+    → la pastilla con el icono y el texto recortado (screenshot) → a los 3,2 s
+    `island: fin de actividad -> None` y vuelve a hora+batería; 1 jiffy en 5 s en
+    reposo, 0 líneas de log (sin loop de redibujado). **Ojo al probarlo**: con el
+    Overview de niri abierto el dock no se oculta y la actividad se descarta.
+  - Guards: `widget::clipboard_label_tests` y los de la tabla actualizados (`WIDGETS`
+    15→16, Ajustes 14→15). Tests 177→179.
+
+- **HUD de layout de teclado y actividad de Bluetooth** (E y D de
+  `ISLAS-DINAMICAS.md`), las dos por el mismo camino: `refresh_kblayout` y
+  `refresh_bluetooth` anuncian la actividad y **dejaron de estar gateadas por el widget**.
+  - **Por qué se puede desgatear**: las dos son **event-driven** (niri las manda por el
+    event-stream / D-Bus), no hay tick que las sondee. El costo de leer sin el widget es
+    *un* `niri msg` por cambio de layout y *dos* `bluetoothctl` por evento de Bluetooth:
+    eventos raros y del usuario. El invariante "los `refresh_*` gateados por
+    `has_widget`" sigue valiendo para los que corren en el tick (volumen, mic, red).
+  - La decisión de "esto es novedad" salió a funciones puras con test
+    (`App::kblayout_es_novedad`, `App::bluetooth_es_novedad`): el **warm-up** del primer
+    dato es el bug clásico (anunciar el estado de arranque como si acabara de pasar) —
+    un layout `--`/vacío no se anuncia, y el primer `connected` tampoco.
+  - La actividad dibuja el MISMO widget (`draw_one_widget`): el HUD de teclado es la
+    pastilla con "EN"/"ES", y la de Bluetooth es el icono (el widget es symbol-only, así
+    que el nombre del dispositivo **no** se muestra: limitación conocida).
+  - Sensor: `island: actividad KbdLayout` / `Bluetooth`.
+  - Verificado en vivo (E): `niri msg action switch-layout 1` con el dock oculto →
+    `island: actividad KbdLayout` → la isla muestra "EN" (screenshot) → a los 3,2 s
+    vuelve a hora+batería, y el cambio de vuelta a 0 la re-anuncia. **D no se pudo
+    verificar en vivo** (no hay dispositivo Bluetooth conectado): queda código+tests.
+  - **Ojo al probar E**: `niri msg action switch-layout` **exige el argumento**
+    (`<LAYOUT>`); sin él sale rc=2 y no cambia nada.
+  - Guards: `app::draw::island_activity_source_tests`. Tests 179→181.
+
+- **Dedup de avisos** (M de `ISLAS-DINAMICAS.md`): un aviso idéntico al último de la
+  lista no se apila **ni se muestra** (la app que re-anuncia lo mismo no spamea).
+  - Ajuste nuevo `DockSettings::notif_dedup` (default **prendido**,
+    `#[serde(default = "default_true")]`), fila "Avoid Duplicates" en la categoría
+    Launcher junto a "Notification History" (`SettingId::NotifDedup`: toggle, no pide
+    relayout).
+  - La decisión es una función pura con test, `notif_repetido(habilitado, ultimo,
+    title, body)`, aplicada en `show_notification` ANTES de `push_notification`, así el
+    repetido no entra al historial ni crea toast.
+  - **Sólo compara contra el ÚLTIMO** (el más nuevo), sin ventana de tiempo: `A, A` se
+    colapsa; `A, B, A` no. Ponerle ventana pediría un `Instant` por entrada.
+  - Verificado en vivo: 5 `--notify` idénticos → 1 toast + 4 líneas
+    `notify: repetido, no lo apilo ni muestro` y **una** fila en el panel de Notifs
+    (screenshot). Sensor: esa línea del log.
+  - Guards: `app::notification::notif_dedup_tests` y
+    `menu::settings::launcher_settings_tests::el_dedup_de_avisos_es_toggle_y_arranca_prendido`
+    (más el listado de la categoría Launcher actualizado). Tests 181→183.
+
+- **El OSD es un estado de la isla** (L de `ISLAS-DINAMICAS.md`): volumen y brillo ya no
+  prestan la superficie del dock — son una **píldora fina** (el grosor del dock, largo
+  `OSD_PILL_LEN` = 220) dibujada con la MISMA cuenta de cápsula que la isla
+  (`reveal_capsule` + `draw_capsule` + `reveal_mask`).
+  - `show_osd` ya **no** hace `set_size` ni `Layer::Overlay`: sólo guarda
+    `OsdMode { kind, level, muted }` y pide un frame. `draw_ex` lo atiende en una rama
+    temprana (antes del corte de "oculto"), así el OSD se ve igual con el dock oculto
+    (sobre la isla) o visible (reemplazando el contenido).
+  - `osd_mode` **salió** de `layer_is_borrowed` y de `forces_dock_visible`: no cambia
+    tamaño ni layer, así que dejó de ser un préstamo.
+  - Se fue toda la animación propia (`anim`/`target_anim`/`closing`/`tick_osd_frame`):
+    entra y sale seco con el timer del OSD, como el toast. Es la lección del toast —un
+    cierre que depende de frame callbacks puede quedar pegado—.
+  - `menu_render::draw_osd` ya **no pinta su panel** (fondo + `menu_radius` + borde):
+    sólo el contenido (icono + barra + nivel). El fondo es la cápsula del dock. Guard:
+    `render::reveal_tests::el_contenido_del_osd_no_pinta_su_propio_fondo`.
+  - Se borraron las constantes del panel viejo (`OSD_NOTIFICATION_BASE_THICKNESS`,
+    `OSD_GROWTH_W`, `OSD_GROWTH_H`, `OSD_MIN_PANEL_H`).
+  - **Trampa 15 del caso chico, otra vez**: el primer intento no se dibujó porque
+    `request_redraw` se saltea con un frame en vuelo. `island_activity_dirty` pasó a
+    llamarse **`needs_repaint`** (genérico) y ahora también lo setea el OSD.
+  - Verificado en vivo: `--osd-volume`/`--osd-brightness` dibujan la píldora 26x220 con el
+    dock **oculto** (sobre la isla) y **visible** (reemplazando el dock), sin un solo
+    `configure` de tamaño nuevo ni cambio de layer, y vuelve a la isla/dock tras el
+    timeout. Sensor: `osd: <kind> <level>%` y `osd: píldora 26x220 en (x,y)`.
+  - **Limitación conocida**: la input region del dock oculto sigue siendo el blob de las
+    actividades (~150), no el de la píldora (220): los ~35 px de cada extremo no disparan
+    el reveal durante los 1,4 s del OSD.
+
+- **Las animaciones avanzan por TIEMPO, no por frame** (F de `ISLAS-DINAMICAS.md`): los
+  `+= ANIM_STEP_OPEN` (0.07) por frame ataban la velocidad al frame rate — a 144 Hz todo
+  iba 2,4x más rápido que a 60. Ahora hay un ritmo (duración) y un paso por `dt`.
+  - `menu::Pace { Open=238 ms, Close=333 ms, MorphClose=185 ms, Quick=104 ms }` +
+    `anim_step` / `anim_towards` (lineal en el tiempo: la curva la sigue aplicando el
+    dibujo, `ease_out`/`ws_split_eased`) + `lerp_factor` (el `k` por frame del scroll y el
+    resaltado, corregido: `1-(1-k)^(dt/16.67)`).
+  - `App::frame_dt_ms` lo llena `handlers::frame`. Un hueco >50 ms se toma como frame
+    nominal: si no, el primer frame tras un rato quieto daba un salto (el reveal arrancaba
+    en 0.30 en vez de 0.05).
+  - Se borraron `ANIM_STEP_OPEN/CLOSE` y `WS_SPLIT_STEP_OPEN/CLOSE`. Las duraciones son las
+    que daban esos pasos a 60 fps, así el ritmo se conserva (verificado: el reveal abre
+    `0.00 -> 0.07` por frame y llega a 1.00 en ~240 ms).
+  - Cubre los 11 sitios que animaban por frame (reveal, split, ws_flash, dock_menu + su
+    dropdown + slide, popup, menú de ícono, toast, launcher, portapapeles, fondos) y los
+    4 lerps de scroll/resaltado/fundido del contenido.
+  - Con `smooth_transitions` apagado sigue saltando al valor final.
+  - **Limitación conocida**: el reloj es compartido entre superficies (`ponytail:` en
+    `frame_dt_ms`): con dos animando a la vez (un toast y el reveal) ambas corren hasta 2x
+    más lento. Un reloj por superficie lo arreglaría (4 campos más).
+  - Guards: `menu::anim_tests` (independencia del frame rate, no se pasa del target, el
+    ritmo sale de la dirección, el lerp). Verificado en vivo: reveal `0.00 -> 0.07` por
+    frame, llega a 1.00 y se apaga; CPU en reposo en el piso (1 jiffy en 6 s).
+
+- **Hover lift de la isla con dwell** (G de `ISLAS-DINAMICAS.md`): al entrar al blob el
+  dock ya **no** se revela en el mismo `Enter` — el handler guarda `island_hover_at` y arma
+  un tick de `ISLAND_HOVER_MS` (120 ms). Al vencer, `island_hover_due()` revela (desde
+  `autohide_timeout`, el mismo tick); antes de eso la isla se ve con `HOVER_LIFT` (1,018).
+  - **Efecto buscado**: cruzar el borde de paso ya no revela el dock, y el hover tiene
+    respuesta visual. Un `Press` revela YA; un `Leave` cancela el dwell y el lift.
+  - El lift escala **sólo el eje largo** (`compact * hover_lift` en `draw_island`): el corto
+    es el grosor del dock y no tiene holgura. El MISMO largo va al fondo y a la máscara
+    (trampa 10).
+  - `island_hover_at` se limpia en `reveal_dock` y en `set_dock_visible`, así un cambio de
+    visibilidad no arrastra el dwell. La decisión es pura y con test (`hover_due`).
+  - Guards: `app::draw::island_activity_source_tests::el_dwell_revela_solo_con_las_tres_condiciones_y_el_plazo`
+    y `render::reveal_tests::el_hover_lift_alarga_la_isla_dibujada` (mide la TINTA del
+    bounding box, así cubre el cableado, no sólo el factor). Tests 189→190.
+  - Verificado en vivo: `island: hover dwell (120 ms)` → `timeout visible=false` → `show`
+    → `reveal` a los **121 ms** del `Enter`. **Ojo al probarlo**: `scripts/click_at.py`
+    parkea en la esquina superior izquierda y ahí niri abre el **Overview** (hot corner),
+    que deja el dock fijo y tapa la ventana del dwell; hay que cerrarlo
+    (`niri msg action close-overview`) o el dwell no se ve.
+  - **Lo que NO habilita**: rueda y tap sobre la isla siguen sin llegar (el dwell termina
+    revelando el dock). Para eso hay que achicar el disparador a un núcleo.
 
 ## Cerrado de AUDIT.md (movido de ahí el 2026-09-20)
 
