@@ -442,6 +442,38 @@ pub(crate) fn island_blob_region(
     ))
 }
 
+/// Fracción del largo del blob que forma el "núcleo": el sub-rect que revela el dock.
+const ISLAND_CORE_FRAC: f32 = 0.4;
+
+/// Piso del núcleo, para que en un blob corto (Media ~104) siga entrando.
+const ISLAND_CORE_MIN: f32 = 40.0;
+
+/// El "núcleo" del blob: el sub-rect que **revela** el dock. Es el centro del eje largo;
+/// el resto del blob queda para hover franco, rueda y tap, así la isla recibe puntero sin
+/// que cualquier roce revele. Sale de `island_blob_region`, la MISMA que la input region,
+/// así el núcleo nunca cae fuera de lo que el dock tiene activo (trampa 10).
+///
+/// `None` si no hay isla (sin actividades): ahí el dock oculto no tiene blob y el
+/// disparador vuelve a ser la superficie entera (ver `sync_autohide_surfaces`).
+pub(crate) fn island_core_region(
+    dock: &Dock,
+    widgets: &WidgetSnapshot,
+    tray_count: usize,
+    ws_split: f32,
+    active: Option<crate::config::WidgetKind>,
+) -> Option<(i32, i32, i32, i32)> {
+    let (x, y, w, h) = island_blob_region(dock, widgets, tray_count, ws_split, active)?;
+    let vertical = dock.is_vertical();
+    let largo = if vertical { h } else { w };
+    let core = ((largo as f32 * ISLAND_CORE_FRAC) as i32).clamp(1, largo);
+    let core = core.max((ISLAND_CORE_MIN as i32).min(largo));
+    if vertical {
+        Some((x, y + (h - core) / 2, w, core))
+    } else {
+        Some((x + (w - core) / 2, y, core, h))
+    }
+}
+
 /// Qué muestra la isla compacta, en orden: la **hora** (con la fecha, es el widget de
 /// reloj tal cual) y la **batería**. Las dos mitades del compacto del iPhone.
 ///
@@ -1465,6 +1497,42 @@ mod reveal_tests {
         let con = ancho_de_tinta(1.018);
         assert!(sin > 0, "la isla de base tiene que dibujar algo");
         assert!(con > sin, "el lift alarga la isla: {con} contra {sin}");
+    }
+
+    /// El núcleo (lo único que revela el dock) está DENTRO del blob, centrado y con el
+    /// largo esperado. Es el contrato del núcleo: si se saliera del blob, el reveal
+    /// dispararía fuera de la superficie activa (la input region es el blob).
+    #[test]
+    fn el_nucleo_cae_dentro_del_blob() {
+        use crate::config::DockEdge;
+        let dock = dock_de(DockEdge::Left);
+        let mut w = vacio();
+        w.time = "10:37".into();
+        w.battery = Some((50, crate::widgets::BatteryState::Discharging));
+        let blob = island_blob_region(&dock, &w, 0, 0.0, None).expect("blob");
+        let core = island_core_region(&dock, &w, 0, 0.0, None).expect("nucleo");
+        // ----- el núcleo es un tramo del eje LARGO, con el ancho completo -----
+        assert_eq!(core.0, blob.0, "mismo x");
+        assert_eq!(core.2, blob.2, "mismo ancho");
+        // ----- adentro del blob -----
+        assert!(core.1 >= blob.1, "arranca dentro");
+        assert!(
+            core.1 + core.3 <= blob.1 + blob.3,
+            "termina dentro: {} vs {}",
+            core.1 + core.3,
+            blob.1 + blob.3
+        );
+        // ----- con el largo esperado (40 % del blob, piso 40) -----
+        let esperado = ((blob.3 as f32 * 0.4) as i32).max(40).min(blob.3);
+        assert_eq!(core.3, esperado, "largo del nucleo");
+        assert!(core.3 < blob.3, "y mas corto que el blob");
+        // ----- centrado -----
+        let centro_blob = blob.1 + blob.3 / 2;
+        let centro_core = core.1 + core.3 / 2;
+        assert!(
+            (centro_blob - centro_core).abs() <= 1,
+            "centrado: {centro_core} vs {centro_blob}"
+        );
     }
 
     /// El OSD es un estado de la isla: su contenido se dibuja **sin fondo propio** (el

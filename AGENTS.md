@@ -384,6 +384,15 @@ del dock, así que no necesita saber la geometría.
   quedó el puntero, y el ancho importa (`niri msg --json outputs` da el layout). En el
   ultrawide de este setup la superficie del dock está centrada en 3440, no en 1920.
 
+  **Ojo con el corner**: `park_away` + los 25 `rel(-40,-40)` claman el puntero a la
+  esquina **arriba-izquierda** de la salida, y en esta máquina **ahí niri abre el
+  Overview** (aunque no haya `hot-corners` en su config: verificado con el dock apagado).
+  Con el Overview abierto el dock queda fijo (`dock_stays_visible`), así que **no hay
+  isla** y cualquier prueba del dock OCULTO (el dwell/núcleo, el OSD sobre la isla, las
+  actividades) falla en silencio. Para esas pruebas hay que parkear **abajo-izquierda**
+  (`rel(-600, 600)` × 6) y moverse de ahí, como hace `sweep_vertical.py`; y ojo con el
+  offset de la superficie, que es `(alto_salida - alto_superficie) / 2` (26x610 -> 235).
+
 - **Con el dock VERTICAL (`Left`/`Right`) `pointer.py` no sirve**: barre la franja de
   arriba con `rel(3, 0)`, y con la barra al costado el puntero nunca entra al blob
   (que está centrado en la vertical). Para eso está `scripts/sweep_vertical.py`, que
@@ -1713,8 +1722,17 @@ reordenamiento de widgets) y lo posterior:
     parkea en la esquina superior izquierda y ahí niri abre el **Overview** (hot corner),
     que deja el dock fijo y tapa la ventana del dwell; hay que cerrarlo
     (`niri msg action close-overview`) o el dwell no se ve.
-  - **Lo que NO habilita**: rueda y tap sobre la isla siguen sin llegar (el dwell termina
-    revelando el dock). Para eso hay que achicar el disparador a un núcleo.
+  - **Núcleo (después de G)**: el reveal ya no es "todo el blob", sólo su **núcleo**
+    (`island_core_region`: el 40 % central del eje largo, piso 40 px, la MISMA cuenta que la
+    input region). El resto del blob es hover franco (lift) **más rueda = volumen y tap =
+    play/pause** (`island_tap`: si hay algo sonando; si no, revela, así el click siempre lleva
+    a algún lado). El dwell sólo corre DENTRO del núcleo.
+  - Sensores: `island: hover dwell (120 ms) en <pos> nucleo=<rect>` y `island: rueda subir=…`.
+  - Verificado en vivo con un mover propio (ojo: los scripts del repo **parkean en el corner
+    arriba-izquierda de la salida y ahí niri abre el Overview**, que deja el dock fijo y
+    arruina la prueba): dentro del núcleo → dwell + reveal; fuera del núcleo → 0 dwells,
+    0 reveals, y la rueda bajó el volumen 1.00 → 0.85 (3 × 5 %). Guard:
+    `render::reveal_tests::el_nucleo_cae_dentro_del_blob`.
 
 - **Dos actividades nuevas desde el event-stream de niri** (sin sondeo: el evento ya
   llegaba y se filtraba):

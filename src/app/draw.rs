@@ -230,9 +230,10 @@ impl App {
         // préstamo mutable vive hasta el `bgra_from_rgba` y no deja llamar a un método
         // `&self` en el medio) -----
         let active = self.active_island_activity();
-        // ----- hover lift (G): con el puntero sobre la isla (dwell en curso) crece un
-        // poco; ver `island_hover_at` -----
-        let hover_lift = if self.island_hover_at.is_some() {
+        // ----- hover lift (G): con el puntero sobre el blob (cualquier punto, no sólo el
+        // núcleo) la isla crece un poco. `pointer_pos` está puesto sólo mientras el puntero
+        // está sobre la superficie -----
+        let hover_lift = if self.dock.pointer_pos.is_some() {
             HOVER_LIFT
         } else {
             1.0

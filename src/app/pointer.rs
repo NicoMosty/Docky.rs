@@ -27,6 +27,40 @@ fn wheel_raise(scroll: &smithay_client_toolkit::seat::pointer::AxisScroll) -> Op
 }
 
 impl App {
+    /// El rect del núcleo (coordenadas LÓGICAS de la superficie). `None` si no hay isla.
+    fn island_core_rect(&self) -> Option<(i32, i32, i32, i32)> {
+        let tray_count = self.tray.lock().unwrap().len();
+        render::island_core_region(
+            &self.dock,
+            &self.widgets,
+            tray_count,
+            self.island_ws_split,
+            self.active_island_activity(),
+        )
+    }
+
+    /// ¿El punto cae en el NÚCLEO del blob (lo único que revela el dock)? Sin isla (sin
+    /// actividades) no hay núcleo y devuelve `false`: ahí la superficie entera vuelve a ser
+    /// el disparador (ver `sync_autohide_surfaces`). Coordenadas LÓGICAS de la superficie.
+    fn island_pointer_in_core(&self, position: (f64, f64)) -> bool {
+        let Some((x, y, w, h)) = self.island_core_rect() else {
+            return false;
+        };
+        let (px, py) = position;
+        px >= x as f64 && px < (x + w) as f64 && py >= y as f64 && py < (y + h) as f64
+    }
+
+    /// Tap sobre la isla FUERA del núcleo: play/pause si hay algo sonando; si no, revela
+    /// el dock, así el click siempre lleva a algún lado.
+    fn island_tap(&mut self, qh: &QueueHandle<Self>) {
+        if self.widgets.media.as_ref().is_some_and(|m| m.playing) {
+            log::debug!("island: tap -> play/pause");
+            crate::widgets::media_toggle();
+            return;
+        }
+        self.reveal_dock(qh);
+    }
+
     pub(super) fn handle_dock_pointer_event(
         &mut self,
         event: &PointerEvent,
@@ -40,35 +74,57 @@ impl App {
             self.handle_ws_flash_pointer_event(event, qh);
             return;
         }
-        // ----- oculto: la franja del dock es el disparador del reveal. La isla NO
-        // recibe puntero, y no es un olvido: al entrar a la franja el `Enter` revela
-        // el dock en este mismo handler y `should_hide()` exige `pointer_pos` en
-        // `None`, así que la isla sólo se ve con el puntero lejos de la superficie.
-        // Para darle interacción habría que **achicar el disparador al blob** (perder
-        // el gesto de tirar el mouse al borde) o aceptar que scrollear revele: ver
-        // "Isla dinámica, lo que sigue" en AGENTS.md. -----
+        // ----- oculto: la isla recibe puntero, pero sólo su NÚCLEO revela. El resto del
+        // blob es hover franco (lift) más rueda = volumen y tap = play/pause, así la isla
+        // tiene interacción sin que cualquier roce abra el dock. El núcleo sale de
+        // `island_core_region`, la MISMA cuenta que la input region (trampa 10). -----
         if !self.dock_visible {
+            let en_nucleo = self.island_pointer_in_core(event.position);
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    // ----- dwell (G): el primer evento del hover arma el plazo y la isla se
-                    // ve con el lift; recién al vencer se revela (ver `island_hover_due`).
-                    // Registrar el puntero ya, si no el timer no ve interacción. -----
+                    // ----- registrar el puntero SIEMPRE: es lo que da el lift; el dwell
+                    // sólo corre DENTRO del núcleo -----
                     self.dock.set_pointer(Some(event.position));
-                    if self.island_hover_at.is_none() {
-                        self.island_hover_at = Some(std::time::Instant::now());
-                        self.arm_island_hover_tick();
-                        log::debug!("island: hover dwell ({} ms)", super::draw::ISLAND_HOVER_MS);
+                    if en_nucleo {
+                        // ----- dwell (G): el primer evento del núcleo arma el plazo; al
+                        // vencer se revela (`island_hover_due`) -----
+                        if self.island_hover_at.is_none() {
+                            self.island_hover_at = Some(std::time::Instant::now());
+                            self.arm_island_hover_tick();
+                            log::debug!(
+                                "island: hover dwell ({} ms) en {:?} nucleo={:?}",
+                                super::draw::ISLAND_HOVER_MS,
+                                event.position,
+                                self.island_core_rect()
+                            );
+                        }
+                    } else {
+                        // ----- fuera del núcleo: hover franco, no revela -----
+                        self.island_hover_at = None;
                     }
                     self.needs_repaint = true;
                     self.request_redraw(qh);
                 }
                 PointerEventKind::Press { .. } => {
-                    // ----- un click revela YA: no espera el dwell -----
                     self.dock.set_pointer(Some(event.position));
-                    self.reveal_dock(qh);
+                    if en_nucleo {
+                        // ----- en el núcleo un click revela YA: no espera el dwell -----
+                        self.reveal_dock(qh);
+                    } else {
+                        self.island_tap(qh);
+                    }
+                }
+                // ----- rueda sobre la isla: volumen, el MISMO gesto que el widget -----
+                PointerEventKind::Axis { vertical, .. } => {
+                    if let Some(subir) = wheel_raise(&vertical) {
+                        self.dock.set_pointer(Some(event.position));
+                        log::debug!("island: rueda subir={subir}");
+                        crate::widgets::volume_step(subir);
+                        self.refresh_volume(qh);
+                    }
                 }
                 PointerEventKind::Leave { .. } => {
-                    // ----- se fue antes del plazo: cancelar el dwell y el lift -----
+                    // ----- se fue: cancelar el dwell y el lift -----
                     self.dock.set_pointer(None);
                     self.island_hover_at = None;
                     self.needs_repaint = true;

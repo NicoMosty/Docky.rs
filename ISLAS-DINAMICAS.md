@@ -256,7 +256,13 @@ sólo guarda `island_hover_at` + arma un tick de `ISLAND_HOVER_MS` (120 ms); ant
 la isla se dibuja con `HOVER_LIFT` (1,018, sólo el eje largo) y al vencer `island_hover_due()`
 revela. Un `Press` revela ya; un `Leave` cancela. Verificado en vivo: reveal a los 121 ms
 del `Enter`. Guards: `hover_due` y `el_hover_lift_alarga_la_isla_dibujada` (tinta del
-bounding box). Lo que NO habilita: rueda/tap sobre la isla (el dwell termina revelando).
+bounding box).
+
+**Y después el núcleo** (pedido del usuario): el reveal ya no es "todo el blob" sino su
+**núcleo** (`island_core_region`: 40 % central del eje largo, piso 40 px, la MISMA cuenta
+que la input region). El resto del blob es hover franco (lift) **más rueda = volumen y
+tap = play/pause**. El dwell sólo corre dentro del núcleo. Verificado en vivo: dentro →
+dwell + reveal; fuera → 0 dwells, 0 reveals y la rueda bajó el volumen 1.00 → 0.85.
 
 ### 4.2 Prioridad media · costo medio
 
