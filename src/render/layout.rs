@@ -790,6 +790,8 @@ mod hit_layout_tests {
             mic: None,
             recording: None,
             clipboard: None,
+            screenshot: None,
+            cast: None,
             network: NetworkInfo {
                 label: "wifi".into(),
                 online: true,
@@ -1015,7 +1017,7 @@ mod hit_layout_tests {
         // ----- 14 fijos + la entrada `Custom`. Cambiar estos números es la señal de
         // que se agregó un widget: hay que tocar la tabla (y nada más: el orden y las
         // etiquetas de Ajustes salen de ella) -----
-        assert_eq!(WIDGETS.len(), 16, "la tabla cambio de tamano");
+        assert_eq!(WIDGETS.len(), 18, "la tabla cambio de tamano");
         // ----- Ajustes ofrece los 15 fijos: el índice de un `Custom` se escribe a
         // mano en el JSON -----
         let orden = crate::widget::widget_kind_order();

@@ -35,6 +35,11 @@ pub enum IpcMessage {
     /// también con el estado inicial al conectar al event-stream, así que el dock
     /// arranca sabiendo si estaba abierto.
     OverviewChanged(bool),
+    /// Una captura se guardó (`ScreenshotCaptured` de niri, o la que hace el propio
+    /// dock): `Some(ruta)` si fue a un archivo, `None` si fue sólo al portapapeles.
+    ScreenshotCaptured(Option<String>),
+    /// Cambió la lista de pantallas compartidas (`CastsChanged` de niri): cuántas hay.
+    CastsChanged(usize),
     ToggleWallpaper,
     ToggleClipboard,
     ToggleNotifications,
@@ -500,6 +505,22 @@ fn niri_mensaje(line: &str) -> Option<IpcMessage> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
         )),
+        // ----- la captura que hace niri con SU UI: así el dock puede decir el destino
+        // sin adivinarlo, y también para las capturas que no hizo él -----
+        "ScreenshotCaptured" => Some(IpcMessage::ScreenshotCaptured(
+            payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        )),
+        // ----- pantallas compartidas (ventana o monitor): el evento trae la lista -----
+        "CastsChanged" => Some(IpcMessage::CastsChanged(
+            payload
+                .get("casts")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0),
+        )),
         // ----- trae la lista: no se lanza nada -----
         "WorkspacesChanged" => {
             let vacio = Vec::new();
@@ -521,7 +542,7 @@ fn niri_mensaje(line: &str) -> Option<IpcMessage> {
         | "WindowClosed"
         | "WindowUrgencyChanged" => Some(IpcMessage::WorkspacesChanged),
         // ----- todo lo demás se ignora: `WindowLayoutsChanged`, `WindowFocusChanged`,
-        // `WindowFocusTimestampChanged`, `ConfigLoaded`, `CastsChanged`, el
+        // `WindowFocusTimestampChanged`, `ConfigLoaded`, el
         // `{"Ok":"Handled"}` del acuse de recibo, … -----
         _ => None,
     }
@@ -609,10 +630,11 @@ mod niri_event_tests {
 
     /// El mapa línea → mensaje del event-stream. `Workspace`/`Window` mueven los
     /// workspaces (sin `Window*` el workspace vacío no se reevalúa y el dock dejaría
-    /// de fijarse), `KeyboardLayout` el layout y `OverviewOpenedOrClosed` el estado
-    /// del Overview (que fija el dock). Tiene que quedar afuera lo que viaja
-    /// por el mismo stream sin cambiar nada del dock — incluido el `{"Ok":...}` con el
-    /// que niri acusa recibo del pedido.
+    /// de fijarse), `KeyboardLayout` el layout, `OverviewOpenedOrClosed` el estado del
+    /// Overview (que fija el dock) y `CastsChanged`/`ScreenshotCaptured` las dos
+    /// actividades nuevas. Tiene que quedar afuera lo que viaja por el mismo stream sin
+    /// cambiar nada del dock — incluido el `{"Ok":...}` con el que niri acusa recibo del
+    /// pedido.
     #[test]
     fn el_filtro_del_event_stream() {
         // ----- estos NO traen la lista, así que piden relectura -----
@@ -637,7 +659,6 @@ mod niri_event_tests {
             r#"{"WindowFocusChanged":{"id":4}}"#,
             r#"{"WindowFocusTimestampChanged":{"id":4,"timestamp":123}}"#,
             r#"{"WindowLayoutsChanged":{"changes":[]}}"#,
-            r#"{"CastsChanged":{"casts":[]}}"#,
             r#"{"ConfigLoaded":{"path":"/tmp/x"}}"#,
         ] {
             assert!(
@@ -687,6 +708,24 @@ mod niri_event_tests {
             );
         }
         assert!(niri_mensaje(r#"{"Ok":"Handled"}"#).is_none());
+        // ----- pantallas compartidas: el evento trae la lista, se cuenta -----
+        assert!(matches!(
+            niri_mensaje(r#"{"CastsChanged":{"casts":[]}}"#),
+            Some(IpcMessage::CastsChanged(0))
+        ));
+        assert!(matches!(
+            niri_mensaje(r#"{"CastsChanged":{"casts":[{"window":null},{"window":4}]}}"#),
+            Some(IpcMessage::CastsChanged(2))
+        ));
+        // ----- la captura de niri: con ruta, y sin ruta (sólo al portapapeles) -----
+        assert!(matches!(
+            niri_mensaje(r#"{"ScreenshotCaptured":{"path":"/tmp/x.png"}}"#),
+            Some(IpcMessage::ScreenshotCaptured(Some(p))) if p == "/tmp/x.png"
+        ));
+        assert!(matches!(
+            niri_mensaje(r#"{"ScreenshotCaptured":{"path":null}}"#),
+            Some(IpcMessage::ScreenshotCaptured(None))
+        ));
     }
 }
 

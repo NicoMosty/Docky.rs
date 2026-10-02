@@ -533,6 +533,151 @@ fn draw_clipboard_icon(
     }
 }
 
+/// Pantalla compartida: la misma pastilla y el mismo `draw_icon_label` que el volumen,
+/// con el icono de cast. La etiqueta sale de `widget::cast_label`, la MISMA que mide
+/// `len_cast` (trampa 12).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_cast_widget(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    widgets: &WidgetSnapshot,
+    zx: f32,
+    zy: f32,
+    zw: f32,
+    zh: f32,
+    render_scale: f32,
+    colors: &WidgetColors,
+    is_vertical: bool,
+    hovered: bool,
+    text_px: f32,
+    icon_r: f32,
+) {
+    if widgets.cast.is_none_or(|n| n == 0) {
+        return;
+    }
+    draw_widget_button_bg(pixmap, zx, zy, zw, zh, render_scale, colors, hovered);
+    draw_icon_label(
+        pixmap,
+        text_cache,
+        draw_cast_icon,
+        icon_r,
+        true,
+        crate::widget::cast_label(),
+        zx,
+        zy,
+        zw,
+        zh,
+        render_scale,
+        colors,
+        is_vertical,
+        text_px,
+    );
+}
+
+/// Cast: una pantalla (rect redondeado en trazo) con el punto "en vivo" adentro. Entra
+/// en la caja de `2 * icon_r`.
+fn draw_cast_icon(
+    pixmap: &mut Pixmap,
+    icon_r: f32,
+    cx: f32,
+    cy: f32,
+    colors: &WidgetColors,
+    active: bool,
+) {
+    let s = icon_r;
+    let alpha = if active { 230 } else { 110 };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, alpha);
+    paint.anti_alias = true;
+    let screen = rounded_rect_path(cx - s * 0.92, cy - s * 0.68, s * 1.84, s * 1.36, s * 0.22);
+    let stroke = tiny_skia::Stroke {
+        width: s * 0.18,
+        ..Default::default()
+    };
+    pixmap.stroke_path(&screen, &paint, &stroke, Transform::identity(), None);
+    let dot = rounded_rect_path(cx - s * 0.2, cy - s * 0.2, s * 0.4, s * 0.4, s * 0.2);
+    pixmap.fill_path(
+        &dot,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+}
+
+/// Última captura guardada: pastilla icono+cámara+etiqueta. La etiqueta sale de
+/// `widget::screenshot_label_text`, la MISMA que mide `len_screenshot` (trampa 12).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_screenshot_widget(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    widgets: &WidgetSnapshot,
+    zx: f32,
+    zy: f32,
+    zw: f32,
+    zh: f32,
+    render_scale: f32,
+    colors: &WidgetColors,
+    is_vertical: bool,
+    hovered: bool,
+    text_px: f32,
+    icon_r: f32,
+) {
+    let label = crate::widget::screenshot_label_text(widgets.screenshot.as_deref());
+    if label.is_empty() {
+        return;
+    }
+    draw_widget_button_bg(pixmap, zx, zy, zw, zh, render_scale, colors, hovered);
+    draw_icon_label(
+        pixmap,
+        text_cache,
+        draw_screenshot_icon,
+        icon_r,
+        true,
+        &label,
+        zx,
+        zy,
+        zw,
+        zh,
+        render_scale,
+        colors,
+        is_vertical,
+        text_px,
+    );
+}
+
+/// Cámara: cuerpo redondeado en trazo, el bump del visor arriba y la lente adentro.
+fn draw_screenshot_icon(
+    pixmap: &mut Pixmap,
+    icon_r: f32,
+    cx: f32,
+    cy: f32,
+    colors: &WidgetColors,
+    active: bool,
+) {
+    let s = icon_r;
+    let alpha = if active { 230 } else { 110 };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(colors.text_rgb.0, colors.text_rgb.1, colors.text_rgb.2, alpha);
+    paint.anti_alias = true;
+    let stroke = tiny_skia::Stroke {
+        width: s * 0.16,
+        ..Default::default()
+    };
+    let body = rounded_rect_path(cx - s * 0.95, cy - s * 0.6, s * 1.9, s * 1.28, s * 0.24);
+    pixmap.stroke_path(&body, &paint, &stroke, Transform::identity(), None);
+    let bump = rounded_rect_path(cx - s * 0.34, cy - s * 0.9, s * 0.68, s * 0.36, s * 0.12);
+    pixmap.fill_path(
+        &bump,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+    let lens = rounded_rect_path(cx - s * 0.3, cy - s * 0.12, s * 0.6, s * 0.6, s * 0.3);
+    pixmap.stroke_path(&lens, &paint, &stroke, Transform::identity(), None);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_network_widget(
     pixmap: &mut Pixmap,

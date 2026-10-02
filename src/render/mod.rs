@@ -32,8 +32,9 @@ pub(crate) use layout::{WidgetRect, percentage_widget_len, text_widget_len};
 pub(crate) use media::{draw_media_widget, media_ideal_len};
 pub(crate) use power_bluetooth::{draw_bluetooth_icon, draw_power_widget};
 pub(crate) use syswidgets::{
-    draw_clipboard_widget, draw_kblayout_widget, draw_mic_widget, draw_network_widget,
-    draw_recording_widget, draw_text_widget, draw_volume_widget,
+    draw_cast_widget, draw_clipboard_widget, draw_kblayout_widget, draw_mic_widget,
+    draw_network_widget, draw_recording_widget, draw_screenshot_widget, draw_text_widget,
+    draw_volume_widget,
 };
 pub(crate) use tray::{draw_tray_widget, tray_geometry};
 pub(crate) use workspaces::{draw_workspaces_widget, ws_compact_scale};
@@ -471,6 +472,11 @@ pub(crate) fn island_activities(
     // no esté colocado en la barra (el dato es un `stat`, no un spawn) -----
     if widgets.recording.is_some() {
         out.push(K::Recording);
+    }
+    // ----- compartir pantalla es un estado vivo (como la grabación): el indicador vive
+    // en el reposo mientras haya cast -----
+    if widgets.cast.is_some_and(|n| n > 0) {
+        out.push(K::Cast);
     }
     if !widgets.time.is_empty() {
         out.push(K::Clock);
@@ -1102,6 +1108,8 @@ mod reveal_tests {
             mic: None,
             recording: None,
             clipboard: None,
+            screenshot: None,
+            cast: None,
             network: NetworkInfo {
                 label: String::new(),
                 online: false,

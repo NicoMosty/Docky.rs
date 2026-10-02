@@ -1716,6 +1716,26 @@ reordenamiento de widgets) y lo posterior:
   - **Lo que NO habilita**: rueda y tap sobre la isla siguen sin llegar (el dwell termina
     revelando el dock). Para eso hay que achicar el disparador a un núcleo.
 
+- **Dos actividades nuevas desde el event-stream de niri** (sin sondeo: el evento ya
+  llegaba y se filtraba):
+  - **Captura guardada** (`Event::ScreenshotCaptured`): la isla muestra el icono de cámara +
+    el nombre del archivo por 3,2 s. `path: null` (sólo al portapapeles) da "Portapapeles".
+    Vale para las capturas de la UI de niri Y para las del propio dock: `screenshot::save`
+    ahora devuelve la ruta y `finish_screenshot` llama al MISMO `note_screenshot`. Sensor:
+    `island: captura -> <nombre>`.
+  - **Compartiendo pantalla** (`CastsChanged`: el evento trae la lista y se cuenta): es un
+    ESTADO, así que el indicador vive en el reposo de la isla mientras haya cast (como la
+    grabación), y empezar/dejar de compartir anuncia. Sensor: `island: casts <antes> -> <ahora>`.
+  - `WidgetKind::Screenshot`/`Cast` son **sólo-isla**: no se ofrecen en Ajustes
+    (`es_solo_isla` filtra `widget_kind_order`) porque muestran novedades, no estados que uno
+    quiera colocar. `WIDGETS` 16→18; Ajustes sigue en 15.
+  - Guards: `ipc::niri_event_tests::el_filtro_del_event_stream` (los dos eventos nuevos, con
+    `path: null` y una lista de 2 casts) y
+    `app::island_activity::island_activity_tests::la_etiqueta_de_la_captura_es_el_nombre_del_archivo`.
+    Tests 190→191.
+  - Verificado en vivo la captura (icono + `Screenshot_2026-10-01_…` elidido). **Cast sin
+    verificar en vivo**: hace falta un cliente que comparta pantalla.
+
 ## Cerrado de AUDIT.md (movido de ahí el 2026-09-20)
 
 Los hallazgos de `AUDIT.md` que ya están resueltos. Cada uno conserva el análisis
@@ -3042,11 +3062,10 @@ requeriría cambiar la key a algo tipo `Arc<str>`. **Verificación:** test con
     **enfocar la ventana limpia la urgencia** (lo dice niri), así que si cambiás al
     workspace de esa ventana el rojo desaparece — hay que dejarla en otro workspace
     (p. ej. estando en el vacío) para verlo.
-  - **`Event::ScreenshotCaptured { path }`**: la isla puede hacer el flash "Guardado en
-    …" **sin adivinar nada** y también para las capturas hechas con la UI de niri (hoy
-    el dock sólo sabe de las suyas). El `path` es `None` si fue sólo al portapapeles.
-  - **`Event::CastStartedOrChanged` / `CastStopped` / `CastsChanged`** (y
-    `Request::Casts`): actividad de isla "se está compartiendo pantalla" — el mismo
+  - ✔ **`Event::ScreenshotCaptured { path }`** (HECHO): la isla hace el flash con el
+    nombre del archivo
+  - ✔ **`CastsChanged`** (HECHO; `CastStartedOrChanged`/`CastStopped` no hicieron falta:
+    `CastsChanged` trae la lista): actividad "se está compartiendo pantalla", el mismo
     caso que la grabación, pero para cualquier cast (ventana/monitor).
   - **Nombres de workspace** (`Workspace.name` + `Action::SetWorkspaceName`): el widget
     muestra puntos; con el nombre se puede elidir texto. Y el dock puede **nombrar** el

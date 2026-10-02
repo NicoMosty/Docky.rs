@@ -15,12 +15,13 @@ use crate::config::WidgetKind;
 // solo bloque: la tabla vive en la raiz, pero el dibujo sigue siendo de `render/` -----
 use crate::render::{
     MarqueeState, WidgetColors, WidgetRect, draw_battery_widget, draw_bluetooth_icon,
-    draw_clipboard_widget, draw_clock_widget, draw_cpu_widget, draw_kblayout_widget,
-    draw_media_widget, draw_mic_widget, draw_network_widget, draw_power_widget, draw_ram_widget,
-    draw_recording_widget, draw_text_widget, draw_tray_widget, draw_volume_widget,
-    draw_widget_button_bg, draw_workspaces_widget, media_ideal_len, percentage_widget_len,
-    text_widget_len, text_width_estimate_render, tray_geometry, volume_content_len, volume_icon_r,
-    widget_text_px, workspaces_geometry, ws_compact_scale,
+    draw_cast_widget, draw_clipboard_widget, draw_clock_widget, draw_cpu_widget,
+    draw_kblayout_widget, draw_media_widget, draw_mic_widget, draw_network_widget,
+    draw_power_widget, draw_ram_widget, draw_recording_widget, draw_screenshot_widget,
+    draw_text_widget, draw_tray_widget, draw_volume_widget, draw_widget_button_bg,
+    draw_workspaces_widget, media_ideal_len, percentage_widget_len, text_widget_len,
+    text_width_estimate_render, tray_geometry, volume_content_len, volume_icon_r, widget_text_px,
+    workspaces_geometry, ws_compact_scale,
 };
 use crate::widgets::WidgetSnapshot;
 use dockyrs_canvas::{IconCache, TextCache};
@@ -304,6 +305,24 @@ pub(crate) const WIDGETS: &[WidgetSpec] = &[
         click: Some(click_clipboard),
     },
     WidgetSpec {
+        kind: WidgetKind::Screenshot,
+
+        text: true,
+        label: "Screenshot",
+        natural_len: len_screenshot,
+        draw: draw_screenshot,
+        click: None,
+    },
+    WidgetSpec {
+        kind: WidgetKind::Cast,
+
+        text: true,
+        label: "Screen Cast",
+        natural_len: len_cast,
+        draw: draw_cast,
+        click: None,
+    },
+    WidgetSpec {
         kind: WidgetKind::KbdLayout,
 
         text: true,
@@ -342,10 +361,17 @@ fn custom_spec() -> &'static WidgetSpec {
 /// El orden en que los widgets aparecen en el panel de Ajustes: el de `WIDGETS`, sin la entrada
 /// genérica. Un `Custom(i)` se configura a mano en el JSON: su índice no se puede elegir en un chip.
 /// Ya no hay una segunda lista que mantener sincronizada a mano.
+/// `true` si el kind es SÓLO actividad de isla: muestra una novedad, no un estado, así
+/// que como widget de barra permanente no tiene sentido y no se ofrece en Ajustes.
+/// `Cast` entra por lo mismo: es un indicador de la isla, no un widget para colocar.
+fn es_solo_isla(kind: WidgetKind) -> bool {
+    matches!(kind, WidgetKind::Screenshot | WidgetKind::Cast)
+}
+
 pub(crate) fn widget_kind_order() -> Vec<WidgetKind> {
     WIDGETS
         .iter()
-        .filter(|s| !matches!(s.kind, WidgetKind::Custom(_)))
+        .filter(|s| !matches!(s.kind, WidgetKind::Custom(_)) && !es_solo_isla(s.kind))
         .map(|s| s.kind)
         .collect()
 }
@@ -685,15 +711,100 @@ fn draw_recording(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
 /// hasta 18 palabras y en la pastilla no entra, así que se recorta como el SSID de
 /// Network. Vive acá y no en el dibujo porque la MEDIDA y el DIBUJO tienen que usar
 /// la MISMA cadena (trampa 12).
+/// Recorta `text` a `max` caracteres con elipsis. Por CARACTERS, no por bytes: un
+/// título con acentos no se puede partir a la mitad.
+pub(crate) fn elide(text: &str, max: usize) -> String {
+    if text.chars().count() > max {
+        format!("{}…", text.chars().take(max).collect::<String>())
+    } else {
+        text.to_string()
+    }
+}
+
 pub(crate) fn clipboard_label(preview: Option<&crate::widgets::ClipboardPreview>) -> String {
     let Some(preview) = preview else {
         return String::new();
     };
-    if preview.title.chars().count() > 24 {
-        format!("{}…", preview.title.chars().take(24).collect::<String>())
-    } else {
-        preview.title.clone()
+    elide(&preview.title, 24)
+}
+
+/// Etiqueta de la actividad de compartir pantalla. Una sola definición para la medida y
+/// el dibujo (trampa 12).
+pub(crate) fn cast_label() -> &'static str {
+    "Compartiendo"
+}
+
+/// Etiqueta de la última captura, recortada para la pastilla. `None` = no hay captura
+/// que mostrar (y la pastilla mide 0).
+pub(crate) fn screenshot_label_text(shot: Option<&str>) -> String {
+    match shot {
+        Some(s) => elide(s, 22),
+        None => String::new(),
     }
+}
+
+fn len_screenshot(cx: &Ctx) -> f32 {
+    let label = screenshot_label_text(cx.widgets.screenshot.as_deref());
+    if label.is_empty() {
+        return 0.0;
+    }
+    // ----- misma pastilla que el volumen/mic (icono + etiqueta) -----
+    volume_content_len(
+        &label,
+        cx.render_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    )
+}
+
+fn draw_screenshot(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_screenshot_widget(
+        canvas.pixmap,
+        canvas.text_cache,
+        cx.widgets,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+        canvas.is_hovered(r),
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    );
+    false
+}
+
+fn len_cast(cx: &Ctx) -> f32 {
+    if cx.widgets.cast.is_none_or(|n| n == 0) {
+        return 0.0;
+    }
+    volume_content_len(
+        cast_label(),
+        cx.render_scale,
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    )
+}
+
+fn draw_cast(canvas: &mut Canvas, r: &WidgetRect, cx: &Ctx) -> bool {
+    draw_cast_widget(
+        canvas.pixmap,
+        canvas.text_cache,
+        cx.widgets,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        cx.render_scale,
+        canvas.colors,
+        cx.is_vertical,
+        canvas.is_hovered(r),
+        widget_text_px(cx.settings, cx.kind, cx.render_scale),
+        volume_icon_r(cx.settings, cx.render_scale),
+    );
+    false
 }
 
 fn len_clipboard(cx: &Ctx) -> f32 {
@@ -1169,6 +1280,8 @@ mod clock_vertical_tests {
             mic: None,
             recording: None,
             clipboard: None,
+            screenshot: None,
+            cast: None,
             network: NetworkInfo {
                 label: "wifi".into(),
                 online: true,

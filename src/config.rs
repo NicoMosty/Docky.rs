@@ -56,6 +56,12 @@ pub enum WidgetKind {
     /// isla aparece sola como actividad viva al copiar; el click izquierdo abre el
     /// historial.
     Clipboard,
+    /// Última captura guardada (`ScreenshotCaptured` de niri, o la del propio dock). SÓLO
+    /// actividad de isla: no se ofrece como widget de barra, porque es una novedad, no un
+    /// estado.
+    Screenshot,
+    /// Hay una o más pantallas compartidas (`CastsChanged` de niri): icono + cuántas.
+    Cast,
     KbdLayout,
     /// Widget con script, direccionado por su posición en
     /// `DockSettings.custom_widgets`. El payload es un índice, no una

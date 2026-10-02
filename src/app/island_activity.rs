@@ -160,6 +160,42 @@ impl App {
         }
         self.battery_on_power = on_power;
     }
+
+    /// Anuncia la captura guardada. `path = None` significa que fue SÓLO al portapapeles
+    /// (así lo manda niri). La etiqueta es el nombre del archivo.
+    pub(crate) fn note_screenshot(&mut self, path: Option<String>, qh: &QueueHandle<Self>) {
+        let label = screenshot_label(path.as_deref());
+        log::debug!("island: captura -> {label}");
+        self.widgets.screenshot = Some(label);
+        self.announce_island_activity(WidgetKind::Screenshot, qh);
+    }
+
+    /// Aplica el conteo de pantallas compartidas (`CastsChanged` de niri). Empezar a
+    /// compartir y dejar de hacerlo son novedades; además es un ESTADO, así que la isla lo
+    /// muestra en el reposo mientras haya cast (ver `island_activities`).
+    pub(crate) fn note_casts(&mut self, count: usize, qh: &QueueHandle<Self>) {
+        let antes = self.widgets.cast.unwrap_or(0);
+        self.widgets.cast = (count > 0).then_some(count);
+        if antes != count {
+            log::debug!("island: casts {antes} -> {count}");
+            self.announce_island_activity(WidgetKind::Cast, qh);
+        }
+        // ----- el reposo de la isla cambió (aparece o se va el indicador): repintar -----
+        self.needs_repaint = true;
+        self.request_redraw(qh);
+    }
+}
+
+/// Etiqueta de la captura: el nombre del archivo (sin la carpeta), o "Portapapeles" si
+/// niri no dio ruta. Pura, para que un path raro no la rompa.
+fn screenshot_label(path: Option<&str>) -> String {
+    let Some(path) = path.filter(|p| !p.is_empty()) else {
+        return "Portapapeles".to_string();
+    };
+    match path.rsplit('/').next() {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => "Captura".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -238,5 +274,21 @@ mod island_activity_tests {
         assert_eq!(battery_threshold(11), 20);
         assert_eq!(battery_threshold(10), 10);
         assert_eq!(battery_threshold(0), 10);
+    }
+
+    /// La etiqueta de la captura es el nombre del archivo; sin ruta es "Portapapeles"
+    /// (niri manda `path: null` cuando la captura fue sólo al portapapeles).
+    #[test]
+    fn la_etiqueta_de_la_captura_es_el_nombre_del_archivo() {
+        assert_eq!(
+            screenshot_label(Some("/home/u/Pics/Shot_1.png")),
+            "Shot_1.png"
+        );
+        assert_eq!(screenshot_label(Some("Shot.png")), "Shot.png");
+        // ----- sin ruta = sólo portapapeles -----
+        assert_eq!(screenshot_label(None), "Portapapeles");
+        assert_eq!(screenshot_label(Some("")), "Portapapeles");
+        // ----- un path que termina en barra no deja la etiqueta vacía -----
+        assert_eq!(screenshot_label(Some("/tmp/")), "Captura");
     }
 }

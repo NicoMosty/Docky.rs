@@ -218,6 +218,13 @@ pub struct WidgetSnapshot {
     /// desde el arranque). Es lo que muestran el widget `Clipboard` y su actividad de
     /// isla. No se lee del historial al arrancar: `None` hasta que copies algo.
     pub clipboard: Option<ClipboardPreview>,
+    /// Etiqueta de la última captura guardada (nombre del archivo, o "Portapapeles" si
+    /// fue sólo al portapapeles). Es una NOVEDAD: la muestra la actividad de isla, no el
+    /// reposo (ver `island_activities`).
+    pub screenshot: Option<String>,
+    /// Pantallas compartidas (`None` o 0 = ninguna). Es un ESTADO: va en el reposo, como
+    /// la grabación.
+    pub cast: Option<usize>,
     pub network: NetworkInfo,
     pub kblayout: KbLayout,
     /// Un texto opcional por widget personalizado con script, alineado por
@@ -336,6 +343,8 @@ impl WidgetSnapshot {
             mic: None,
             recording: None,
             clipboard: None,
+            screenshot: None,
+            cast: None,
             network,
             kblayout,
             custom_texts: Vec::new(),

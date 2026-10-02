@@ -602,6 +602,8 @@ fn main() -> anyhow::Result<()> {
                 ipc::IpcMessage::DeferredWidgets(ready) => app.apply_deferred_widgets(*ready, &qh),
                 ipc::IpcMessage::KbdLayoutChanged => app.refresh_kblayout(&qh),
                 ipc::IpcMessage::OverviewChanged(open) => app.set_overview_open(open, &qh),
+                ipc::IpcMessage::ScreenshotCaptured(path) => app.note_screenshot(path, &qh),
+                ipc::IpcMessage::CastsChanged(n) => app.note_casts(n, &qh),
                 ipc::IpcMessage::ToggleWallpaper => app.toggle_wallpaper_picker(&qh),
                 ipc::IpcMessage::ToggleClipboard => app.toggle_clipboard(&qh),
                 ipc::IpcMessage::ToggleNotifications => app.toggle_notifications(&qh),

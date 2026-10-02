@@ -220,8 +220,11 @@ impl ScreenshotState {
     }
 }
 
-pub fn save(image: &CaptureImage) {
-    let _ = storage::save(&image.png);
+/// Guarda el PNG y devuelve la ruta: el dock la usa para el aviso de la isla
+/// (`App::note_screenshot`), así la captura propia muestra el destino igual que las de
+/// niri.
+pub fn save(image: &CaptureImage) -> Option<std::path::PathBuf> {
+    storage::save(&image.png)
 }
 
 fn bind_manager(
