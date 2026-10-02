@@ -1754,6 +1754,33 @@ reordenamiento de widgets) y lo posterior:
   - Verificado en vivo la captura (icono + `Screenshot_2026-10-01_…` elidido). **Cast sin
     verificar en vivo**: hace falta un cliente que comparta pantalla.
 
+- **Portapapeles: vista previa grande y multi-selección** (§9.2 de `ISLAS-DINAMICAS.md`, del
+  `Cliphist.qml` de ChillPill): el panel gana tres gestos.
+  - **`Tab`** abre/cierra la vista previa grande de la fila seleccionada: el TEXTO completo
+    envuelto (scroll con ↑↓ / PageUp / PageDown / Home / End y la rueda) o la IMAGEN
+    entera. El texto se envuelve al abrir (topes: 20k caracteres y 400 líneas); la imagen se
+    **decodifica en un hilo** y vuelve por `IpcMessage::ClipboardPreviewReady`, porque un 4K
+    decodifica a ~33 MB antes de escalar y eso no puede correr en el hilo que dibuja (AUDIT
+    A4). El resultado se DESCARTA si ya no aplica (panel cerrado u otra entrada): el mismo
+    guard que `tray_menu_still_wanted`.
+  - **`Shift+Space`** marca/desmarca la fila y **`Shift+↑↓`** extiende el rango desde el
+    ancla (como un gestor de archivos). Las marcadas llevan una barra de acento a la
+    izquierda y, si no son la seleccionada, un tinte.
+  - **`Delete`** borra TODAS las marcadas (o la seleccionada si no hay marcadas). Los
+    índices salen de `indices_a_borrar`, ordenados de **MAYOR a menor**: borrar en el orden
+    de la lista corre a los que quedan (guard `clipboard_multi_tests`).
+  - **La banda de pestañas cede ↑/↓** mientras el portapapeles está abierto (`press_key`:
+    `cede_a_la_seleccion`), así Shift+↑↓ es el gesto estándar de extender y el ciclo de
+    pestañas sigue con ←/→ en las dos orientaciones.
+  - `App::ipc_tx` es nuevo: el canal para que un HILO despierte el loop con un
+    `IpcMessage` (antes sólo lo tenía `tray_menu_worker`). `scripts/pointer.py --key` suma
+    `tab`/`space`/`delete`.
+  - **Ojo al probarlo**: `--shift-arrow down` en este panel ya NO cicla (la banda lo cede),
+    y el park de `click_at.py` abre el Overview (ver "Testear sin mouse").
+  - Verificado en vivo (screenshots): el rango marca las filas, `Tab` mostró el texto
+    completo y la imagen (1400×788, la captura recién hecha) y `Delete` bajó el historial de
+    **47 a 44** entradas (exactamente las 3 marcadas). Tests 193→195.
+
 ## Cerrado de AUDIT.md (movido de ahí el 2026-09-20)
 
 Los hallazgos de `AUDIT.md` que ya están resueltos. Cada uno conserva el análisis

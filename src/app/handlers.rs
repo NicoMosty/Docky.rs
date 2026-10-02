@@ -455,7 +455,15 @@ impl KeyboardHandler for App {
         // y también cicla (las cuatro siguen andando: el gesto de ←/→ no se toca). Va
         // ANTES de armar `held_key`; si no, el auto-repeat de la flecha ciclaría un modo
         // por frame (y el release es el que limpia `overlay_cycle_key`). -----
-        if self.modifiers.shift && flecha_de_la_banda(event.keysym, self.dock.is_vertical()) {
+        // ----- OJO: en el panel del portapapeles Shift+↑↓ es el gesto de EXTENDER la
+        // selección (como un gestor de archivos), así que la banda le cede esas dos
+        // flechas y sigue ciclando con ←/→ en las dos orientaciones. -----
+        let cede_a_la_seleccion = self.clipboard_mode.is_some()
+            && matches!(event.keysym, Keysym::Up | Keysym::Down);
+        if self.modifiers.shift
+            && !cede_a_la_seleccion
+            && flecha_de_la_banda(event.keysym, self.dock.is_vertical())
+        {
             let accion = accion_de_la_banda(
                 self.overlay_cycle_key,
                 event.keysym,

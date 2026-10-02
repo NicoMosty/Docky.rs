@@ -513,7 +513,7 @@ velocidad/tope/duración).
 | Idea | Qué es | Costo | Riesgo |
 | --- | --- | --- | --- |
 | **VPN como estado** | Widget/indicador de VPN (como Network) — `Vpn.qml` | ~40: `nmcli`/`wg` + `read_*` en el tick | la fuente depende del setup (NetworkManager vs WireGuard) |
-| **Portapapeles: preview grande + multi-select** | `Tab` para ver la imagen/texto completo, `Shift+↑↓` rango, `Shift+Space` elegir y `Del` borrar varios (`Cliphist.qml`) | ~200 | es la que más se siente en el uso diario y la más cara; hoy hay miniaturas y borrado de a uno |
+| ✔ **Portapapeles: preview grande + multi-select** | `Tab` para ver la imagen/texto completo, `Shift+↑↓` rango, `Shift+Space` elegir y `Del` borrar varios (`Cliphist.qml`) | **hecho** | la más cara de §9 (~200 líneas): el texto se envuelve al abrir y la imagen se decodifica en un hilo (`decode_preview`), porque un 4K son ~33 MB de pico |
 | **Calendario con eventos** | Además del mes, marcar los días con eventos (`CalendarBox.qml` + `scripts/calendar_events.py`) | ~150 | hace falta una **fuente** de eventos (el script del repo); hoy `menu/calendar.rs` es sólo aritmética de fechas |
 | **Confirmación en el menú de energía** | `confirmPowerActions`: un paso extra antes de apagar/reiniciar | ~40: un estado más en el popup de energía | — |
 | **`maxVolume`** | Tope del volumen (barra, rueda y pasos) | ~20 | — |
@@ -533,8 +533,8 @@ Notch (N), panel wifi/BT con contraseña (S), wallpaper switcher, menú de energ
    asimetría: ya está el *on/off* de las transiciones (`smooth_transitions`) pero no la
    **velocidad** ni la duración del aviso.
 2. **Búsqueda de keybinds** — producto nuevo y barato, del mismo tipo que el launcher.
-3. **Portapapeles: preview grande + multi-select** — la más útil en el uso diario, la más
-   cara (~200 líneas).
+3. ✔ **Portapapeles: preview grande + multi-select** — hecha y verificada en vivo (tab y
+   espacio: el texto se envuelve al abrir, la imagen se decodifica en un hilo).
 
 **Antes de comprometerse con el emoji picker**: verificar que el canvas pueda pintar emoji
 en color (fuente + soporte del rasterizador). Es el único bloqueo duro de la lista.

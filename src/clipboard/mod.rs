@@ -12,7 +12,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
 };
 
-pub use history::{ClipboardEntry, ScaledPreview};
+pub use history::{ClipboardEntry, ScaledPreview, decode_preview};
 pub use paste::PasteTarget;
 
 use crate::app::App;

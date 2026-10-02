@@ -24,6 +24,10 @@ pub const CLIP_PAD: f32 = 10.0;
 /// (`clip_visible_rows`), porque ahí manda el alto común del overlay.
 pub const CLIP_VISIBLE_ROWS: usize = 7;
 
+/// Alto de una línea en la vista previa de texto (lógico). Una sola definición: la usan el
+/// dibujo y el `Home`/`End`/`PageUp`/`PageDown` del scroll (trampa 12).
+pub const CLIP_PREVIEW_LINE_H: f32 = 13.0;
+
 /// Filas que entran en el panel. En el horizontal da `CLIP_VISIBLE_ROWS` (el frame
 /// mide justo el encabezado más esas filas); en el vertical, donde el frame mide
 /// `menu::OVERLAY_PANEL_H`, salen las que quepan. Es la única cuenta: el rango que
@@ -66,6 +70,29 @@ pub struct ClipArgs<'a> {
     /// Ver `DrawArgs::slide_offset` / `body_opacity`.
     pub slide_offset: f32,
     pub body_opacity: f32,
+    /// Posiciones de `filtered` marcadas con `Shift+Space` (barra de acento a la
+    /// izquierda de la fila).
+    pub picked: &'a std::collections::BTreeSet<usize>,
+    /// Vista previa grande (`Tab`): reemplaza la lista.
+    pub preview: Option<&'a ClipPreview>,
+}
+
+/// Vista previa grande de una entrada del portapapeles (`Tab`). El TEXTO viene ya envuelto
+/// (se arma al abrir); la IMAGEN llega después, porque se decodifica en un hilo propio, así
+/// que `pending` es el rato en que todavía no está.
+///
+/// Vivirá en `menu_render` y no en `app` para que el render no dependa de `app`.
+pub struct ClipPreview {
+    /// Posición en `filtered` de la entrada que se está viendo.
+    pub pos: usize,
+    /// Índice REAL en el historial: con él se valida el resultado del hilo.
+    pub entry: usize,
+    pub lines: Vec<String>,
+    pub image: Option<ScaledPreview>,
+    pub pending: bool,
+    /// Scroll del texto, en px LÓGICOS (como `scroll_y`).
+    pub scroll: f32,
+    pub scroll_target: f32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -117,6 +144,11 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
     // closure se llama `pixmap` a propósito: adentro se dibuja en el destino. -----
     let accent = super::accent(settings);
     draw_body(pixmap, args.slide_offset * s, args.body_opacity, |pixmap| {
+        // ----- vista previa grande (`Tab`): reemplaza la lista entera -----
+        if let Some(p) = args.preview {
+            draw_clip_preview(pixmap, text_cache, &args, p, s);
+            return;
+        }
         draw_search_field(
             pixmap,
             text_cache,
@@ -173,6 +205,20 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
             }
             let selected = pos == args.selected;
             let hovered = args.hovered == Some(pos);
+            let picked = args.picked.contains(&pos);
+            if picked && !selected {
+                // ----- marcada con `Shift+Space`: tinte suave, así la fila se lee como
+                // elegida sin comerse el resaltado del `selected` -----
+                fill_rrect(
+                    pixmap,
+                    (frame.x + CLIP_PAD) * s,
+                    row_y + 3.0 * s,
+                    (frame.w - CLIP_PAD * 2.0) * s,
+                    (CLIP_ROW_H - 6.0) * s,
+                    OVERLAY_RADIUS * s,
+                    (accent.0, accent.1, accent.2, 46),
+                );
+            }
             if selected || hovered {
                 let fill = if selected {
                     accent
@@ -187,6 +233,19 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
                     (CLIP_ROW_H - 6.0) * s,
                     OVERLAY_RADIUS * s,
                     fill,
+                );
+            }
+            if picked {
+                // ----- la barra de acento del borde izquierdo: es la marca de "marcada"
+                // (va ÚLTIMA, así no la tapa el relleno del resaltado) -----
+                fill_rrect(
+                    pixmap,
+                    (frame.x + CLIP_PAD) * s,
+                    row_y + 3.0 * s,
+                    3.0 * s,
+                    (CLIP_ROW_H - 6.0) * s,
+                    1.5 * s,
+                    accent,
                 );
             }
 
@@ -263,7 +322,10 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
         }
     });
 
-    // ----- scrollbar -----
+    // ----- scrollbar: en la vista previa no aplica (el texto tiene su propio scroll) -----
+    if args.preview.is_some() {
+        return;
+    }
     let total = args.filtered.len() as f32 * CLIP_ROW_H;
     let viewport = CLIP_ROW_H * clip_visible_rows(args.frame) as f32;
     if total > viewport {
@@ -280,6 +342,77 @@ pub fn draw_clipboard(pixmap: &mut Pixmap, text_cache: &mut TextCache, args: Cli
             thumb_h,
             1.5 * s,
             (accent.0, accent.1, accent.2, 150),
+        );
+    }
+}
+
+/// Vista previa grande (`Tab`): el texto COMPLETO envuelto, o la imagen entera, en la caja
+/// del contenido. Reemplaza la lista; el encabezado muestra la pista de cómo volver.
+fn draw_clip_preview(
+    pixmap: &mut Pixmap,
+    text_cache: &mut TextCache,
+    args: &ClipArgs,
+    p: &ClipPreview,
+    s: f32,
+) {
+    use crate::menu::MENU_PADDING;
+    let settings = args.settings;
+    let frame = args.frame;
+    draw_text(
+        pixmap,
+        text_cache,
+        "Preview \u{b7} Tab or Esc to go back",
+        (frame.x + CLIP_PAD) * s,
+        (frame.y + MENU_PADDING + 6.0) * s,
+        9.0 * s,
+        &text_hex(settings),
+        600,
+    );
+    let left = (frame.x + CLIP_PAD) * s;
+    let top = (clip_content_y(frame) + 4.0) * s;
+    let bottom = (frame.y + frame.h - CLIP_PAD) * s;
+    if p.pending {
+        draw_text(
+            pixmap,
+            text_cache,
+            "Loading\u{2026}",
+            left,
+            top + 10.0 * s,
+            10.0 * s,
+            &text_dim_hex(settings),
+            400,
+        );
+        return;
+    }
+    if let Some(image) = &p.image {
+        let (iw, ih) = (image.width as f32, image.height as f32);
+        let avail_w = (frame.w - CLIP_PAD * 2.0) * s;
+        let avail_h = (bottom - top).max(1.0);
+        blit_preview(
+            pixmap,
+            image,
+            left + (avail_w - iw).max(0.0) / 2.0,
+            top + (avail_h - ih).max(0.0) / 2.0,
+        );
+        return;
+    }
+    // ----- texto: las líneas ya envueltas, con scroll -----
+    let line_h = CLIP_PREVIEW_LINE_H;
+    let first = (p.scroll / line_h).floor().max(0.0) as usize;
+    for (i, line) in p.lines.iter().enumerate().skip(first) {
+        let y = (clip_content_y(frame) + 4.0 + i as f32 * line_h - p.scroll) * s;
+        if y + line_h * s > bottom {
+            break;
+        }
+        draw_text(
+            pixmap,
+            text_cache,
+            line,
+            left,
+            y,
+            10.0 * s,
+            &text_hex(settings),
+            400,
         );
     }
 }

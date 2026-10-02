@@ -2,6 +2,11 @@ use super::*;
 
 use crate::menu_render::{CLIP_ROW_H, ClipArgs, clip_content_h, clip_content_y, clip_visible_rows};
 
+/// Caja máxima (px) a la que se decodifica la imagen de la vista previa. Más grande que
+/// cualquier panel; el dibujo la centra 1:1 (no se re-escala por frame).
+const PREVIEW_MAX_W: u32 = 1400;
+const PREVIEW_MAX_H: u32 = 800;
+
 impl App {
     pub(crate) fn toggle_clipboard(&mut self, qh: &QueueHandle<Self>) {
         if self.clipboard_mode.is_some() {
@@ -66,6 +71,9 @@ impl App {
             is_vertical,
             slide_dir: 0.0,
             previews: std::collections::HashMap::new(),
+            picked: Default::default(),
+            anchor: None,
+            preview: None,
         });
         self.refresh_clipboard_filter(qh);
     }
@@ -108,6 +116,11 @@ impl App {
         let Some(cm) = self.clipboard_mode.as_mut() else {
             return;
         };
+        // ----- con la vista previa abierta la lista no se mueve: sólo repintar -----
+        if cm.preview.is_some() {
+            self.request_redraw(qh);
+            return;
+        }
         let row_top = cm.selected as f32 * CLIP_ROW_H;
         let viewport = CLIP_ROW_H * clip_visible_rows(cm.frame) as f32;
         let mut target = cm.scroll_target;
@@ -122,31 +135,56 @@ impl App {
     }
 
     pub(super) fn handle_clipboard_key(&mut self, event: KeyEvent, qh: &QueueHandle<Self>) {
+        // ----- la vista previa (Tab) intercepta: Tab y Esc vuelven a la lista, y las
+        // flechas/PageUp/PageDown/Home/End scrollean el texto -----
+        if self
+            .clipboard_mode
+            .as_ref()
+            .is_some_and(|cm| cm.preview.is_some())
+        {
+            match event.keysym {
+                Keysym::Tab | Keysym::Escape => {
+                    self.close_clipboard_preview(qh);
+                    return;
+                }
+                Keysym::Down | Keysym::Up | Keysym::Next | Keysym::Prior | Keysym::Home
+                | Keysym::End => {
+                    self.clipboard_scroll_preview_key(event.keysym, qh);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        let shift = self.modifiers.shift;
         match event.keysym {
             Keysym::Escape => {
                 self.close_clipboard_mode(qh);
+                return;
+            }
+            // ----- Tab: vista previa grande de la fila seleccionada -----
+            Keysym::Tab => {
+                self.toggle_clipboard_preview(qh);
                 return;
             }
             Keysym::Return | Keysym::KP_Enter => {
                 self.paste_clipboard_selected(qh);
                 return;
             }
-            Keysym::Down => {
-                if let Some(cm) = self.clipboard_mode.as_mut()
-                    && !cm.filtered.is_empty()
-                {
-                    cm.selected = (cm.selected + 1).min(cm.filtered.len() - 1);
-                    cm.hovered = None;
-                }
-                self.scroll_clipboard_into_view(qh);
+            // ----- Shift+Space marca/desmarca la fila. El space PELADO sigue siendo un
+            // carácter de la búsqueda: cae al `utf8` de abajo -----
+            Keysym::space if shift => {
+                self.clipboard_toggle_pick(qh);
                 return;
             }
-            Keysym::Up => {
-                if let Some(cm) = self.clipboard_mode.as_mut() {
-                    cm.selected = cm.selected.saturating_sub(1);
-                    cm.hovered = None;
-                }
-                self.scroll_clipboard_into_view(qh);
+            // ----- el rango de Shift va con ↑/↓: la banda de pestañas les cede esas dos
+            // mientras el portapapeles está abierto (ver `press_key`) y sigue ciclando con
+            // ←/→, así que el gesto estándar de extender selección queda libre -----
+            Keysym::Down | Keysym::Up if shift => {
+                self.clipboard_move(event.keysym == Keysym::Up, true, qh);
+                return;
+            }
+            Keysym::Down | Keysym::Up => {
+                self.clipboard_move(event.keysym == Keysym::Up, false, qh);
                 return;
             }
             Keysym::Delete => {
@@ -178,6 +216,194 @@ impl App {
         }
     }
 
+    /// Mueve la fila seleccionada. Con `shift` extiende el rango marcado desde el ancla,
+    /// como un gestor de archivos (el ancla queda fija hasta que se suelta el Shift).
+    fn clipboard_move(&mut self, arriba: bool, shift: bool, qh: &QueueHandle<Self>) {
+        if let Some(cm) = self.clipboard_mode.as_mut()
+            && !cm.filtered.is_empty()
+        {
+            let n = cm.filtered.len() - 1;
+            if shift {
+                let ancla = cm.anchor.unwrap_or(cm.selected);
+                cm.anchor = Some(ancla);
+                cm.selected = if arriba {
+                    cm.selected.saturating_sub(1)
+                } else {
+                    (cm.selected + 1).min(n)
+                };
+                let (a, b) = (ancla.min(cm.selected), ancla.max(cm.selected));
+                cm.picked = (a..=b).collect();
+            } else {
+                cm.anchor = None;
+                cm.selected = if arriba {
+                    cm.selected.saturating_sub(1)
+                } else {
+                    (cm.selected + 1).min(n)
+                };
+            }
+            cm.hovered = None;
+        }
+        self.scroll_clipboard_into_view(qh);
+    }
+
+    /// `Shift+Space`: marca o desmarca la fila seleccionada y deja el ancla ahí.
+    fn clipboard_toggle_pick(&mut self, qh: &QueueHandle<Self>) {
+        if let Some(cm) = self.clipboard_mode.as_mut()
+            && !cm.filtered.is_empty()
+        {
+            if !cm.picked.remove(&cm.selected) {
+                cm.picked.insert(cm.selected);
+            }
+            cm.anchor = Some(cm.selected);
+        }
+        self.request_redraw(qh);
+    }
+
+    /// `Tab`: abre o cierra la vista previa grande de la fila seleccionada.
+    fn toggle_clipboard_preview(&mut self, qh: &QueueHandle<Self>) {
+        if self
+            .clipboard_mode
+            .as_ref()
+            .is_some_and(|cm| cm.preview.is_some())
+        {
+            self.close_clipboard_preview(qh);
+            return;
+        }
+        let Some((pos, entry_index)) = self.clipboard_mode.as_ref().and_then(|cm| {
+            cm.filtered
+                .get(cm.selected)
+                .copied()
+                .map(|e| (cm.selected, e))
+        }) else {
+            return;
+        };
+        let Some(entry) = self.clipboard_history.entries().get(entry_index).cloned() else {
+            return;
+        };
+        // ----- el texto se envuelve acá (una vez); la imagen se decodifica en un HILO y
+        // vuelve por IPC, porque un 4K decodifica a ~33 MB antes de escalar y eso no puede
+        // correr en el hilo que dibuja (AUDIT A4) -----
+        let ancho = self.clipboard_preview_width();
+        let mut preview = crate::menu_render::ClipPreview {
+            pos,
+            entry: entry_index,
+            lines: Vec::new(),
+            image: None,
+            pending: false,
+            scroll: 0.0,
+            scroll_target: 0.0,
+        };
+        if entry.is_text() {
+            preview.lines = texto_envuelto(&entry, ancho);
+        } else {
+            preview.pending = true;
+            let tx = self.ipc_tx.clone();
+            let conn = self.conn.clone();
+            let qh_hilo = qh.clone();
+            std::thread::spawn(move || {
+                let image =
+                    crate::clipboard::decode_preview(&entry, PREVIEW_MAX_W, PREVIEW_MAX_H);
+                log::debug!(
+                    "clip preview: decodificada la entrada {entry_index} -> {:?}",
+                    image.as_ref().map(|i| (i.width, i.height))
+                );
+                let msg = crate::ipc::IpcMessage::ClipboardPreviewReady(
+                    pos,
+                    entry_index,
+                    image.map(Box::new),
+                );
+                if tx.send(msg).is_ok() {
+                    conn.display().sync(&qh_hilo, ());
+                    let _ = conn.flush();
+                }
+            });
+        }
+        if let Some(cm) = self.clipboard_mode.as_mut() {
+            cm.preview = Some(preview);
+        }
+        self.request_redraw(qh);
+    }
+
+    fn close_clipboard_preview(&mut self, qh: &QueueHandle<Self>) {
+        if let Some(cm) = self.clipboard_mode.as_mut() {
+            cm.preview = None;
+        }
+        self.request_redraw(qh);
+    }
+
+    /// Ancho LÓGICO que tiene el texto en la vista previa (el del frame menos el inset).
+    /// Es el MISMO número que usa el dibujo: si se despegan, el texto se sale del panel.
+    fn clipboard_preview_width(&self) -> f32 {
+        self.clipboard_mode
+            .as_ref()
+            .map(|cm| cm.frame.w - crate::menu_render::CLIP_PAD * 2.0)
+            .unwrap_or(400.0)
+    }
+
+    /// Scroll de la vista previa por TECLADO. Las flechas van de a una línea; PageUp/Down
+    /// de a una pantalla; Home/End a los extremos.
+    fn clipboard_scroll_preview_key(&mut self, keysym: Keysym, qh: &QueueHandle<Self>) {
+        let salto = match keysym {
+            Keysym::Up => -1.0,
+            Keysym::Down => 1.0,
+            Keysym::Prior => -8.0,
+            Keysym::Next => 8.0,
+            Keysym::Home => -1.0e6,
+            _ => 1.0e6,
+        };
+        self.clipboard_scroll_preview(salto, qh);
+    }
+
+    /// Avanza el scroll de la vista previa (en líneas). El tope sale del largo ya envuelto.
+    fn clipboard_scroll_preview(&mut self, lineas: f32, qh: &QueueHandle<Self>) {
+        {
+            let Some(cm) = self.clipboard_mode.as_mut() else {
+                return;
+            };
+            let frame_h = cm.frame.h;
+            let Some(p) = cm.preview.as_mut() else {
+                return;
+            };
+            let line_h = crate::menu_render::CLIP_PREVIEW_LINE_H;
+            let max = (p.lines.len() as f32 * line_h - frame_h * 0.5).max(0.0);
+            p.scroll_target = if lineas.abs() > 1.0e5 {
+                if lineas < 0.0 { 0.0 } else { max }
+            } else {
+                (p.scroll_target + lineas * line_h).clamp(0.0, max)
+            };
+        }
+        self.request_redraw(qh);
+    }
+
+    /// El resultado del hilo que decodifica la imagen de la vista previa. Se DESCARTA si ya
+    /// no aplica (el panel se cerró, o se está previsualizando otra entrada): el mismo guard
+    /// que `tray_menu_still_wanted`.
+    pub(crate) fn apply_clipboard_preview(
+        &mut self,
+        pos: usize,
+        entry: usize,
+        image: Option<Box<crate::clipboard::ScaledPreview>>,
+        qh: &QueueHandle<Self>,
+    ) {
+        let mut aplica = false;
+        if let Some(cm) = self.clipboard_mode.as_mut()
+            && let Some(p) = cm.preview.as_mut()
+            && p.pos == pos
+            && p.entry == entry
+        {
+            p.pending = false;
+            p.image = image.map(|b| *b);
+            aplica = true;
+        }
+        if !aplica {
+            log::debug!("clip preview: descarto el resultado {pos}/{entry}");
+            return;
+        }
+        log::debug!("clip preview: aplico {pos}/{entry}");
+        self.needs_repaint = true;
+        self.request_redraw(qh);
+    }
+
     fn paste_clipboard_selected(&mut self, qh: &QueueHandle<Self>) {
         let entry = self
             .clipboard_mode
@@ -193,14 +419,23 @@ impl App {
     }
 
     fn delete_clipboard_selected(&mut self, qh: &QueueHandle<Self>) {
-        let index = self
-            .clipboard_mode
-            .as_ref()
-            .and_then(|cm| cm.filtered.get(cm.selected).copied());
-        if let Some(index) = index
-            && self.clipboard_history.remove(index)
-        {
-            self.clipboard_history.save();
+        let indices = match self.clipboard_mode.as_ref() {
+            Some(cm) => indices_a_borrar(&cm.filtered, &cm.picked, cm.selected),
+            None => Vec::new(),
+        };
+        if indices.is_empty() {
+            return;
+        }
+        // ----- vienen de MAYOR a menor: así los índices que quedan no se corren -----
+        for index in indices {
+            self.clipboard_history.remove(index);
+        }
+        self.clipboard_history.save();
+        if let Some(cm) = self.clipboard_mode.as_mut() {
+            cm.picked.clear();
+            cm.anchor = None;
+            // ----- la entrada previsualizada puede ser una de las borradas -----
+            cm.preview = None;
         }
         self.refresh_clipboard_filter(qh);
     }
@@ -213,6 +448,31 @@ impl App {
         // ----- coordenadas de la superficie -> del panel (el panel va debajo del
         // dock cuando el dock está arriba) -----
         let (px, py) = self.panel_local(event.position.0, event.position.1);
+        // ----- con la vista previa abierta: cualquier click la cierra y la rueda
+        // scrollea el texto (la lista no se toca) -----
+        if self
+            .clipboard_mode
+            .as_ref()
+            .is_some_and(|cm| cm.preview.is_some())
+        {
+            match event.kind {
+                PointerEventKind::Press { .. } => self.close_clipboard_preview(qh),
+                PointerEventKind::Axis {
+                    horizontal,
+                    vertical,
+                    ..
+                } => {
+                    let delta = if vertical.absolute != 0.0 {
+                        vertical.absolute
+                    } else {
+                        horizontal.absolute
+                    };
+                    self.clipboard_scroll_preview(-(delta as f32) * 0.5, qh);
+                }
+                _ => {}
+            }
+            return;
+        }
         match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 let hit = self.clipboard_row_at(px as f32, py as f32);
@@ -293,6 +553,25 @@ impl App {
         };
         let closing = cm.closing;
         let anim = cm.anim;
+        let preview_animating = {
+            match cm.preview.as_mut() {
+                Some(p) if !smooth => {
+                    p.scroll = p.scroll_target;
+                    false
+                }
+                Some(p) => {
+                    let delta = p.scroll_target - p.scroll;
+                    if delta.abs() <= 0.5 {
+                        p.scroll = p.scroll_target;
+                        false
+                    } else {
+                        p.scroll += delta * menu::lerp_factor(0.3, dt);
+                        true
+                    }
+                }
+                None => false,
+            }
+        };
 
         if closing && anim <= 0.0 {
             self.clipboard_mode = None;
@@ -319,7 +598,7 @@ impl App {
             }
         }
 
-        if !fade_animating && !scroll_animating && !key_repeating {
+        if !fade_animating && !scroll_animating && !preview_animating && !key_repeating {
             return;
         }
         self.draw_clipboard_mode(qh);
@@ -366,10 +645,87 @@ impl App {
             // corre (cambio de pestaña) y/o se funde (transparency < 1) -----
             slide_offset: menu::overlay_slide_offset(cm.slide_dir, cm.anim),
             body_opacity: anim_opacity(transparency, eased),
+            picked: &cm.picked,
+            preview: cm.preview.as_ref(),
         };
         crate::menu_render::draw_clipboard(&mut pixmap, &mut self.text_cache, args);
         // ----- el panel ya trae su propio fundido; la superficie va opaca con el
         // dock nítido arriba -----
         self.show_panel_surface(qh, &pixmap, layout, 1.0);
+    }
+}
+
+/// Texto COMPLETO de una entrada, envuelto al ancho del panel y con topes: el portapapeles
+/// admite 256 KB, y envolver miles de líneas para leer veinte no tiene sentido.
+fn texto_envuelto(entry: &crate::clipboard::ClipboardEntry, ancho: f32) -> Vec<String> {
+    const MAX_CHARS: usize = 20_000;
+    const MAX_LINES: usize = 400;
+    let Ok(texto) = std::str::from_utf8(&entry.data) else {
+        return Vec::new();
+    };
+    let recortado: String = texto.chars().take(MAX_CHARS).collect();
+    crate::menu_render::wrap_to_width(&recortado, 10.0, ancho.max(80.0), MAX_LINES)
+}
+
+/// Los índices REALES del historial a borrar: las posiciones marcadas con `Shift+Space` (o
+/// la seleccionada si no hay marcadas), mapeadas por `filtered` y ordenadas de **MAYOR a
+/// menor** — que es como hay que borrarlas para que los índices que quedan no se corran —.
+fn indices_a_borrar(
+    filtered: &[usize],
+    picked: &std::collections::BTreeSet<usize>,
+    selected: usize,
+) -> Vec<usize> {
+    let mut out: Vec<usize> = if picked.is_empty() {
+        filtered.get(selected).copied().into_iter().collect()
+    } else {
+        picked
+            .iter()
+            .filter_map(|p| filtered.get(*p).copied())
+            .collect()
+    };
+    out.sort_unstable_by(|a, b| b.cmp(a));
+    out
+}
+
+#[cfg(test)]
+mod clipboard_multi_tests {
+    use super::*;
+
+    /// El borrado múltiple sale de MAYOR a menor: con los índices del historial en orden,
+    /// borrar el primero corre a todos los demás y se borra lo que no era.
+    #[test]
+    fn los_indices_a_borrar_van_de_mayor_a_menor() {
+        let filtered = [10usize, 3, 7, 1];
+        let picked: std::collections::BTreeSet<usize> = [0, 2].into_iter().collect();
+        assert_eq!(indices_a_borrar(&filtered, &picked, 0), vec![10, 7]);
+        // ----- sin marcadas: la seleccionada -----
+        let vacio = std::collections::BTreeSet::new();
+        assert_eq!(indices_a_borrar(&filtered, &vacio, 1), vec![3]);
+        // ----- fuera de rango: nada -----
+        assert!(indices_a_borrar(&filtered, &vacio, 9).is_empty());
+    }
+
+    /// El texto de la vista previa se envuelve al ancho y se recorta: una entrada enorme no
+    /// puede llenar la lista de líneas.
+    #[test]
+    fn el_texto_de_la_vista_previa_se_envuelve() {
+        let mut entry = crate::clipboard::ClipboardEntry::from_data(
+            "text/plain".into(),
+            b"hola mundo como estas hoy".to_vec(),
+        )
+        .expect("entrada de texto");
+        // ----- envuelve en varias líneas cuando el ancho es chico (el ancho tiene un
+        // piso de 80, así que no baja de ahí) -----
+        let lineas = texto_envuelto(&entry, 60.0);
+        assert!(lineas.len() >= 2, "lineas: {lineas:?}");
+        assert!(lineas.iter().all(|l| l.chars().count() < 30), "lineas: {lineas:?}");
+        assert_eq!(lineas[0].split_whitespace().next(), Some("hola"));
+        // ----- y una entrada gigante se recorta en vez de explotar -----
+        entry.data = "palabra ".repeat(50_000).into_bytes().into();
+        let recortadas = texto_envuelto(&entry, 60.0);
+        assert!(recortadas.len() <= 400, "tope de lineas: {}", recortadas.len());
+        // ----- bytes que no son UTF-8 no rompen nada -----
+        entry.data = vec![0xff, 0xfe].into();
+        assert!(texto_envuelto(&entry, 60.0).is_empty());
     }
 }

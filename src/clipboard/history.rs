@@ -34,6 +34,39 @@ pub struct ScaledPreview {
     pub height: u32,
 }
 
+/// Decodifica la entrada COMPLETA para la vista previa grande (`Tab`), ajustada a la caja
+/// `max` y **sin ampliar**: una imagen chica se muestra 1:1. Va en un hilo propio —un 4K
+/// decodifica a ~33 MB antes de escalar, y eso no puede pasar en el hilo que dibuja
+/// (AUDIT A4)—, así que el caller la llama desde un `std::thread::spawn`.
+///
+/// `None` para las entradas de texto (esas se muestran como texto) o si la imagen no
+/// decodifica.
+pub fn decode_preview(entry: &ClipboardEntry, max_w: u32, max_h: u32) -> Option<ScaledPreview> {
+    if entry.is_text() {
+        return None;
+    }
+    let mut reader = ImageReader::new(Cursor::new(entry.data.as_ref()))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode().ok()?;
+    let image = if image.width() > max_w || image.height() > max_h {
+        image.resize(max_w, max_h, FilterType::Triangle)
+    } else {
+        image
+    };
+    let (width, height) = (image.width(), image.height());
+    Some(ScaledPreview {
+        pixels: image.to_rgba8().into_raw(),
+        width,
+        height,
+    })
+}
+
 pub(crate) struct StoredEntry<'a> {
     pub mime: &'a str,
     pub data: &'a [u8],

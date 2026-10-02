@@ -44,12 +44,14 @@ Uso:
                N=1). Sirve para el volumen del dock (rueda = ±5% sobre el widget de
                volumen). Necesita que el dock esté visible: el reveal se hace igual.
 
-    --key up|down|left|right|enter|escape|backspace [--times N]
+    --key up|down|left|right|enter|escape|backspace|tab|space|delete [--times N]
                en vez de clickear, teclea esa tecla N veces (taps sueltos, sin
                auto-repeat) con el TECLADO virtual. Es lo que ejercita la navegación
                de los menús: imprime la última línea `teclado:` del log, que dice qué
                quedó resaltado (o si Escape cerró). Igual que --shift-arrow, necesita
                un modo abierto (la superficie con el teclado en Exclusive).
+               `tab`/`space`/`delete` son las del portapapeles: vista previa grande
+               (Tab), marcar con Shift+Space y borrar lo marcado (Delete).
 
     --hover    en vez de clickear, deja el puntero donde llegó y espera: es lo que
                ejercita lo que se abre con hover (el calendario del reloj, 450ms).
@@ -91,6 +93,9 @@ BTN_LEFT, BTN_RIGHT = 0x110, 0x111
 KEY_LEFTSHIFT, KEY_LEFT, KEY_RIGHT = 42, 105, 106
 # ----- teclas que usan los menús (flechas, Enter, ESC) -----
 KEY_UP, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_BACKSPACE = 103, 108, 28, 1, 14
+# ----- teclas del portapapeles: Tab = vista previa grande, Space = marcar con Shift,
+# Delete = borrar lo marcado -----
+KEY_TAB, KEY_SPACE, KEY_DELETE = 15, 57, 111
 KEY_CODES = {
     "up": KEY_UP,
     "down": KEY_DOWN,
@@ -99,10 +104,14 @@ KEY_CODES = {
     "enter": KEY_ENTER,
     "escape": KEY_ESC,
     "backspace": KEY_BACKSPACE,
+    "tab": KEY_TAB,
+    "space": KEY_SPACE,
+    "delete": KEY_DELETE,
 }
 REL_WHEEL = 8
 
-DEFAULT_LOG = "/tmp/menu.log"
+# ----- el default documentado del repo (AGENTS.md): es una ruta de log, no un temporal -----
+DEFAULT_LOG = "/tmp/menu.log"  # noqa: S108
 REVEAL_TAG = " reveal"
 HIT_TAG = "click derecho"
 OVERLAY_TAG = "overlay:"
@@ -129,7 +138,7 @@ def rel(fd, dx, dy):
 
 def count_tag(path, tag):
     try:
-        with open(path, "r", errors="replace") as fh:
+        with open(path, errors="replace") as fh:
             return fh.read().count(tag)
     except OSError:
         return 0
@@ -137,7 +146,7 @@ def count_tag(path, tag):
 
 def last_hit(path):
     try:
-        with open(path, "r", errors="replace") as fh:
+        with open(path, errors="replace") as fh:
             lines = [line for line in fh if HIT_TAG in line]
     except OSError:
         return None
@@ -148,7 +157,7 @@ def last_hit(path):
 
 def last_overlay(path):
     try:
-        with open(path, "r", errors="replace") as fh:
+        with open(path, errors="replace") as fh:
             lines = [line for line in fh if OVERLAY_TAG in line]
     except OSError:
         return None
@@ -157,7 +166,7 @@ def last_overlay(path):
 
 def last_key(path):
     try:
-        with open(path, "r", errors="replace") as fh:
+        with open(path, errors="replace") as fh:
             lines = [line for line in fh if KEY_TAG in line]
     except OSError:
         return None
@@ -166,7 +175,7 @@ def last_key(path):
 
 def last_calendar(path):
     try:
-        with open(path, "r", errors="replace") as fh:
+        with open(path, errors="replace") as fh:
             lines = [line for line in fh if CAL_TAG in line]
     except OSError:
         return None

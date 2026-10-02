@@ -52,6 +52,10 @@ pub enum IpcMessage {
     /// de `tray::spawn_menu_worker`, porque `GetLayout` es bloqueante y no puede
     /// correr en el hilo que dibuja (A3 de AUDIT.md).
     TrayMenuReady(Box<crate::tray::MenuResult>),
+    /// La vista previa grande de una entrada del portapapeles ya decodificada. NO viene del
+    /// socket: la manda el hilo que decodifica la imagen, porque un 4K tarda y eso no puede
+    /// correr en el hilo que dibuja (AUDIT A4; el menú del tray es la misma jugada).
+    ClipboardPreviewReady(usize, usize, Option<Box<crate::clipboard::ScaledPreview>>),
 }
 
 const NOTIFY_SEP: char = '\u{1f}';

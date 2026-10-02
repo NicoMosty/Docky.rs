@@ -651,6 +651,9 @@ pub struct App {
     /// porque `GetLayout` es bloqueante (A3 de AUDIT.md). El resultado vuelve por el
     /// canal de IPC como `IpcMessage::TrayMenuReady`.
     pub tray_menu_tx: std::sync::mpsc::Sender<crate::tray::MenuRequest>,
+    /// Para que un HILO despierte el loop de Wayland con un `IpcMessage`: la vista previa
+    /// del portapapeles decodifica una imagen en su propio hilo y avisa por acá.
+    pub ipc_tx: std::sync::mpsc::Sender<crate::ipc::IpcMessage>,
     pub pointer: Option<wl_pointer::WlPointer>,
     pub keyboard: Option<wl_keyboard::WlKeyboard>,
     pub dock: Dock,
@@ -753,6 +756,12 @@ pub(crate) struct ClipboardMode {
     /// Ver `AppSearchMode::slide_dir`.
     slide_dir: f32,
     previews: std::collections::HashMap<usize, crate::clipboard::ScaledPreview>,
+    /// Posiciones de `filtered` marcadas con `Shift+Space`, y el ancla del rango de
+    /// `Shift+↑↓` (para extender la selección como un gestor de archivos).
+    picked: std::collections::BTreeSet<usize>,
+    anchor: Option<usize>,
+    /// Vista previa grande (`Tab`): `None` = lista normal.
+    preview: Option<crate::menu_render::ClipPreview>,
 }
 
 fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {

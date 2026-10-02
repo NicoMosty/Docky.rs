@@ -371,6 +371,7 @@ fn main() -> anyhow::Result<()> {
         island_hover_at: None,
         autohide_hide_tx,
         tray_menu_tx,
+        ipc_tx: ipc_tx.clone(),
         pointer: None,
         keyboard: None,
         dock,
@@ -608,6 +609,9 @@ fn main() -> anyhow::Result<()> {
                 ipc::IpcMessage::ScreenshotFull => app.start_full_screenshot(&qh),
                 ipc::IpcMessage::ScreenshotRegion => app.start_region_screenshot(&qh),
                 ipc::IpcMessage::ToggleDockMenu => app.toggle_dock_menu(&qh),
+                ipc::IpcMessage::ClipboardPreviewReady(pos, entry, preview) => {
+                    app.apply_clipboard_preview(pos, entry, preview, &qh)
+                }
                 ipc::IpcMessage::TestNotification => app.show_notification(
                     "Test Notification".to_string(),
                     "This is a test notification from Docky.rs".to_string(),
