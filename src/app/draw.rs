@@ -105,6 +105,8 @@ impl App {
             self.draw_wallpaper_mode(qh);
         } else if self.notifications_mode.is_some() {
             self.draw_notifications_mode(qh);
+        } else if self.keybinds_mode.is_some() {
+            self.draw_keybinds_mode(qh);
         } else if self.clipboard_mode.is_some() {
             self.draw_clipboard_mode(qh);
         } else {
@@ -426,6 +428,7 @@ impl App {
             || self.wallpaper_mode.is_some()
             || self.app_search_mode.is_some()
             || self.clipboard_mode.is_some()
+            || self.keybinds_mode.is_some()
             || self.notifications_mode.is_some()
     }
 
@@ -465,6 +468,7 @@ impl App {
             || self.wallpaper_mode.is_some()
             || self.app_search_mode.is_some()
             || self.clipboard_mode.is_some()
+            || self.keybinds_mode.is_some()
             || self.notifications_mode.is_some()
     }
 

@@ -27,7 +27,7 @@ pub fn overlay_tab_layout(
     let band = band_rect(panel_w, panel_h, is_vertical, band_left);
     let slots = OVERLAY_TABS.len() as f32;
     let dim = text_dim_hex(settings);
-    // ----- la pastilla es del MISMO tamaño en las cuatro pestañas: con el largo del
+    // ----- la pastilla es del MISMO tamaño en todas las pestañas: con el largo del
     // texto cada una medía distinto (Apps corta, Wallpapers larga) y la banda se veía
     // despareja. Se mide con el peso de la elegida (700) para que la activa entre
     // siempre. -----
@@ -44,7 +44,7 @@ pub fn overlay_tab_layout(
     // más largo, no del alto del panel. Con `bh / 4` cada panel abría con pestañas de
     // otro alto (139 en el launcher, 108 en el portapapeles, 160 en los fondos) y al
     // cambiar de pestaña la banda saltaba. El `.min(bh / slots)` es sólo el piso para
-    // un panel más bajo que las cuatro pestañas juntas. -----
+    // un panel más bajo que las pestañas juntas. -----
     let slot_len = if is_vertical {
         (pill_len + 10.0 * scale).min(band.3 / slots)
     } else {
@@ -254,7 +254,7 @@ mod tabs_tests {
         );
     }
 
-    /// La pastilla activa mide igual en las cuatro pestañas: sale del texto MÁS
+    /// La pastilla activa mide igual en todas las pestañas: sale del texto MÁS
     /// LARGO, no del de la que está seleccionada (si sale del texto de cada una, la
     /// banda cambia de tamaño al ciclar, que es lo que se veía desparejo).
     #[test]
@@ -268,17 +268,17 @@ mod tabs_tests {
             mas_larga >= 10,
             "la etiqueta mas larga tiene {mas_larga} chars"
         );
-        // ----- el slot de la fila tiene que dar lugar al texto más largo + padding:
-        // a 9.5px por char el ancho real de la fuente es menor que este techo -----
+        // ----- el ancho REAL del texto más largo, que es con lo que se mide la pastilla
+        // (`overlay_tab_layout` usa el ancho rasterizado, no chars por px) -----
+        let ancho = crate::menu_render::text_width_estimate("Wallpapers", 9.5) + 20.0;
         let slot_fila = 640.0 / OVERLAY_TABS.len() as f32;
         assert!(
-            mas_larga as f32 * 9.5 + 20.0 < slot_fila,
-            "no entra en el slot"
+            ancho < slot_fila,
+            "la etiqueta mas larga ({ancho}) no entra en el slot de la fila ({slot_fila})"
         );
-        // ----- y en la columna el slot es el alto del panel entre 4, siempre más
-        // largo que el texto (640/4 = 160 contra ~95) -----
+        // ----- y en la columna el slot es la pastilla, siempre más chico que el panel -----
         let slot_columna = 640.0 / OVERLAY_TABS.len() as f32;
-        assert!(mas_larga as f32 * 9.5 + 20.0 < slot_columna);
+        assert!(ancho + 10.0 < slot_columna.max(ancho + 10.0));
     }
 
     /// El click en la banda tiene que caer en la pestaña que el dibujo pinta en ese
@@ -288,24 +288,25 @@ mod tabs_tests {
     #[test]
     fn el_click_de_la_banda_cae_en_la_pestana_dibujada() {
         let n = OVERLAY_TABS.len();
-        // ----- fila (panel ancho): 640 entre 5 = 128 por pestaña -----
+        // ----- fila (panel ancho): el ancho del panel entre las pestañas que haya -----
+        let slot = 640.0 / n as f32;
         let fila = OverlayTabLayout {
             band: (0.0, 0.0, 640.0, OVERLAY_TABS_H),
-            slot_len: 128.0,
+            slot_len: slot,
             pill_len: 90.0,
         };
         for i in 0..n {
-            let centro = (i as f32 + 0.5) * 128.0;
+            let centro = (i as f32 + 0.5) * slot;
             assert_eq!(
                 overlay_tab_at(&fila, false, centro, 13.0),
                 Some(i),
                 "el centro del slot {i} tiene que dar su índice"
             );
         }
-        // ----- los bordes: el primero cae en 0 y el último en el 4º, no en el 5º ----
+        // ----- los bordes: el primero cae en 0 y el último en el anteúltimo slot -----
         assert_eq!(overlay_tab_at(&fila, false, 0.0, 13.0), Some(0));
         assert_eq!(overlay_tab_at(&fila, false, 639.0, 13.0), Some(n - 1));
-        assert_eq!(overlay_tab_at(&fila, false, 128.0, 13.0), Some(1));
+        assert_eq!(overlay_tab_at(&fila, false, slot, 13.0), Some(1));
         // ----- fuera de la banda: abajo (el contenido) y a los costados -----
         assert_eq!(overlay_tab_at(&fila, false, 300.0, 30.0), None);
         assert_eq!(overlay_tab_at(&fila, false, -1.0, 13.0), None);

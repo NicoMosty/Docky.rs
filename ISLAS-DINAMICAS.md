@@ -491,17 +491,17 @@ Al cerrar cada ítem, medir contra el baseline actual:
 ## 9. Ideas sin minar de los dos repos
 
 Sección agregada **después** de la propuesta original, al releer §2 contra lo que ya está en
-el árbol. Nada de esto se implementó: son las features de las dos fuentes que **no** figuran
-en §4 ni como “ya está”. Verificado contra el código que Docky hoy **no** las tiene (no hay
-emoji picker, ni búsqueda de keybinds, ni preview grande del portapapeles, ni panel-lista
-del tray, ni confirmación en el menú de energía, ni eventos de calendario, ni ajustes de
-velocidad/tope/duración).
+el árbol. Es lo que las dos fuentes tienen y **no** figuraba en §4 ni como “ya está”.
+El estado se lee en la propia tabla: sin ✔ sigue pendiente (verificado contra el código
+que Docky hoy **no** lo tiene: no hay panel-lista del tray, ni confirmación en el menú de
+energía, ni eventos de calendario, ni ajustes de velocidad/tope/duración/emoji), y con ✔
+ya se minó (el detalle de cada uno está en §9.5).
 
 ### 9.1 De island
 
 | Idea | Qué es | Costo | Riesgo |
 | --- | --- | --- | --- |
-| **Búsqueda de keybinds** | Una pestaña del overlay que lista y **filtra los atajos** de niri (`KeybindList.qml`) | ~120: parsear `~/.config/niri/config/binds/*.kdl` (el repo ya parsea `.kdl` para `wallpaper_program()`) | niri **no** expone los binds por IPC: hay que leer el archivo del usuario |
+| ✔ **Búsqueda de keybinds** | Una pestaña del overlay que lista y **filtra los atajos** de niri (`KeybindList.qml`) | ~120 previstos; quedaron ~450 entre el parser, el panel y el pegado en la tabla de pestañas | niri **no** expone los binds por IPC: hay que leer el archivo del usuario (parser propio, heurístico — ver §9.5) |
 | **Panel-lista del tray** | Una vista con los items del SNI y sus menús (`TrayList.qml`) | ~150 | los datos ya están (`tray.rs`), pero hay que listar y navegar |
 | **Emoji picker** | Pestaña que busca y copia emojis (`EmojiPicker.qml`) | ~150 | **bloqueo duro**: el canvas rasteriza texto con una fuente normal; sin una **fuente de emoji en color** saldrían cuadraditos. Verificar **antes** de empezar |
 | **`motionScale`** | Multiplicador de la **velocidad** de todas las animaciones (`IslandSettings.qml`). Docky sólo tiene `smooth_transitions` (on/off) | ~20: multiplica las duraciones de `menu::Pace` | — |
@@ -532,9 +532,63 @@ Notch (N), panel wifi/BT con contraseña (S), wallpaper switcher, menú de energ
 1. **`motionScale` + duración del aviso** — dos ajustes, ~35 líneas juntos, y cierran una
    asimetría: ya está el *on/off* de las transiciones (`smooth_transitions`) pero no la
    **velocidad** ni la duración del aviso.
-2. **Búsqueda de keybinds** — producto nuevo y barato, del mismo tipo que el launcher.
+2. ✔ **Búsqueda de keybinds** — hecha y verificada en vivo (pestaña del overlay, búsqueda por tecla
+   o por acción, Enter copia las teclas). El costo real fue mayor que los ~120 previstos porque
+   no alcanzaba con reusar el launcher: las teclas más largas miden ~30 caracteres y la tarjeta
+   del launcher son ~18, así que se elidía media tabla — de ahí el panel propio (§9.5).
 3. ✔ **Portapapeles: preview grande + multi-select** — hecha y verificada en vivo (tab y
    espacio: el texto se envuelve al abrir, la imagen se decodifica en un hilo).
 
 **Antes de comprometerse con el emoji picker**: verificar que el canvas pueda pintar emoji
 en color (fuente + soporte del rasterizador). Es el único bloqueo duro de la lista.
+
+### 9.5 Implementado de §9
+
+#### ✔ Búsqueda de keybinds (de `KeybindList.qml`)
+
+El problema de fondo: niri **no** publica los binds por IPC (el `event-stream` y los
+`Request` no los incluyen), así que la única fuente es el `.kdl` del usuario. El repo ya
+recorre `.kdl` para `wallpaper_program()`, pero ahí se busca una línea suelta; acá hay que
+entender la estructura (bloques `binds { … }`, binds multilínea, `hotkey-overlay-title`).
+
+- **De dónde salen**: `desktop::list_niri_keybinds()` recorre `~/.config/niri/**/*.kdl`
+  (descarta `.bak`, deduplica por `(teclas, etiqueta)`, ordena por teclas) y
+  `keybinds_from_kdl()` las lee con un **escáner de líneas**, documentado como heurístico:
+  no es un parser de KDL, sólo reconoce `binds { … }`, la tecla por la forma (`+`,
+  `XF86*`, `Print`, `F<n>`) y el título de `hotkey-overlay-title` (con `sin_comentario`
+  para no confundir un `//` dentro de una comilla con un comentario). Si el formato cambia,
+  la lista se acorta, no rompe.
+- **Por qué pestaña propia y no tarjetas del launcher** (medido): la tecla más larga del
+  setup es `Mod+Ctrl+Shift+Page_Down` (~30 caracteres) y la tarjeta del launcher son ~18, o
+  sea que la mitad de la tabla se elidía. En fila ancha la tecla va en su pastilla
+  (`KEYBIND_KEYS_W = 210`) y la acción se elide a la derecha.
+- **La búsqueda usa el ranking del launcher**: `tier_of(nombre, keywords, query)` — el
+  mismo que usa el match difuso de apps — con las teclas como `name` y la
+  `hotkey-overlay-title` como keyword, así que escribir `fullscreen` encuentra
+  `Mod+Shift+F` y escribir `mod+shift+f` también. Es la razón por la que `tier_of` se
+extrajo de `match_tier` en vez de duplicar la escala.
+- **La pestaña fue la parte más ancha de la tabla**: `OVERLAY_TABS`/`OVERLAY_ORDER` pasan a
+  6 y los tests de la banda (`menu_render::tabs`) calculan el slot como `640 / n` en vez de
+  tenerlo horneado; el panel vertical entra en la misma columna de pestañas.
+- **Enter copia las TECLAS y cierra** (es lo que se viene a buscar: pegarlas donde haga
+  falta), por el mismo camino que copiar del historial (`set_clipboard_entry`), y queda en
+  el historial. `Esc` cierra, `↑↓` recorren, `BackSpace` edita la búsqueda.
+- **IPC**: `--toggle-keybinds` (y el ciclo de pestañas con `Shift+flechas`), más el botón
+  `Keybindings` en la categoría System del panel de ajustes (sin él no habría forma de
+  abrir la pestaña desde el propio panel, que tapa la banda).
+- Guards: `desktop::keybind_tests` (el parser, una URL que parece comentario, y que el
+  ranking sea el del launcher) y los tests de la banda con 6 pestañas. Verificado en vivo:
+  panel 390x640, `Exclusive` mientras está abierto, click afuera lo cierra
+  (`catcher: click afuera -> cerrar`), `↓↓ Enter` copia `Ctrl+Print` al portapapeles y
+  cierra.
+- **Lo que NO hace**: no muestra el contexto de niri (a qué modo pertenece el bind), no
+  agrupa por categoría ni permite editar; y al ser un escáner de líneas, un bind escrito de
+  forma exótica (una `binding` armada con variables) no se lista.
+
+#### ✔ Portapapeles: preview grande + multi-select (de `Cliphist.qml`)
+
+`Tab` abre el preview grande (texto envuelto al abrir, con tope de 20 000 caracteres / 400
+líneas; la imagen se decodifica **en un hilo** y vuelve por `IpcMessage::ClipboardPreviewReady`,
+porque un 4K decodifica a ~33 MB antes de escalar), `Shift+Space` marca la fila,
+`Shift+↑↓` marca un rango y `Del` borra **todas** las marcadas de una (índices descendentes,
+para que borrar no corra los que faltan). Verificado en vivo: 47 → 44 entradas.

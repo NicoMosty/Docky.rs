@@ -147,7 +147,11 @@ impl App {
                     self.close_clipboard_preview(qh);
                     return;
                 }
-                Keysym::Down | Keysym::Up | Keysym::Next | Keysym::Prior | Keysym::Home
+                Keysym::Down
+                | Keysym::Up
+                | Keysym::Next
+                | Keysym::Prior
+                | Keysym::Home
                 | Keysym::End => {
                     self.clipboard_scroll_preview_key(event.keysym, qh);
                     return;
@@ -301,8 +305,7 @@ impl App {
             let conn = self.conn.clone();
             let qh_hilo = qh.clone();
             std::thread::spawn(move || {
-                let image =
-                    crate::clipboard::decode_preview(&entry, PREVIEW_MAX_W, PREVIEW_MAX_H);
+                let image = crate::clipboard::decode_preview(&entry, PREVIEW_MAX_W, PREVIEW_MAX_H);
                 log::debug!(
                     "clip preview: decodificada la entrada {entry_index} -> {:?}",
                     image.as_ref().map(|i| (i.width, i.height))
@@ -718,12 +721,19 @@ mod clipboard_multi_tests {
         // piso de 80, así que no baja de ahí) -----
         let lineas = texto_envuelto(&entry, 60.0);
         assert!(lineas.len() >= 2, "lineas: {lineas:?}");
-        assert!(lineas.iter().all(|l| l.chars().count() < 30), "lineas: {lineas:?}");
+        assert!(
+            lineas.iter().all(|l| l.chars().count() < 30),
+            "lineas: {lineas:?}"
+        );
         assert_eq!(lineas[0].split_whitespace().next(), Some("hola"));
         // ----- y una entrada gigante se recorta en vez de explotar -----
         entry.data = "palabra ".repeat(50_000).into_bytes().into();
         let recortadas = texto_envuelto(&entry, 60.0);
-        assert!(recortadas.len() <= 400, "tope de lineas: {}", recortadas.len());
+        assert!(
+            recortadas.len() <= 400,
+            "tope de lineas: {}",
+            recortadas.len()
+        );
         // ----- bytes que no son UTF-8 no rompen nada -----
         entry.data = vec![0xff, 0xfe].into();
         assert!(texto_envuelto(&entry, 60.0).is_empty());

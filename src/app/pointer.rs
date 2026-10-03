@@ -175,6 +175,10 @@ impl App {
             self.handle_notifications_pointer_event(event, qh);
             return;
         }
+        if self.keybinds_mode.is_some() {
+            self.handle_keybinds_pointer_event(event, qh);
+            return;
+        }
         if self.clipboard_mode.is_some() {
             self.handle_clipboard_pointer_event(event, qh);
             return;

@@ -13,6 +13,7 @@ impl App {
             || self.app_search_mode.is_some()
             || self.menu.is_some()
             || self.clipboard_mode.is_some()
+            || self.keybinds_mode.is_some()
         {
             log::debug!("osd: descartado (panel abierto)");
             return;

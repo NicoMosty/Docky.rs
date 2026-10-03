@@ -53,6 +53,7 @@ mod dock_popup;
 mod draw;
 mod fonts;
 mod island_activity;
+mod keybinds_ui;
 mod notification;
 mod notifications_ui;
 mod osd;
@@ -298,14 +299,16 @@ pub(crate) enum SearchList {
 pub(crate) enum OverlayMode {
     Apps,
     Clipboard,
+    Keybinds,
     Notifs,
     Wallpaper,
     Windows,
 }
 
-pub(crate) const OVERLAY_ORDER: [OverlayMode; 5] = [
+pub(crate) const OVERLAY_ORDER: [OverlayMode; 6] = [
     OverlayMode::Apps,
     OverlayMode::Clipboard,
+    OverlayMode::Keybinds,
     OverlayMode::Notifs,
     OverlayMode::Wallpaper,
     OverlayMode::Windows,
@@ -353,7 +356,7 @@ pub(crate) enum AccionBanda {
 
 /// El auto-repeat del compositor manda la misma flecha cada ~30 ms. Antes CADA
 /// repetición entraba a la rama del ciclo, así que mantener Shift+←/→ daba la vuelta a
-/// las cinco pestañas en bucle (AUDIT.md B1): ahora cicla la primera y las repeticiones
+/// las pestañas del overlay en bucle (AUDIT.md B1): ahora cicla la primera y las repeticiones
 /// se tragan **mientras el overlay esté abierto**.
 ///
 /// Con el overlay cerrado la repetición NO se traga, y es a propósito: ahí la flecha
@@ -404,6 +407,9 @@ impl App {
         if self.notifications_mode.is_some() {
             return Some(OverlayMode::Notifs);
         }
+        if self.keybinds_mode.is_some() {
+            return Some(OverlayMode::Keybinds);
+        }
         if self.wallpaper_mode.is_some() {
             return Some(OverlayMode::Wallpaper);
         }
@@ -444,12 +450,14 @@ impl App {
         match current {
             OverlayMode::Apps | OverlayMode::Windows => self.close_app_search_mode(qh),
             OverlayMode::Clipboard => self.close_clipboard_mode(qh),
+            OverlayMode::Keybinds => self.close_keybinds_mode(qh),
             OverlayMode::Notifs => self.close_notifications_mode(qh),
             OverlayMode::Wallpaper => self.close_wallpaper_mode(qh),
         }
         match next {
             OverlayMode::Apps => self.open_app_search(qh),
             OverlayMode::Clipboard => self.open_clipboard(qh),
+            OverlayMode::Keybinds => self.open_keybinds(qh),
             OverlayMode::Notifs => self.open_notifications(qh),
             OverlayMode::Wallpaper => self.open_wallpaper_picker(qh),
             OverlayMode::Windows => self.open_windows_mode(qh),
@@ -510,6 +518,9 @@ impl App {
             m.slide_dir = dir;
             m.anim = 0.0;
         } else if let Some(m) = self.clipboard_mode.as_mut() {
+            m.slide_dir = dir;
+            m.anim = 0.0;
+        } else if let Some(m) = self.keybinds_mode.as_mut() {
             m.slide_dir = dir;
             m.anim = 0.0;
         } else if let Some(m) = self.wallpaper_mode.as_mut() {
@@ -736,6 +747,8 @@ pub struct App {
     /// Historial de avisos (el más nuevo primero, tope `NOTIF_HISTORY_CAP`).
     pub notifications: Vec<menu::NotifyEntry>,
     pub notifications_mode: Option<NotificationsMode>,
+    /// Panel de atajos de niri (`OVERLAY_TABS`): lee los `.kdl` al abrir.
+    pub keybinds_mode: Option<KeybindsMode>,
     pub clip_tx: std::sync::mpsc::Sender<(String, Vec<u8>)>,
     pub paste_tx: std::sync::mpsc::Sender<(crate::clipboard::PasteTarget, String)>,
 }
@@ -762,6 +775,24 @@ pub(crate) struct ClipboardMode {
     anchor: Option<usize>,
     /// Vista previa grande (`Tab`): `None` = lista normal.
     preview: Option<crate::menu_render::ClipPreview>,
+}
+
+/// El panel de atajos de niri: la lista de binds (`desktop::list_niri_keybinds`, releída al
+/// abrir) y el filtro. Sin selección múltiple ni vista previa: se busca, se lee y (con
+/// Enter) se copian las teclas.
+pub(crate) struct KeybindsMode {
+    query: String,
+    all: Vec<crate::desktop::Keybind>,
+    filtered: Vec<usize>,
+    selected: usize,
+    scroll_y: f32,
+    scroll_target: f32,
+    hovered: Option<usize>,
+    anim: f32,
+    target_anim: f32,
+    frame: menu::PanelFrame,
+    is_vertical: bool,
+    slide_dir: f32,
 }
 
 fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
@@ -815,10 +846,17 @@ mod overlay_tabs_tests {
     /// etiquetas, queda mintiendo (pestaña "Clipboard" con el launcher abierto).
     #[test]
     fn la_barra_sigue_el_orden_de_los_modos() {
-        assert_eq!(OVERLAY_ORDER.map(|m| m.tab_index()), [0, 1, 2, 3, 4]);
+        assert_eq!(OVERLAY_ORDER.map(|m| m.tab_index()), [0, 1, 2, 3, 4, 5]);
         assert_eq!(
             OVERLAY_TABS,
-            ["Apps", "Clipboard", "Notifs", "Wallpapers", "Windows"]
+            [
+                "Apps",
+                "Clipboard",
+                "Keybinds",
+                "Notifs",
+                "Wallpapers",
+                "Windows"
+            ]
         );
     }
 

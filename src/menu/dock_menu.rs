@@ -239,14 +239,15 @@ pub fn build_category_controls(category: MenuCategory, settings: &DockSettings) 
             push_setting_row(&mut controls, &mut y, SettingId::NotifDedup);
         }
         MenuCategory::System => {
-            // ----- los cinco paneles del overlay, accesibles desde acá: el panel de
+            // ----- los seis paneles del overlay, accesibles desde acá: el panel de
             // ajustes comparte la superficie y tapa la banda de pestañas, así que sin
-            // esto no hay forma de abrir el launcher/ventanas/portapapeles/notifs/fondos
+            // esto no hay forma de abrir el launcher/ventanas/portapapeles/atajos/notifs/fondos
             // desde el propio panel -----
             for kind in [
                 ButtonKind::OpenAppLauncher,
                 ButtonKind::OpenWindowSwitcher,
                 ButtonKind::OpenClipboard,
+                ButtonKind::OpenKeybinds,
                 ButtonKind::OpenNotifications,
                 ButtonKind::OpenWallpapers,
                 ButtonKind::AddApp,
@@ -466,16 +467,17 @@ mod system_tab_tests {
     }
 
     /// El panel de ajustes comparte la superficie y tapa la banda de pestañas del
-    /// overlay, así que los cinco paneles tienen que poder abrirse desde acá: si
+    /// overlay, así que los seis paneles tienen que poder abrirse desde acá: si
     /// falta uno, no hay ninguna otra forma de llegar (era el caso de Clipboard,
     /// Notifs y Wallpapers).
     #[test]
-    fn el_tab_system_expone_los_cinco_paneles_del_overlay() {
+    fn el_tab_system_expone_los_seis_paneles_del_overlay() {
         let b = botones();
         for kind in [
             ButtonKind::OpenAppLauncher,
             ButtonKind::OpenWindowSwitcher,
             ButtonKind::OpenClipboard,
+            ButtonKind::OpenKeybinds,
             ButtonKind::OpenNotifications,
             ButtonKind::OpenWallpapers,
         ] {
@@ -494,6 +496,7 @@ mod system_tab_tests {
             ButtonKind::OpenAppLauncher,
             ButtonKind::OpenWindowSwitcher,
             ButtonKind::OpenClipboard,
+            ButtonKind::OpenKeybinds,
             ButtonKind::OpenNotifications,
             ButtonKind::OpenWallpapers,
         ] {

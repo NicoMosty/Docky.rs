@@ -117,6 +117,7 @@ impl App {
             | menu::ButtonKind::OpenAppLauncher
             | menu::ButtonKind::OpenWindowSwitcher
             | menu::ButtonKind::OpenClipboard
+            | menu::ButtonKind::OpenKeybinds
             | menu::ButtonKind::OpenNotifications
             | menu::ButtonKind::OpenWallpapers => {}
         }

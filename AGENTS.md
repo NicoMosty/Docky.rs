@@ -35,7 +35,8 @@ El perfil dev tiene `opt-level = 1` con las dependencias en 3: el debug crudo er
 50-100x más lento (10-20 ms por frame contra 2 ms).
 
 IPC: `./target/release/dockyrs --toggle-dock-menu` (también `--toggle-search`,
-`--osd-volume`, `--osd-brightness`, `--toggle-wallpaper`, `--toggle-clipboard`,
+`--toggle-clipboard`, `--toggle-keybinds`, `--toggle-notifications`,
+`--toggle-wallpaper`, `--osd-volume`, `--osd-brightness`,
 `--screenshot-full`, `--screenshot-region`, `--test-notification`). Abrir y cerrar
 el panel por IPC es más confiable que hacerlo con puntero sintético.
 
@@ -284,6 +285,10 @@ la propiedad de espejo, conviene revisarlo antes de mergear.
 - `src/app/calendar.rs`, `src/menu/calendar.rs`, `src/menu_render/calendar.rs` —
   calendario del reloj: hover y cambio de mes / aritmética de fechas y geometría /
   dibujo.
+- `src/app/keybinds_ui.rs`, `src/menu_render/keybinds.rs` — panel de atajos del
+  overlay: búsqueda por tecla o por acción y el dibujo de las filas. Los binds se
+  leen del `.kdl` del usuario (`desktop::list_niri_keybinds`), porque niri no los
+  publica por IPC.
 - `src/menu/` — lógica, geometría y hit tests (sin dibujo). `src/menu_render/` — el
   dibujo. Se tocan de a pares.
 - `src/render/` — widgets de la barra (reloj/batería, workspaces, red, bluetooth,
@@ -526,10 +531,11 @@ reordenamiento de widgets) y lo posterior:
   debajo: los offsets salen de las mismas funciones que usan los hit tests, así que
   dibujo y click no se pueden desincronizar — `app_search_strip_y()`,
   `clip_content_y()` y `wallpaper_hit_test()` (que traduce el puntero con
-  `overlay_tabs_h()`). En el panel vertical angosto las cuatro etiquetas van
-  apiladas (`overlay_tabs_h(true)` = 4 filas) y la banda es más alta. Los paneles
-  crecen con la banda al abrirse (`build_app_search_controls`, `clip_panel_h`,
-  `open_wallpaper_picker`). Tests: `menu_render::tabs`, `menu::wallpaper_picker::hit_tests`,
+  `overlay_tabs_h()`). La banda es **una fila de 26** en los paneles anchos y una
+  **columna de 26** al costado del dock en el vertical (las etiquetas rotadas), así que
+  no le come alto al panel. Los paneles crecen con la banda al abrirse
+  (`build_app_search_controls`, `clip_panel_h`, `open_wallpaper_picker`). Tests:
+  `menu_render::tabs`, `menu::wallpaper_picker::hit_tests`,
   `app::overlay_tabs_tests`. La banda **es clickeable**: `menu_render::overlay_tab_layout`
   (la misma función que dibuja) da el reparto de los slots y `overlay_tab_at` traduce un
   punto del panel a la pestaña, así que el click va **derecho** a la que se clickeó en
@@ -1271,7 +1277,7 @@ reordenamiento de widgets) y lo posterior:
   - Los tiles sin ícono en el tema ahora usan `render::draw_placeholder` (pasó a
     `pub(crate)`): `Advanced Network Configuration` (`preferences-system-network`,
     sólo en `AdwaitaLegacy`) y los tres `Avahi *` eran pastillas vacías en la grilla.
-  - **Las cuatro pestañas miden lo mismo y no cambian con el panel.** La pastilla (el
+  - **Las pestañas miden lo mismo y no cambian con el panel.** La pastilla (el
     resaltado de la activa) sale del texto de la etiqueta MÁS LARGA ("Wallpapers"), no
     del de cada una: antes medía 45px con "Apps" y 74 con "Wallpapers" y la banda
     parecía cambiar de tamaño al ciclar (medido). Y en la columna el alto de cada
@@ -3354,7 +3360,7 @@ requeriría cambiar la key a algo tipo `Arc<str>`. **Verificación:** test con
     `draw_overlay_tabs` y no se podía reusar, que es por lo que la banda no era
     clickeable.
   - En el panel vertical el slot mide `pill_len + 10 * scale` (84 medido), así que los
-    cinco slots **no reparten los 640 del panel**: el aire de abajo no cambia de modo
+    seis slots **no reparten los 640 del panel**: el aire de abajo no cambia de modo
     (`overlay_tab_at` devuelve `None`) y el hit test resta el origen de la banda, que con
     el dock a la derecha arranca corrido.
   - `App::overlay_tab_hit` sale de `current_overlay()` (el panel de ajustes comparte la
@@ -3363,14 +3369,50 @@ requeriría cambiar la key a algo tipo `Arc<str>`. **Verificación:** test con
     las ramas de cada panel en `pointer.rs`, así que el hit test del panel no se lo come.
   - Click en la pestaña activa = nada (no cierra el panel): para cerrar están ESC, el
     click afuera y clickear un widget del dock.
-  - Verificado a mano con el dock en `Left`: las cinco pestañas se clickean (Apps →
-    Clipboard → Notifs → Wallpapers → Windows → Apps, incluidas las dos que comparten
-    `app_search_mode`), el panel queda en 390x640 en todas, la pestaña activa no hace
-    nada y el aire debajo de los cinco slots tampoco. Sensor: `overlay: click en la
+  - Verificado a mano con el dock en `Left`: las seis pestañas se clickean (Apps →
+    Clipboard → Keybinds → Notifs → Wallpapers → Windows → Apps, incluidas las dos que
+    comparten `app_search_mode`), el panel queda en 390x640 en todas, la pestaña activa no
+    hace nada y el aire debajo de los seis slots tampoco. Sensor: `overlay: click en la
     banda (px,py) -> <Modo>` en el log. Guard:
     `menu_render::tabs::tabs_tests::el_click_de_la_banda_cae_en_la_pestana_dibujada`
-    (centros y bordes de los cinco slots en fila y columna, el aire del final de la
+    (centros y bordes de los seis slots en fila y columna, el aire del final de la
     columna y la banda corrida del dock a la derecha).
+
+- **Panel de atajos** (pestaña **Keybinds** del overlay, `Shift+flechas` o
+  `--toggle-keybinds`): lista los binds de niri y **filtra por tecla o por acción**;
+  `Enter` (o un click) copia las TECLAS de la fila y cierra, así se pegan donde hagan
+  falta. `Esc` cierra, `↑↓` recorren, `BackSpace` borra la búsqueda.
+  - **La fuente es el `.kdl` del usuario, no la IPC**: niri no publica los binds (ni el
+    `event-stream` ni los `Request` los traen). `desktop::list_niri_keybinds()` recorre
+    `~/.config/niri/**/*.kdl` (descarta `.bak`, deduplica por `(teclas, etiqueta)`,
+    ordena por teclas) y `keybinds_from_kdl()` las lee con un **escáner de líneas**,
+    deliberadamente heurístico: reconoce `binds { … }`, la tecla por su forma (`+`,
+    `XF86*`, `Print`, `F<n>`) y el `hotkey-overlay-title`, con `sin_comentario` para que
+    un `//` dentro de una comilla no corte la línea. No es un parser de KDL: si el
+    formato cambia, la lista se acorta, no rompe. (`ponytail:` en el módulo.)
+  - **Por qué pestaña propia y no las tarjetas del launcher** (fue la medición que
+    decidió el diseño): la tecla más larga del setup es `Mod+Ctrl+Shift+Page_Down`
+    (~30 caracteres) y la tarjeta del launcher reserva ~18, así que media tabla se
+    elidía. En fila ancha la tecla va en su pastilla (`KEYBIND_KEYS_W = 210`) y la
+    acción se elide a la derecha.
+  - **La búsqueda reusa el ranking del launcher**: `desktop::tier_of(nombre, keywords,
+    query)` (extraído de `match_tier` para no duplicar la escala), con las teclas como
+    `name` y el título como keyword: `fullscreen` y `mod+shift+f` encuentran lo mismo.
+  - La pestaña es la 3ª de **seis** (`Apps, Clipboard, Keybinds, Notifs, Wallpapers,
+    Windows`): `OVERLAY_TABS`/`OVERLAY_ORDER` pasan a 6 y los tests de la banda
+    calculan el slot como `640 / n` en vez de tenerlo horneado.
+  - **El panel de ajustes necesita su botón** (`ButtonKind::OpenKeybinds`, categoría
+    System): comparte la superficie y tapa la banda, así que sin él la pestaña no se
+    podría abrir desde ahí.
+  - Guards: `desktop::keybind_tests` (el parser, una URL que parece comentario, y que el
+    ranking sea el del launcher) + los de `menu_render::tabs` con 6 pestañas. Verificado
+    en vivo: panel 390x640, `Exclusive` con el panel abierto y `None` al cerrar, click
+    afuera lo cierra (`catcher: click afuera -> cerrar`), y `↓↓ Enter` copió
+    `Ctrl+Print` al portapapeles y cerró. Sensor: `teclado: keybinds <viejo> -> <nuevo>`
+    y `keybinds: copio <teclas>`.
+  - **Lo que NO hace**: no agrupa por categoría, no dice a qué modo pertenece cada bind
+    y no los edita. Tampoco hay `teclado:` propio para las letras (sólo las flechas):
+    el campo de búsqueda se ve en el panel, no en el log.
 
 - Calendario del reloj: no se pasa de mes con el mouse (no tiene ‹ › clickeables,
   sólo ←/→) y no selecciona días ni navega semanas: muestra el mes y marca hoy. El

@@ -195,7 +195,14 @@ pub fn overlay_vertical_cross(dock_thickness: f32) -> f32 {
 /// Barra de pestañas compartida por los modos del overlay. El orden es el de
 /// `OVERLAY_ORDER` (Shift+←/→ cicla) y cada panel la dibuja: es la única señal de
 /// en qué mini-app estás.
-pub const OVERLAY_TABS: [&str; 5] = ["Apps", "Clipboard", "Notifs", "Wallpapers", "Windows"];
+pub const OVERLAY_TABS: [&str; 6] = [
+    "Apps",
+    "Clipboard",
+    "Keybinds",
+    "Notifs",
+    "Wallpapers",
+    "Windows",
+];
 /// Largo de la banda cuando es una FILA (panel ancho, dock arriba/abajo).
 pub const OVERLAY_TABS_H: f32 = 26.0;
 /// Ancho de la banda cuando es una COLUMNA (panel vertical): va pegada al lado del
@@ -292,6 +299,7 @@ pub enum ButtonKind {
     OpenAppLauncher,
     OpenWindowSwitcher,
     OpenClipboard,
+    OpenKeybinds,
     OpenNotifications,
     OpenWallpapers,
     QuitDock,
@@ -313,6 +321,7 @@ impl ButtonKind {
             ButtonKind::OpenAppLauncher => "App Launcher",
             ButtonKind::OpenWindowSwitcher => "Window Switcher",
             ButtonKind::OpenClipboard => "Clipboard",
+            ButtonKind::OpenKeybinds => "Keybindings",
             ButtonKind::OpenNotifications => "Notifications",
             ButtonKind::OpenWallpapers => "Wallpapers",
             ButtonKind::QuitDock => "Quit Dock",

@@ -167,6 +167,8 @@ impl App {
             Some(menu::panel_size(m.frame, m.is_vertical))
         } else if let Some(m) = self.notifications_mode.as_ref() {
             Some(menu::panel_size(m.frame, m.is_vertical))
+        } else if let Some(m) = self.keybinds_mode.as_ref() {
+            Some(menu::panel_size(m.frame, m.is_vertical))
         } else if let Some(m) = self.wallpaper_mode.as_ref() {
             Some(menu::panel_size(m.frame, m.is_vertical))
         } else {
@@ -383,6 +385,7 @@ impl App {
             || self.app_search_mode.is_some()
             || self.notifications_mode.is_some()
             || self.clipboard_mode.is_some()
+            || self.keybinds_mode.is_some()
             || self.wallpaper_mode.is_some();
         let on_demand = self.menu.is_some() || self.popup_mode.is_some();
         // ----- idempotente (trampa 1): re-setear la interactividad en cada frame
@@ -654,6 +657,10 @@ impl App {
             menu::ButtonKind::OpenClipboard => {
                 self.close_dock_menu(qh);
                 self.open_clipboard(qh);
+            }
+            menu::ButtonKind::OpenKeybinds => {
+                self.close_dock_menu(qh);
+                self.open_keybinds(qh);
             }
             menu::ButtonKind::OpenNotifications => {
                 self.close_dock_menu(qh);

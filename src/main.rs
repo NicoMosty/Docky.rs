@@ -185,6 +185,10 @@ fn main() -> anyhow::Result<()> {
             ipc::send_message("toggle-search", &cli.profile);
             return Ok(());
         }
+        Some("--toggle-keybinds") => {
+            ipc::send_message("toggle-keybinds", &cli.profile);
+            return Ok(());
+        }
         Some("--osd-volume") => {
             ipc::send_message("osd-volume", &cli.profile);
             return Ok(());
@@ -434,6 +438,7 @@ fn main() -> anyhow::Result<()> {
         clipboard_mode: None,
         notifications: Vec::new(),
         notifications_mode: None,
+        keybinds_mode: None,
         clip_tx,
         paste_tx,
     };
@@ -605,6 +610,7 @@ fn main() -> anyhow::Result<()> {
                 ipc::IpcMessage::ToggleWallpaper => app.toggle_wallpaper_picker(&qh),
                 ipc::IpcMessage::ToggleClipboard => app.toggle_clipboard(&qh),
                 ipc::IpcMessage::ToggleNotifications => app.toggle_notifications(&qh),
+                ipc::IpcMessage::ToggleKeybinds => app.toggle_keybinds(&qh),
                 ipc::IpcMessage::TrayMenuReady(result) => app.apply_tray_menu(*result, &qh),
                 ipc::IpcMessage::ScreenshotFull => app.start_full_screenshot(&qh),
                 ipc::IpcMessage::ScreenshotRegion => app.start_region_screenshot(&qh),

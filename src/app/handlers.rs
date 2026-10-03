@@ -75,6 +75,8 @@ impl CompositorHandler for App {
                 self.tick_wallpaper_frame(qh);
             } else if self.clipboard_mode.is_some() {
                 self.tick_clipboard_frame(qh);
+            } else if self.keybinds_mode.is_some() {
+                self.tick_keybinds_frame(qh);
             } else {
                 let icons_animating = self.dock.step_animation();
                 let splitting = self.tick_island_split_frame(qh);
@@ -458,8 +460,8 @@ impl KeyboardHandler for App {
         // ----- OJO: en el panel del portapapeles Shift+↑↓ es el gesto de EXTENDER la
         // selección (como un gestor de archivos), así que la banda le cede esas dos
         // flechas y sigue ciclando con ←/→ en las dos orientaciones. -----
-        let cede_a_la_seleccion = self.clipboard_mode.is_some()
-            && matches!(event.keysym, Keysym::Up | Keysym::Down);
+        let cede_a_la_seleccion =
+            self.clipboard_mode.is_some() && matches!(event.keysym, Keysym::Up | Keysym::Down);
         if self.modifiers.shift
             && !cede_a_la_seleccion
             && flecha_de_la_banda(event.keysym, self.dock.is_vertical())
@@ -488,6 +490,8 @@ impl KeyboardHandler for App {
         .then_some((event.keysym, 0, 0.0));
         if self.notifications_mode.is_some() {
             self.handle_notifications_key(event, qh);
+        } else if self.keybinds_mode.is_some() {
+            self.handle_keybinds_key(event, qh);
         } else if self.clipboard_mode.is_some() {
             self.handle_clipboard_key(event, qh);
         } else if self.app_search_mode.is_some() {

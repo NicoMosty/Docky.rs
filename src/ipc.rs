@@ -43,6 +43,8 @@ pub enum IpcMessage {
     ToggleWallpaper,
     ToggleClipboard,
     ToggleNotifications,
+    /// El panel de atajos de niri (`--toggle-keybinds`).
+    ToggleKeybinds,
     ScreenshotFull,
     ScreenshotRegion,
     ToggleDockMenu,
@@ -184,6 +186,7 @@ fn handle_client(
         "toggle-wallpaper" => Some(IpcMessage::ToggleWallpaper),
         "toggle-clipboard" => Some(IpcMessage::ToggleClipboard),
         "toggle-notifications" => Some(IpcMessage::ToggleNotifications),
+        "toggle-keybinds" => Some(IpcMessage::ToggleKeybinds),
         "screenshot-full" => Some(IpcMessage::ScreenshotFull),
         "screenshot-region" => Some(IpcMessage::ScreenshotRegion),
         "toggle-dock-menu" => Some(IpcMessage::ToggleDockMenu),

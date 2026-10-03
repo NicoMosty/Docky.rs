@@ -271,6 +271,8 @@ impl App {
             self.close_notifications_mode(qh);
         } else if self.clipboard_mode.is_some() {
             self.close_clipboard_mode(qh);
+        } else if self.keybinds_mode.is_some() {
+            self.close_keybinds_mode(qh);
         } else if self.wallpaper_mode.is_some() {
             self.close_wallpaper_mode(qh);
         }
